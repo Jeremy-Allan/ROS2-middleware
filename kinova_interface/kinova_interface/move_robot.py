@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+import threading  # Required to run ROS 2 and input() simultaneously
 
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import Constraints, PositionConstraint
@@ -10,14 +11,14 @@ from geometry_msgs.msg import Pose
 class KinovaMoveClient(Node):
     def __init__(self):
         super().__init__('kinova_move_client')
-        self.get_logger().info('Kinova Interface Node Started - Awaiting Coordinates')
+        self.get_logger().info('Kinova Interface Node Started - Ready for Console Input')
         self._action_client = ActionClient(self, MoveGroup, 'move_action')
 
     def send_goal(self, x, y, z):
+        # We removed the timeout error return here so the loop doesn't crash 
+        # if you type a coordinate before MoveIt fully boots up.
         self.get_logger().info('Waiting for /move_action server...')
-        if not self._action_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error('Action server /move_action NOT available!')
-            return
+        self._action_client.wait_for_server()
 
         # 1. Initialize the Goal
         goal_msg = MoveGroup.Goal()
@@ -27,15 +28,15 @@ class KinovaMoveClient(Node):
 
         # 2. Define the Target Position Constraint
         pos_constraint = PositionConstraint()
-        pos_constraint.header.frame_id = "base_link" # The coordinate origin
-        pos_constraint.link_name = "tool_frame"      # The tip of the Kinova arm
+        pos_constraint.header.frame_id = "base_link" 
+        pos_constraint.link_name = "tool_frame"      
         
         # 3. Create a 1cm "Target Bubble" (Sphere)
         sphere = SolidPrimitive()
         sphere.type = SolidPrimitive.SPHERE
         sphere.dimensions = [0.01] 
 
-        # 4. Set the exact X, Y, Z for the center of the bubble
+        # 4. Set the exact X, Y, Z 
         target_pose = Pose()
         target_pose.position.x = float(x)
         target_pose.position.y = float(y)
@@ -59,13 +60,41 @@ def main(args=None):
     rclpy.init(args=args)
     node = KinovaMoveClient()
     
-    # Test Coordinate: Moving Forward and Up
-    node.send_goal(0.3, 0.1, 0.4) 
+    # 1. Start a background thread for ROS 2 to "spin" (listen to the network)
+    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
+    spin_thread.start()
     
+    # 2. The Main Thread handles the continuous user input
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            print("\n-------------------------------------------------")
+            user_input = input("Enter coordinates (e.g., '0.3, 0.1, 0.4') or 'q' to quit: ")
+            
+            if user_input.lower().strip() == 'q':
+                node.get_logger().info('Quit command received.')
+                break
+                
+            try:
+                # Parse the string into three distinct float values
+                coords = user_input.split(',')
+                if len(coords) != 3:
+                    raise ValueError("You must provide exactly three numbers separated by commas.")
+                    
+                x = float(coords[0].strip())
+                y = float(coords[1].strip())
+                z = float(coords[2].strip())
+                
+                # Fire the command to the background node
+                node.send_goal(x, y, z)
+                
+            except ValueError as e:
+                print(f"Invalid input: {e}. Please try again.")
+
     except KeyboardInterrupt:
-        node.get_logger().info('Shutting down Kinova Interface...')
+        node.get_logger().info('Keyboard interrupt detected.')
     finally:
+        # Clean up properly when exiting
+        node.get_logger().info('Shutting down Kinova Interface...')
         node.destroy_node()
         rclpy.shutdown()
+        spin_thread.join()
