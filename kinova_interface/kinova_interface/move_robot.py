@@ -23,17 +23,19 @@ class KinovaMoveClient(Node):
         # Action Client 2: The Gripper (Direct Controller)
         self.gripper_client = ActionClient(self, GripperCommand, '/gen3_lite_2f_gripper_controller/gripper_cmd')
 
+        # The Traffic Light: Tells the console when it's safe to ask for input again
+        self.movement_finished = threading.Event()
+        self.movement_finished.set() 
+
     def send_goal(self, x, y, z):
         self.get_logger().info('Waiting for /move_action server...')
         self.arm_client.wait_for_server()
 
-        # 1. Initialize the Goal
         goal_msg = MoveGroup.Goal()
         goal_msg.request.group_name = 'arm'
         goal_msg.request.num_planning_attempts = 10
         goal_msg.request.allowed_planning_time = 5.0
 
-        # 2. Define the Target Position Constraint
         pos_constraint = PositionConstraint()
         pos_constraint.header.frame_id = "base_link" 
         pos_constraint.link_name = "tool_frame"      
@@ -55,11 +57,12 @@ class KinovaMoveClient(Node):
         goal_constraints.position_constraints.append(pos_constraint)
         goal_msg.request.goal_constraints.append(goal_constraints)
 
-        self.get_logger().info(f'Sending MoveIt goal: X={x}, Y={y}, Z={z}')
-        self.arm_client.send_goal_async(goal_msg)
+        # Turn on the RED LIGHT to pause the console
+        self.movement_finished.clear()
+        future = self.arm_client.send_goal_async(goal_msg)
+        future.add_done_callback(self.goal_response_callback)
 
     def send_home_goal(self):
-        """Resets the arm using explicit Joint Constraints (Radians)"""
         self.get_logger().info('Waiting for /move_action server to reset...')
         self.arm_client.wait_for_server()
 
@@ -68,7 +71,6 @@ class KinovaMoveClient(Node):
         goal_msg.request.num_planning_attempts = 10
         goal_msg.request.allowed_planning_time = 5.0
 
-        # Hardcoded Safe Home Angles
         joint_names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
         joint_positions = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
         tolerance = 0.01
@@ -88,10 +90,13 @@ class KinovaMoveClient(Node):
         goal_msg.request.goal_constraints.append(goal_constraints)
 
         self.get_logger().info("Sending joint goal to reset to HOME position...")
-        self.arm_client.send_goal_async(goal_msg)
+        
+        # Turn on the RED LIGHT to pause the console
+        self.movement_finished.clear()
+        future = self.arm_client.send_goal_async(goal_msg)
+        future.add_done_callback(self.goal_response_callback)
 
     def move_gripper(self, position):
-        """Commands the 2-Finger Gripper controller directly"""
         self.get_logger().info('Waiting for gripper action server...')
         self.gripper_client.wait_for_server()
         
@@ -101,19 +106,66 @@ class KinovaMoveClient(Node):
         action_text = "Closing" if position == 0.0 else "Opening"
         self.get_logger().info(f"{action_text} gripper to position {position}...")
         
-        self.gripper_client.send_goal_async(goal)
+        # Turn on the RED LIGHT to pause the console
+        self.movement_finished.clear()
+        future = self.gripper_client.send_goal_async(goal)
+        future.add_done_callback(self.gripper_response_callback)
+
+    # --- Arm Callbacks ---
+    def goal_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error("❌ Goal rejected by the Action Server.")
+            self.movement_finished.set() # Turn light GREEN if failed
+            return
+            
+        self.get_logger().info("Goal accepted! Calculating math...")
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self.result_callback)
+
+    def result_callback(self, future):
+        result = future.result().result
+        error_code = result.error_code.val
+        
+        if error_code == result.error_code.SUCCESS:
+            self.get_logger().info("✅ Movement complete!")
+        elif error_code == result.error_code.NO_IK_SOLUTION:
+            self.get_logger().error("❌ ERROR: Coordinates out of reach! (Arm is too short)")
+        elif error_code == result.error_code.PLANNING_FAILED:
+            self.get_logger().error("❌ ERROR: Planning failed! (Likely trying to move through a table)")
+        else:
+            self.get_logger().error(f"❌ ERROR: MoveIt failed with error code: {error_code}")
+            
+        # Turn light GREEN so the next console prompt can print
+        self.movement_finished.set()
+
+    # --- Gripper Callbacks ---
+    def gripper_response_callback(self, future):
+        goal_handle = future.result()
+        if not goal_handle.accepted:
+            self.get_logger().error("❌ Gripper goal rejected.")
+            self.movement_finished.set()
+            return
+        result_future = goal_handle.get_result_async()
+        result_future.add_done_callback(self.gripper_result_callback)
+
+    def gripper_result_callback(self, future):
+        self.get_logger().info("✅ Gripper movement complete!")
+        self.movement_finished.set() # Turn light GREEN
+
 
 def main(args=None):
     rclpy.init(args=args)
     node = KinovaMoveClient()
     
-    # Start a background thread for ROS 2 to "spin"
     spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
     
-    # The Main Thread handles the continuous user input menu
     try:
         while rclpy.ok():
+            # Only print the menu if the traffic light is green!
+            node.movement_finished.wait()
+            
             print("\n-------------------------------------------------")
             user_input = input("Enter coords 'X,Y,Z' | 'r' (reset) | 'o' (open) | 'c' (close) | 'q' (quit): ").strip().lower()
             
@@ -123,9 +175,9 @@ def main(args=None):
             elif user_input == 'r':
                 node.send_home_goal()
             elif user_input == 'c':
-                node.move_gripper(0.0) # 0.0 is fully closed
+                node.move_gripper(0.0) 
             elif user_input == 'o':
-                node.move_gripper(1.0) # 1.0 is fully open
+                node.move_gripper(1.0) 
             else:
                 try:
                     coords = user_input.split(',')
