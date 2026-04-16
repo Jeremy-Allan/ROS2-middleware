@@ -59,6 +59,7 @@ Run the interactive CLI to send commands to the robot.
 
 ```bash
 cd ~/workspace/ros2_kortex_ws
+colcon build --packages-select kinova_interface
 source install/setup.bash
-ros2 run kinova_interface mover
+ros2 run kinova_interface hardware_interface_client
 ```

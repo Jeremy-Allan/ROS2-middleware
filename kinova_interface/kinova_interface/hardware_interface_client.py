@@ -12,10 +12,10 @@ from geometry_msgs.msg import Pose
 # Gripper Actions and Messages
 from control_msgs.action import GripperCommand
 
-class KinovaMoveClient(Node):
+class HardwareInterfaceClient(Node):
     def __init__(self):
-        super().__init__('kinova_move_client')
-        self.get_logger().info('Kinova Interface Node Started - Ready for Console Input')
+        super().__init__('kinova_hardware_client')
+        self.get_logger().info('Kinova Hardware Interface Node Started - Ready for Console Input')
         
         # Action Client 1: The Arm (MoveIt)
         self.arm_client = ActionClient(self, MoveGroup, 'move_action')
@@ -31,11 +31,13 @@ class KinovaMoveClient(Node):
         self.get_logger().info('Waiting for /move_action server...')
         self.arm_client.wait_for_server()
 
+        # 1. Initialize the Goal
         goal_msg = MoveGroup.Goal()
         goal_msg.request.group_name = 'arm'
         goal_msg.request.num_planning_attempts = 10
         goal_msg.request.allowed_planning_time = 5.0
 
+        # 2. Define the Target Position Constraint
         pos_constraint = PositionConstraint()
         pos_constraint.header.frame_id = "base_link" 
         pos_constraint.link_name = "tool_frame"      
@@ -59,10 +61,16 @@ class KinovaMoveClient(Node):
 
         # Turn on the RED LIGHT to pause the console
         self.movement_finished.clear()
-        future = self.arm_client.send_goal_async(goal_msg)
+        
+        # Fire the command AND attach both listeners (Response & Feedback)
+        future = self.arm_client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.arm_feedback_callback
+        )
         future.add_done_callback(self.goal_response_callback)
 
     def send_home_goal(self):
+        """Resets the arm using explicit Joint Constraints (Radians)"""
         self.get_logger().info('Waiting for /move_action server to reset...')
         self.arm_client.wait_for_server()
 
@@ -71,6 +79,7 @@ class KinovaMoveClient(Node):
         goal_msg.request.num_planning_attempts = 10
         goal_msg.request.allowed_planning_time = 5.0
 
+        # Hardcoded Safe Home Angles
         joint_names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
         joint_positions = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
         tolerance = 0.01
@@ -93,10 +102,16 @@ class KinovaMoveClient(Node):
         
         # Turn on the RED LIGHT to pause the console
         self.movement_finished.clear()
-        future = self.arm_client.send_goal_async(goal_msg)
+        
+        # Fire the command AND attach both listeners (Response & Feedback)
+        future = self.arm_client.send_goal_async(
+            goal_msg,
+            feedback_callback=self.arm_feedback_callback
+        )
         future.add_done_callback(self.goal_response_callback)
 
     def move_gripper(self, position):
+        """Commands the 2-Finger Gripper controller directly"""
         self.get_logger().info('Waiting for gripper action server...')
         self.gripper_client.wait_for_server()
         
@@ -108,7 +123,11 @@ class KinovaMoveClient(Node):
         
         # Turn on the RED LIGHT to pause the console
         self.movement_finished.clear()
-        future = self.gripper_client.send_goal_async(goal)
+        
+        future = self.gripper_client.send_goal_async(
+            goal,
+            feedback_callback=self.gripper_feedback_callback
+        )
         future.add_done_callback(self.gripper_response_callback)
 
     # --- Arm Callbacks ---
@@ -123,10 +142,16 @@ class KinovaMoveClient(Node):
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self.result_callback)
 
+    def arm_feedback_callback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        # MoveGroup feedback is a simple string showing the current pipeline stage
+        self.get_logger().info(f"[Feedback] MoveIt State: {feedback.state}")
+
     def result_callback(self, future):
         result = future.result().result
         error_code = result.error_code.val
         
+        # Check against standard MoveIt 2 Error Codes
         if error_code == result.error_code.SUCCESS:
             self.get_logger().info("✅ Movement complete!")
         elif error_code == result.error_code.NO_IK_SOLUTION:
@@ -149,6 +174,12 @@ class KinovaMoveClient(Node):
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self.gripper_result_callback)
 
+    def gripper_feedback_callback(self, feedback_msg):
+        feedback = feedback_msg.feedback
+        # GripperCommand feedback has a direct 'position' attribute
+        current_width = round(feedback.position, 3)
+        self.get_logger().info(f"[Feedback] Gripper Width: {current_width}")
+
     def gripper_result_callback(self, future):
         self.get_logger().info("✅ Gripper movement complete!")
         self.movement_finished.set() # Turn light GREEN
@@ -156,11 +187,14 @@ class KinovaMoveClient(Node):
 
 def main(args=None):
     rclpy.init(args=args)
-    node = KinovaMoveClient()
+    # Instantiate the newly renamed class
+    node = HardwareInterfaceClient()
     
+    # Start a background thread for ROS 2 to "spin"
     spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
     spin_thread.start()
     
+    # The Main Thread handles the continuous user input menu
     try:
         while rclpy.ok():
             # Only print the menu if the traffic light is green!
@@ -196,7 +230,7 @@ def main(args=None):
     except KeyboardInterrupt:
         node.get_logger().info('Keyboard interrupt detected.')
     finally:
-        node.get_logger().info('Shutting down Kinova Interface...')
+        node.get_logger().info('Shutting down Kinova Hardware Interface...')
         node.destroy_node()
         rclpy.shutdown()
         spin_thread.join()
