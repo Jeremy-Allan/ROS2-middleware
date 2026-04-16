@@ -20,7 +20,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'mover = kinova_interface.move_robot:main',
+            'hardware_interface_client = kinova_interface.hardware_interface_client:main',
         ],
     },
 )
