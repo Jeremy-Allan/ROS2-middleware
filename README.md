@@ -2,7 +2,7 @@
 
 This repository contains a unified ROS 2 command-line interface (CLI) for controlling the Kinova Gen3 Lite robotic arm and its custom 2-finger gripper. It leverages MoveIt 2 for complex path planning (Inverse Kinematics) and direct action clients for precise joint and gripper control.
 
-## 🚀 Features & Capabilities (`move_robot.py`)
+## Features & Capabilities (`move_robot.py`)
 
 The `mover` node (`move_robot.py`) acts as the (Action Client) talking to multiple (Action Servers). 
 
@@ -14,7 +14,7 @@ The `mover` node (`move_robot.py`) acts as the (Action Client) talking to multip
 
 ---
 
-## 🛠️ Building the Workspace
+## Building the Workspace
 
 Before running the node, ensure your ROS 2 workspace is built and sourced. Run these commands from the root of your workspace (e.g., `~/workspace/ros2_kortex_ws`):
 
