@@ -1,0 +1,4 @@
+# ROS 2 build artifacts and logs
+build/
+install/
+log/

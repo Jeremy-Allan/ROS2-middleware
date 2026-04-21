@@ -23,13 +23,15 @@ class HardwareInterfaceClient(Node):
         # Action Client 2: The Gripper (Direct Controller)
         self.gripper_client = ActionClient(self, GripperCommand, '/gen3_lite_2f_gripper_controller/gripper_cmd')
 
-        # The Traffic Light: Tells the console when it's safe to ask for input again
         self.movement_finished = threading.Event()
         self.movement_finished.set() 
 
     def send_goal(self, x, y, z):
         self.get_logger().info('Waiting for /move_action server...')
-        self.arm_client.wait_for_server()
+        if not self.arm_client.wait_for_server(timeout_sec=10.0):
+            self.get_logger().error('/move-action server not available, please try again')
+            return
+
 
         # 1. Initialize the Goal
         goal_msg = MoveGroup.Goal()
@@ -58,8 +60,6 @@ class HardwareInterfaceClient(Node):
         goal_constraints = Constraints()
         goal_constraints.position_constraints.append(pos_constraint)
         goal_msg.request.goal_constraints.append(goal_constraints)
-
-        # Turn on the RED LIGHT to pause the console
         self.movement_finished.clear()
         
         # Fire the command AND attach both listeners (Response & Feedback)
@@ -72,7 +72,10 @@ class HardwareInterfaceClient(Node):
     def send_home_goal(self):
         """Resets the arm using explicit Joint Constraints (Radians)"""
         self.get_logger().info('Waiting for /move_action server to reset...')
-        self.arm_client.wait_for_server()
+        if not self.arm_client.wait_for_server(timeout_sec=10.0):
+            self.get_logger().error('/move-action server not available, please try again')
+            return
+
 
         goal_msg = MoveGroup.Goal()
         goal_msg.request.group_name = 'arm'
@@ -99,8 +102,6 @@ class HardwareInterfaceClient(Node):
         goal_msg.request.goal_constraints.append(goal_constraints)
 
         self.get_logger().info("Sending joint goal to reset to HOME position...")
-        
-        # Turn on the RED LIGHT to pause the console
         self.movement_finished.clear()
         
         # Fire the command AND attach both listeners (Response & Feedback)
@@ -113,15 +114,16 @@ class HardwareInterfaceClient(Node):
     def move_gripper(self, position):
         """Commands the 2-Finger Gripper controller directly"""
         self.get_logger().info('Waiting for gripper action server...')
-        self.gripper_client.wait_for_server()
+        if not self.gripper_client.wait_for_server(timeout_sec=10.0):
+            self.get_logger().error('gripper action server not available, please try again')
+            return
         
         goal = GripperCommand.Goal()
         goal.command.position = float(position)
         
         action_text = "Closing" if position == 0.0 else "Opening"
         self.get_logger().info(f"{action_text} gripper to position {position}...")
-        
-        # Turn on the RED LIGHT to pause the console
+
         self.movement_finished.clear()
         
         future = self.gripper_client.send_goal_async(
@@ -134,8 +136,8 @@ class HardwareInterfaceClient(Node):
     def goal_response_callback(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().error("❌ Goal rejected by the Action Server.")
-            self.movement_finished.set() # Turn light GREEN if failed
+            self.get_logger().error("Goal rejected by the Action Server.")
+            self.movement_finished.set()
             return
             
         self.get_logger().info("Goal accepted! Calculating math...")
@@ -153,22 +155,21 @@ class HardwareInterfaceClient(Node):
         
         # Check against standard MoveIt 2 Error Codes
         if error_code == result.error_code.SUCCESS:
-            self.get_logger().info("✅ Movement complete!")
+            self.get_logger().info("Movement complete!")
         elif error_code == result.error_code.NO_IK_SOLUTION:
-            self.get_logger().error("❌ ERROR: Coordinates out of reach! (Arm is too short)")
+            self.get_logger().error("ERROR: Coordinates out of reach! (Arm is too short)")
         elif error_code == result.error_code.PLANNING_FAILED:
-            self.get_logger().error("❌ ERROR: Planning failed! (Likely trying to move through a table)")
+            self.get_logger().error("ERROR: Planning failed! (Likely trying to move through a table)")
         else:
-            self.get_logger().error(f"❌ ERROR: MoveIt failed with error code: {error_code}")
-            
-        # Turn light GREEN so the next console prompt can print
+            self.get_logger().error(f"ERROR: MoveIt failed with error code: {error_code}")
+
         self.movement_finished.set()
 
     # --- Gripper Callbacks ---
     def gripper_response_callback(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().error("❌ Gripper goal rejected.")
+            self.get_logger().error("Gripper goal rejected.")
             self.movement_finished.set()
             return
         result_future = goal_handle.get_result_async()
@@ -181,8 +182,8 @@ class HardwareInterfaceClient(Node):
         self.get_logger().info(f"[Feedback] Gripper Width: {current_width}")
 
     def gripper_result_callback(self, future):
-        self.get_logger().info("✅ Gripper movement complete!")
-        self.movement_finished.set() # Turn light GREEN
+        self.get_logger().info("Gripper movement complete!")
+        self.movement_finished.set()
 
 
 def main(args=None):
@@ -197,7 +198,6 @@ def main(args=None):
     # The Main Thread handles the continuous user input menu
     try:
         while rclpy.ok():
-            # Only print the menu if the traffic light is green!
             node.movement_finished.wait()
             
             print("\n-------------------------------------------------")
