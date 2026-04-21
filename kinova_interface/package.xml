@@ -12,6 +12,8 @@
   <depend>moveit_msgs</depend>
   <depend>shape_msgs</depend>
   <depend>control_msgs</depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
   <export>
     <build_type>ament_python</build_type>
   </export>
