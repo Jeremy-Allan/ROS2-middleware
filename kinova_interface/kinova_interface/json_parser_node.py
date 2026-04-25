@@ -6,6 +6,7 @@ import time
 import os
 import json
 import argparse
+from ament_index_python.packages import get_package_share_directory
 from .hardware_interface_client import HardwareInterfaceServer
 
 class JsonParser:
@@ -21,7 +22,7 @@ class JsonParser:
                 self.recipe = json.load(f)
             return True
         except Exception as e:
-            print(f"Error loading Recipe JSON: {e}")
+            self.node.get_logger().error(f"Error loading Recipe JSON: {e}")
             return False
 
     def get_coords_from_dict_node(self, target_name):
@@ -50,6 +51,9 @@ class JsonParser:
 
     def get_executable_steps(self):
         executable_list = []
+        if not self.recipe:
+            return executable_list
+
         for step in self.recipe.get('steps', []):
             action = step['action']
             params = step.get('parameters', {})
@@ -79,16 +83,17 @@ class JsonParserNode(Node):
     def __init__(self, recipe_path):
         super().__init__('json_parser_node')
         
-        # 1. Initialize the Parser
+        # 1. Reference the Hardware Logic (Always initialize to avoid AttributeError)
+        self.hw_interface = HardwareInterfaceServer()
+
+        # 2. Initialize the Parser
         self.parser = JsonParser(recipe_path, self)
         if not self.parser.load_recipe():
+            self.get_logger().error(f"Failed to load recipe from {recipe_path}")
             return
 
         self.get_logger().info(f"JSON Parser Node Online.")
 
-        # 2. Reference the Hardware Logic
-        self.hw_interface = HardwareInterfaceServer()
-        
         # Start the execution thread after a short delay to allow dict node to start
         self.thread = threading.Thread(target=self.execute_recipe)
         self.thread.start()
@@ -99,6 +104,10 @@ class JsonParserNode(Node):
 
         # We resolve steps here so we can ask the Dict Node for coordinates
         self.steps = self.parser.get_executable_steps()
+        if not self.steps:
+            self.get_logger().error("No executable steps found or recipe failed to load.")
+            return
+
         self.get_logger().info(f"--- Starting Automated Sequence ({len(self.steps)} steps) ---")
         
         for i, step in enumerate(self.steps):
@@ -130,8 +139,18 @@ def main():
     args, unknown = parser.parse_known_args()
 
     rclpy.init()
-    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    recipe_path = args.recipe if os.path.isabs(args.recipe) else os.path.join(base_path, 'recipes', args.recipe)
+    
+    recipe_file = args.recipe
+    if os.path.isabs(recipe_file):
+        recipe_path = recipe_file
+    else:
+        try:
+            package_share_directory = get_package_share_directory('kinova_interface')
+            recipe_path = os.path.join(package_share_directory, 'recipes', recipe_file)
+        except Exception:
+            # Fallback for local development
+            base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            recipe_path = os.path.join(base_path, 'recipes', recipe_file)
 
     node = JsonParserNode(recipe_path)
     

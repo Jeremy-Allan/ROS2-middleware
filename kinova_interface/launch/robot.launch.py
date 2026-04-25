@@ -28,19 +28,12 @@ def generate_launch_description():
             'robot_type': 'gen3_lite',
             'dof': '6',
             'gripper': 'gen3_lite_2f',
-            'controllers_file': 'ros2_controllers.yaml'
+            'controllers_file': 'ros2_controllers.yaml',
+            'robot_hand_controller': 'gen3_lite_2f_gripper_controller'
         }.items()
     )
 
-    # 2. Spawn the gripper controller
-    gripper_spawner = Node(
-        package='controller_manager',
-        executable='spawner',
-        arguments=['gen3_lite_2f_gripper_controller'],
-        output='screen',
-    )
-
-    # 3. Start MoveIt 2
+    # 2. Start MoveIt 2
     move_group_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -54,7 +47,7 @@ def generate_launch_description():
         }.items()
     )
 
-    # 4. Middleware Nodes (The new "Brain")
+    # 3. Middleware Nodes (The new "Brain")
     coordinate_dict_node = Node(
         package='kinova_interface',
         executable='coordinate_dictionary_node',
@@ -73,7 +66,6 @@ def generate_launch_description():
     return LaunchDescription([
         recipe_arg,
         kortex_control_launch,
-        gripper_spawner,
         move_group_launch,
         coordinate_dict_node,
         json_parser_node

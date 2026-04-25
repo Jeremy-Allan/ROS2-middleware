@@ -2,14 +2,20 @@ import rclpy
 from rclpy.node import Node
 import json
 import os
+from ament_index_python.packages import get_package_share_directory
 
 class CoordinateDictionaryNode(Node):
     def __init__(self):
         super().__init__('coordinate_dictionary_node')
         
         # 1. Load the initial data from the JSON file to populate parameters
-        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-        dict_path = os.path.join(base_path, 'recipes', 'coordinate_dictionary.json')
+        try:
+            package_share_directory = get_package_share_directory('kinova_interface')
+            dict_path = os.path.join(package_share_directory, 'recipes', 'coordinate_dictionary.json')
+        except Exception:
+            # Fallback for local development if not installed
+            base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            dict_path = os.path.join(base_path, 'recipes', 'coordinate_dictionary.json')
         
         try:
             with open(dict_path, 'r') as f:
