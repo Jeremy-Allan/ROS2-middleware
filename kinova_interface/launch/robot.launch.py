@@ -1,11 +1,18 @@
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch.substitutions import PathJoinSubstitution
+from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
+    # Declare arguments
+    recipe_arg = DeclareLaunchArgument(
+        'recipe',
+        default_value='task_recipe.json',
+        description='The JSON recipe file to execute.'
+    )
+
     # 1. Start the main controller and RViz
     kortex_control_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
@@ -15,10 +22,9 @@ def generate_launch_description():
                 'kortex_control.launch.py'
             ])
         ]),
-        # TODO: to easily test on a real robot, take in the robots ip address as a command line argument and set use_fake_harwdware to false
         launch_arguments={
-            'robot_ip': '192.168.1.10', # this gets completely ignored by the system when use_fake_hardware is true.
-            'use_fake_hardware': 'true', # to test on the real robot the ip address needs to be the correct ip of the robot and use_fake_hardware = false
+            'robot_ip': '192.168.1.10', 
+            'use_fake_hardware': 'true', 
             'robot_type': 'gen3_lite',
             'dof': '6',
             'gripper': 'gen3_lite_2f',
@@ -48,18 +54,27 @@ def generate_launch_description():
         }.items()
     )
 
-    # 4. Start the HIC in a new GNOME terminal
-    cli_node = Node(
+    # 4. Middleware Nodes (The new "Brain")
+    coordinate_dict_node = Node(
         package='kinova_interface',
-        executable='hardware_interface_client',
+        executable='coordinate_dictionary_node',
+        name='coordinate_dictionary_node',
+        output='screen'
+    )
+
+    json_parser_node = Node(
+        package='kinova_interface',
+        executable='json_parser_node',
+        name='json_parser_node',
         output='screen',
-        emulate_tty=True,
-        prefix=['gnome-terminal -- ']
+        arguments=['--recipe', LaunchConfiguration('recipe')]
     )
 
     return LaunchDescription([
+        recipe_arg,
         kortex_control_launch,
         gripper_spawner,
         move_group_launch,
-        cli_node
+        coordinate_dict_node,
+        json_parser_node
     ])

@@ -24,6 +24,8 @@ setup(
     entry_points={
         'console_scripts': [
             'hardware_interface_client = kinova_interface.hardware_interface_client:main',
+            'coordinate_dictionary_node = kinova_interface.coordinate_dictionary_node:main',
+            'json_parser_node = kinova_interface.json_parser_node:main',
         ],
     },
 )

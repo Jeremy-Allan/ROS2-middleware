@@ -12,34 +12,35 @@ from geometry_msgs.msg import Pose
 # Gripper Actions and Messages
 from control_msgs.action import GripperCommand
 
-class HardwareInterfaceClient(Node):
+# We'll use a standard String service for the POC "POST" API
+from std_srvs.srv import Trigger
+
+class HardwareInterfaceServer(Node):
     def __init__(self):
-        super().__init__('kinova_hardware_client')
-        self.get_logger().info('Kinova Hardware Interface Node Started - Ready for Console Input')
+        super().__init__('kinova_hardware_server')
+        self.get_logger().info('Kinova Hardware Server Online - Waiting for Service Requests...')
         
-        # Action Client 1: The Arm (MoveIt)
+        # Action Clients (The "Skills")
         self.arm_client = ActionClient(self, MoveGroup, 'move_action')
-        
-        # Action Client 2: The Gripper (Direct Controller)
         self.gripper_client = ActionClient(self, GripperCommand, '/gen3_lite_2f_gripper_controller/gripper_cmd')
 
         self.movement_finished = threading.Event()
         self.movement_finished.set() 
 
+        # ROS 2 Services (The "API")
+        # In a full build, we'd use custom .srv files for XYZ. 
+        # For this POC, we'll keep the internal methods accessible for other nodes.
+
     def send_goal(self, x, y, z):
-        self.get_logger().info('Waiting for /move_action server...')
-        if not self.arm_client.wait_for_server(timeout_sec=10.0):
-            self.get_logger().error('/move-action server not available, please try again')
-            return
+        if not self.arm_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error('Arm server not available')
+            return False
 
-
-        # 1. Initialize the Goal
         goal_msg = MoveGroup.Goal()
         goal_msg.request.group_name = 'arm'
         goal_msg.request.num_planning_attempts = 10
         goal_msg.request.allowed_planning_time = 5.0
 
-        # 2. Define the Target Position Constraint
         pos_constraint = PositionConstraint()
         pos_constraint.header.frame_id = "base_link" 
         pos_constraint.link_name = "tool_frame"      
@@ -60,29 +61,19 @@ class HardwareInterfaceClient(Node):
         goal_constraints = Constraints()
         goal_constraints.position_constraints.append(pos_constraint)
         goal_msg.request.goal_constraints.append(goal_constraints)
-        self.movement_finished.clear()
         
-        # Fire the command AND attach both listeners (Response & Feedback)
-        future = self.arm_client.send_goal_async(
-            goal_msg,
-            feedback_callback=self.arm_feedback_callback
-        )
+        self.movement_finished.clear()
+        future = self.arm_client.send_goal_async(goal_msg)
         future.add_done_callback(self.goal_response_callback)
+        return True
 
     def send_home_goal(self):
-        """Resets the arm using explicit Joint Constraints (Radians)"""
-        self.get_logger().info('Waiting for /move_action server to reset...')
-        if not self.arm_client.wait_for_server(timeout_sec=10.0):
-            self.get_logger().error('/move-action server not available, please try again')
-            return
-
+        if not self.arm_client.wait_for_server(timeout_sec=5.0):
+            return False
 
         goal_msg = MoveGroup.Goal()
         goal_msg.request.group_name = 'arm'
-        goal_msg.request.num_planning_attempts = 10
-        goal_msg.request.allowed_planning_time = 5.0
-
-        # Hardcoded Safe Home Angles
+        
         joint_names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
         joint_positions = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
         tolerance = 0.01
@@ -101,139 +92,58 @@ class HardwareInterfaceClient(Node):
         goal_constraints.joint_constraints = constraints
         goal_msg.request.goal_constraints.append(goal_constraints)
 
-        self.get_logger().info("Sending joint goal to reset to HOME position...")
         self.movement_finished.clear()
-        
-        # Fire the command AND attach both listeners (Response & Feedback)
-        future = self.arm_client.send_goal_async(
-            goal_msg,
-            feedback_callback=self.arm_feedback_callback
-        )
+        future = self.arm_client.send_goal_async(goal_msg)
         future.add_done_callback(self.goal_response_callback)
+        return True
 
     def move_gripper(self, position):
-        """Commands the 2-Finger Gripper controller directly"""
-        self.get_logger().info('Waiting for gripper action server...')
-        if not self.gripper_client.wait_for_server(timeout_sec=10.0):
-            self.get_logger().error('gripper action server not available, please try again')
-            return
+        if not self.gripper_client.wait_for_server(timeout_sec=5.0):
+            return False
         
         goal = GripperCommand.Goal()
         goal.command.position = float(position)
         
-        action_text = "Closing" if position == 0.0 else "Opening"
-        self.get_logger().info(f"{action_text} gripper to position {position}...")
-
         self.movement_finished.clear()
-        
-        future = self.gripper_client.send_goal_async(
-            goal,
-            feedback_callback=self.gripper_feedback_callback
-        )
+        future = self.gripper_client.send_goal_async(goal)
         future.add_done_callback(self.gripper_response_callback)
+        return True
 
-    # --- Arm Callbacks ---
+    # --- Callbacks ---
     def goal_response_callback(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().error("Goal rejected by the Action Server.")
             self.movement_finished.set()
             return
-            
-        self.get_logger().info("Goal accepted! Calculating math...")
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self.result_callback)
 
-    def arm_feedback_callback(self, feedback_msg):
-        feedback = feedback_msg.feedback
-        # MoveGroup feedback is a simple string showing the current pipeline stage
-        self.get_logger().info(f"[Feedback] MoveIt State: {feedback.state}")
-
     def result_callback(self, future):
-        result = future.result().result
-        error_code = result.error_code.val
-        
-        # Check against standard MoveIt 2 Error Codes
-        if error_code == result.error_code.SUCCESS:
-            self.get_logger().info("Movement complete!")
-        elif error_code == result.error_code.NO_IK_SOLUTION:
-            self.get_logger().error("ERROR: Coordinates out of reach! (Arm is too short)")
-        elif error_code == result.error_code.PLANNING_FAILED:
-            self.get_logger().error("ERROR: Planning failed! (Likely trying to move through a table)")
-        else:
-            self.get_logger().error(f"ERROR: MoveIt failed with error code: {error_code}")
-
         self.movement_finished.set()
 
-    # --- Gripper Callbacks ---
     def gripper_response_callback(self, future):
         goal_handle = future.result()
         if not goal_handle.accepted:
-            self.get_logger().error("Gripper goal rejected.")
             self.movement_finished.set()
             return
         result_future = goal_handle.get_result_async()
         result_future.add_done_callback(self.gripper_result_callback)
 
-    def gripper_feedback_callback(self, feedback_msg):
-        feedback = feedback_msg.feedback
-        # GripperCommand feedback has a direct 'position' attribute
-        current_width = round(feedback.position, 3)
-        self.get_logger().info(f"[Feedback] Gripper Width: {current_width}")
-
     def gripper_result_callback(self, future):
-        self.get_logger().info("Gripper movement complete!")
         self.movement_finished.set()
-
 
 def main(args=None):
     rclpy.init(args=args)
-    # Instantiate the newly renamed class
-    node = HardwareInterfaceClient()
-    
-    # Start a background thread for ROS 2 to "spin"
-    spin_thread = threading.Thread(target=rclpy.spin, args=(node,), daemon=True)
-    spin_thread.start()
-    
-    # The Main Thread handles the continuous user input menu
+    node = HardwareInterfaceServer()
+    # In this new architecture, this node just spins and waits
+    # It doesn't have a menu anymore.
     try:
-        while rclpy.ok():
-            node.movement_finished.wait()
-            
-            print("\n-------------------------------------------------")
-            user_input = input("Enter coords 'X,Y,Z' | 'r' (reset) | 'o' (open) | 'c' (close) | 'q' (quit): ").strip().lower()
-            
-            if user_input == 'q':
-                node.get_logger().info('Quit command received.')
-                break
-            elif user_input == 'r':
-                node.send_home_goal()
-            elif user_input == 'c':
-                node.move_gripper(0.0) 
-            elif user_input == 'o':
-                node.move_gripper(1.0) 
-            else:
-                try:
-                    coords = user_input.split(',')
-                    if len(coords) != 3:
-                        raise ValueError("Provide exactly three numbers separated by commas, or a valid letter command.")
-                        
-                    x = float(coords[0].strip())
-                    y = float(coords[1].strip())
-                    z = float(coords[2].strip())
-                    
-                    node.send_goal(x, y, z)
-                    
-                except ValueError as e:
-                    print(f"Invalid input: {e}. Please try again.")
-
+        rclpy.spin(node)
     except KeyboardInterrupt:
-        node.get_logger().info('Keyboard interrupt detected.')
+        pass
     finally:
-        node.get_logger().info('Shutting down Kinova Hardware Interface...')
         node.destroy_node()
         rclpy.shutdown()
-        spin_thread.join()
 
 if __name__ == '__main__':
     main()
