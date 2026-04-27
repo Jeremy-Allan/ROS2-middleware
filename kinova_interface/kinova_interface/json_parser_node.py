@@ -1,13 +1,14 @@
 import rclpy
 from rclpy.node import Node
-from rcl_interfaces.srv import GetParameters
+from rcl_interfaces.srv import GetParameters, SetParameters
+from rcl_interfaces.msg import Parameter, ParameterValue, ParameterType
+from std_srvs.srv import Trigger
 import threading
 import time
 import os
 import json
 import argparse
 from ament_index_python.packages import get_package_share_directory
-from .hardware_interface_client import HardwareInterfaceServer
 
 class JsonParser:
     """Helper class to handle JSON loading and coordinate substitution."""
@@ -37,13 +38,12 @@ class JsonParser:
         request.names = [f"targets.{target_name}"]
         
         future = client.call_async(request)
-        # Using a simple wait loop since we are in a background thread
         while rclpy.ok() and not future.done():
             time.sleep(0.1)
 
         if future.result() is not None:
             values = future.result().values
-            if values and values[0].double_array_value:
+            if values and values[0].type == ParameterType.PARAMETER_DOUBLE_ARRAY:
                 coords = values[0].double_array_value
                 return {'x': coords[0], 'y': coords[1], 'z': coords[2]}
         
@@ -83,8 +83,11 @@ class JsonParserNode(Node):
     def __init__(self, recipe_path):
         super().__init__('json_parser_node')
         
-        # 1. Reference the Hardware Logic (Always initialize to avoid AttributeError)
-        self.hw_interface = HardwareInterfaceServer()
+        # 1. ROS 2 Service Clients for Hardware Interface
+        self.param_client = self.create_client(SetParameters, '/kinova_hardware_client/set_parameters')
+        self.home_client = self.create_client(Trigger, '/kinova_hardware_client/home_arm')
+        self.move_arm_client = self.create_client(Trigger, '/kinova_hardware_client/move_arm')
+        self.move_gripper_client = self.create_client(Trigger, '/kinova_hardware_client/move_gripper')
 
         # 2. Initialize the Parser
         self.parser = JsonParser(recipe_path, self)
@@ -94,15 +97,50 @@ class JsonParserNode(Node):
 
         self.get_logger().info(f"JSON Parser Node Online.")
 
-        # Start the execution thread after a short delay to allow dict node to start
+        # Start the execution thread
         self.thread = threading.Thread(target=self.execute_recipe)
         self.thread.start()
 
+    def call_trigger_service(self, client):
+        if not client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error(f"Service {client.srv_name} not available!")
+            return False
+        
+        request = Trigger.Request()
+        future = client.call_async(request)
+        
+        # In a background thread, we can block
+        while rclpy.ok() and not future.done():
+            time.sleep(0.1)
+        
+        if future.result() is not None:
+            return future.result().success
+        return False
+
+    def set_hw_parameters(self, params_dict):
+        if not self.param_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Hardware parameter service not available!")
+            return False
+        
+        request = SetParameters.Request()
+        for name, value in params_dict.items():
+            param = Parameter()
+            param.name = name
+            if isinstance(value, float):
+                param.value.type = ParameterType.PARAMETER_DOUBLE
+                param.value.double_value = value
+            request.parameters.append(param)
+        
+        future = self.param_client.call_async(request)
+        while rclpy.ok() and not future.done():
+            time.sleep(0.1)
+        
+        return future.result() is not None
+
     def execute_recipe(self):
-        self.get_logger().info("Waiting for Coordinate Dictionary to be ready...")
+        self.get_logger().info("Waiting for other nodes to be ready...")
         time.sleep(2.0) 
 
-        # We resolve steps here so we can ask the Dict Node for coordinates
         self.steps = self.parser.get_executable_steps()
         if not self.steps:
             self.get_logger().error("No executable steps found or recipe failed to load.")
@@ -118,17 +156,23 @@ class JsonParserNode(Node):
 
             success = False
             if action == 'home':
-                success = self.hw_interface.send_home_goal()
+                success = self.call_trigger_service(self.home_client)
             elif action == 'move_arm':
-                success = self.hw_interface.send_goal(values['x'], values['y'], values['z'])
+                if self.set_hw_parameters({
+                    'target_x': values['x'],
+                    'target_y': values['y'],
+                    'target_z': values['z']
+                }):
+                    success = self.call_trigger_service(self.move_arm_client)
             elif action == 'gripper':
-                success = self.hw_interface.move_gripper(values)
+                if self.set_hw_parameters({'gripper_position': float(values)}):
+                    success = self.call_trigger_service(self.move_gripper_client)
 
             if success:
-                self.hw_interface.movement_finished.wait()
+                self.get_logger().info(f"Step {i+1} completed successfully.")
                 time.sleep(0.5)
             else:
-                self.get_logger().error(f"Failed to initiate action: {action}")
+                self.get_logger().error(f"Failed at step {i+1}: {action}")
                 break
 
         self.get_logger().info("--- All Tasks Completed ---")
@@ -156,7 +200,6 @@ def main():
     
     executor = rclpy.executors.MultiThreadedExecutor()
     executor.add_node(node)
-    executor.add_node(node.hw_interface)
     
     try:
         executor.spin()

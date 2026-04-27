@@ -55,6 +55,13 @@ def generate_launch_description():
         output='screen'
     )
 
+    hardware_interface_client = Node(
+        package='kinova_interface',
+        executable='hardware_interface_client',
+        name='kinova_hardware_client',
+        output='screen'
+    )
+
     json_parser_node = Node(
         package='kinova_interface',
         executable='json_parser_node',
@@ -68,5 +75,6 @@ def generate_launch_description():
         kortex_control_launch,
         move_group_launch,
         coordinate_dict_node,
+        hardware_interface_client,
         json_parser_node
     ])
