@@ -15,7 +15,10 @@ class JsonParser:
     def __init__(self, recipe_path, node_context):
         self.recipe_path = recipe_path
         self.recipe = None
-        self.node = node_context # Reference to the ROS 2 node for service calls
+        self.node = node_context # Reference to the ROS 2 node for logging/utils
+        
+        # Create the client once and reuse it
+        self.dict_client = self.node.create_client(GetParameters, '/coordinate_dictionary_node/get_parameters')
 
     def load_recipe(self):
         try:
@@ -28,16 +31,14 @@ class JsonParser:
 
     def get_coords_from_dict_node(self, target_name):
         """Fetches XYZ from the CoordinateDictionaryNode via ROS 2 Service."""
-        client = self.node.create_client(GetParameters, '/coordinate_dictionary_node/get_parameters')
-        
-        if not client.wait_for_service(timeout_sec=5.0):
+        if not self.dict_client.wait_for_service(timeout_sec=5.0):
             self.node.get_logger().error("Coordinate Dictionary Node service not available!")
             return None
 
         request = GetParameters.Request()
         request.names = [f"targets.{target_name}"]
         
-        future = client.call_async(request)
+        future = self.dict_client.call_async(request)
         while rclpy.ok() and not future.done():
             time.sleep(0.1)
 
@@ -83,13 +84,13 @@ class JsonParserNode(Node):
     def __init__(self, recipe_path):
         super().__init__('json_parser_node')
         
-        # 1. ROS 2 Service Clients for Hardware Interface
+        # 1. Reuseable ROS 2 Service Clients
         self.param_client = self.create_client(SetParameters, '/kinova_hardware_client/set_parameters')
         self.home_client = self.create_client(Trigger, '/kinova_hardware_client/home_arm')
         self.move_arm_client = self.create_client(Trigger, '/kinova_hardware_client/move_arm')
         self.move_gripper_client = self.create_client(Trigger, '/kinova_hardware_client/move_gripper')
 
-        # 2. Initialize the Parser
+        # 2. Initialize the Parser (it creates its own internal client)
         self.parser = JsonParser(recipe_path, self)
         if not self.parser.load_recipe():
             self.get_logger().error(f"Failed to load recipe from {recipe_path}")
@@ -102,6 +103,7 @@ class JsonParserNode(Node):
         self.thread.start()
 
     def call_trigger_service(self, client):
+        """Helper to call a Trigger service and wait for response."""
         if not client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error(f"Service {client.srv_name} not available!")
             return False
@@ -118,6 +120,7 @@ class JsonParserNode(Node):
         return False
 
     def set_hw_parameters(self, params_dict):
+        """Helper to update parameters on the hardware node."""
         if not self.param_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error("Hardware parameter service not available!")
             return False
