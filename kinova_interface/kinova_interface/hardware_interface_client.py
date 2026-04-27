@@ -1,6 +1,8 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 import threading
 
 # Arm Actions and Messages
@@ -15,29 +17,52 @@ from control_msgs.action import GripperCommand
 # Services
 from std_srvs.srv import Trigger
 
+# TF for Relative Movements
+from tf2_ros import Buffer, TransformListener
+import tf2_geometry_msgs
+
 class HardwareInterfaceClient(Node):
     def __init__(self):
         super().__init__('kinova_hardware_client')
         self.get_logger().info('Kinova Hardware Client Online - Waiting for Service Requests...')
         
+        # Use a ReentrantCallbackGroup to allow service handlers and action callbacks to run concurrently
+        self.callback_group = ReentrantCallbackGroup()
+
         # Action Clients (The "Skills")
-        self.arm_client = ActionClient(self, MoveGroup, 'move_action')
-        self.gripper_client = ActionClient(self, GripperCommand, '/gen3_lite_2f_gripper_controller/gripper_cmd')
+        self.arm_client = ActionClient(
+            self, MoveGroup, 'move_action', 
+            callback_group=self.callback_group
+        )
+        self.gripper_client = ActionClient(
+            self, GripperCommand, '/gen3_lite_2f_gripper_controller/gripper_cmd',
+            callback_group=self.callback_group
+        )
+
+        # TF Buffer and Listener
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Synchronous Movement Control
         self.movement_finished = threading.Event()
         self.movement_finished.set() 
 
-        # Parameters for movement goals (shared via ROS 2 parameter services)
+        # Parameters for movement goals
         self.declare_parameter('target_x', 0.0)
         self.declare_parameter('target_y', 0.0)
         self.declare_parameter('target_z', 0.0)
         self.declare_parameter('gripper_position', 0.0)
+        
+        # Parameters for relative vectors
+        self.declare_parameter('vector_x', 0.0)
+        self.declare_parameter('vector_y', 0.0)
+        self.declare_parameter('vector_z', 0.0)
 
         # ROS 2 Services (The "API")
-        self.create_service(Trigger, '~/home_arm', self.handle_home_arm)
-        self.create_service(Trigger, '~/move_arm', self.handle_move_arm)
-        self.create_service(Trigger, '~/move_gripper', self.handle_move_gripper)
+        self.create_service(Trigger, '~/home_arm', self.handle_home_arm, callback_group=self.callback_group)
+        self.create_service(Trigger, '~/move_arm', self.handle_move_arm, callback_group=self.callback_group)
+        self.create_service(Trigger, '~/move_gripper', self.handle_move_gripper, callback_group=self.callback_group)
+        self.create_service(Trigger, '~/relative_move', self.handle_relative_move, callback_group=self.callback_group)
 
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
@@ -64,6 +89,43 @@ class HardwareInterfaceClient(Node):
         else:
             response.success = False
             response.message = "Failed to initiate arm movement"
+        return response
+
+    def handle_relative_move(self, request, response):
+        vx = self.get_parameter('vector_x').get_parameter_value().double_value
+        vy = self.get_parameter('vector_y').get_parameter_value().double_value
+        vz = self.get_parameter('vector_z').get_parameter_value().double_value
+        
+        self.get_logger().info(f"Service Call: Relative Move by Vector [{vx}, {vy}, {vz}]")
+        
+        try:
+            # Look up current pose of the tool frame
+            now = rclpy.time.Time()
+            trans = self.tf_buffer.lookup_transform('base_link', 'tool_frame', now, timeout=rclpy.duration.Duration(seconds=1.0))
+            
+            curr_x = trans.transform.translation.x
+            curr_y = trans.transform.translation.y
+            curr_z = trans.transform.translation.z
+            
+            target_x = curr_x + vx
+            target_y = curr_y + vy
+            target_z = curr_z + vz
+            
+            self.get_logger().info(f"Calculated target: {target_x}, {target_y}, {target_z}")
+            
+            if self.send_goal(target_x, target_y, target_z):
+                self.movement_finished.wait()
+                response.success = True
+                response.message = "Relative movement complete"
+            else:
+                response.success = False
+                response.message = "Failed to initiate relative movement"
+                
+        except Exception as e:
+            self.get_logger().error(f"Could not calculate relative move: {e}")
+            response.success = False
+            response.message = str(e)
+            
         return response
 
     def handle_move_gripper(self, request, response):
@@ -214,8 +276,13 @@ class HardwareInterfaceClient(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = HardwareInterfaceClient()
+    
+    # Use MultiThreadedExecutor to allow concurrent callback execution
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
+    
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:

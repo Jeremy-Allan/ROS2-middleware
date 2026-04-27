@@ -29,14 +29,14 @@ class JsonParser:
             self.node.get_logger().error(f"Error loading Recipe JSON: {e}")
             return False
 
-    def get_coords_from_dict_node(self, target_name):
-        """Fetches XYZ from the CoordinateDictionaryNode via ROS 2 Service."""
+    def _get_params_from_dict(self, param_name):
+        """Internal helper to fetch parameters from the dictionary node."""
         if not self.dict_client.wait_for_service(timeout_sec=5.0):
             self.node.get_logger().error("Coordinate Dictionary Node service not available!")
             return None
 
         request = GetParameters.Request()
-        request.names = [f"targets.{target_name}"]
+        request.names = [param_name]
         
         future = self.dict_client.call_async(request)
         while rclpy.ok() and not future.done():
@@ -45,9 +45,21 @@ class JsonParser:
         if future.result() is not None:
             values = future.result().values
             if values and values[0].type == ParameterType.PARAMETER_DOUBLE_ARRAY:
-                coords = values[0].double_array_value
-                return {'x': coords[0], 'y': coords[1], 'z': coords[2]}
-        
+                return values[0].double_array_value
+        return None
+
+    def get_coords_from_dict_node(self, target_name):
+        """Fetches XYZ from the CoordinateDictionaryNode via ROS 2 Service."""
+        coords = self._get_params_from_dict(f"targets.{target_name}")
+        if coords:
+            return {'x': coords[0], 'y': coords[1], 'z': coords[2]}
+        return None
+
+    def get_vector_from_dict_node(self, vector_name):
+        """Fetches a relative vector from the CoordinateDictionaryNode."""
+        vector = self._get_params_from_dict(f"vectors.{vector_name}")
+        if vector:
+            return {'x': vector[0], 'y': vector[1], 'z': vector[2]}
         return None
 
     def get_executable_steps(self):
@@ -69,12 +81,19 @@ class JsonParser:
                     self.node.get_logger().error(f"Could not resolve target: {target_name}")
                     continue
             
+            elif action == 'relative_move':
+                vector_name = params['vector']
+                vector = self.get_vector_from_dict_node(vector_name)
+                if vector:
+                    cmd['values'] = vector
+                else:
+                    self.node.get_logger().error(f"Could not resolve vector: {vector_name}")
+                    continue
+
             elif action == 'gripper':
                 cmd['values'] = params['position']
             elif action == 'home':
                 cmd['values'] = None
-            elif action == 'relative_move':
-                cmd['values'] = params
 
             executable_list.append(cmd)
         return executable_list
@@ -89,6 +108,7 @@ class JsonParserNode(Node):
         self.home_client = self.create_client(Trigger, '/kinova_hardware_client/home_arm')
         self.move_arm_client = self.create_client(Trigger, '/kinova_hardware_client/move_arm')
         self.move_gripper_client = self.create_client(Trigger, '/kinova_hardware_client/move_gripper')
+        self.relative_move_client = self.create_client(Trigger, '/kinova_hardware_client/relative_move')
 
         # 2. Initialize the Parser (it creates its own internal client)
         self.parser = JsonParser(recipe_path, self)
@@ -167,6 +187,13 @@ class JsonParserNode(Node):
                     'target_z': values['z']
                 }):
                     success = self.call_trigger_service(self.move_arm_client)
+            elif action == 'relative_move':
+                if self.set_hw_parameters({
+                    'vector_x': values['x'],
+                    'vector_y': values['y'],
+                    'vector_z': values['z']
+                }):
+                    success = self.call_trigger_service(self.relative_move_client)
             elif action == 'gripper':
                 if self.set_hw_parameters({'gripper_position': float(values)}):
                     success = self.call_trigger_service(self.move_gripper_client)
