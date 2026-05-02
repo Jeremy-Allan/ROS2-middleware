@@ -1,7 +1,5 @@
 {
-  "objects": {
-    "red_cube": { "x": 0.45, "y": 0.0, "z": 0.12 },
-    "blue_cube": { "x": 0.45, "y": 0.2, "z": 0.12 },
-    "delivery_tray": { "x": 0.35, "y": -0.2, "z": 0.25 }
-  }
+  "red_cube_pickup": { "x": 0.45, "y": 0.0, "z": 0.12 },
+  "blue_cube_pickup": { "x": 0.45, "y": 0.2, "z": 0.12 },
+  "delivery_tray": { "x": 0.35, "y": -0.2, "z": 0.25 }
 }

@@ -12,10 +12,9 @@ setup(
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        ('share/kinova_interface/srv', glob('srv/*.srv')),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'data'), glob('data/*.json')),
-        
+        (os.path.join('share', package_name, 'recipes'), glob(os.path.join('recipes', '*.json'))),
     ],
     
     install_requires=['setuptools'],
@@ -28,7 +27,8 @@ setup(
     entry_points={
         'console_scripts': [
             'hardware_interface_client = kinova_interface.hardware_interface_client:main',
-            'coordinate_service_node = kinova_interface.coordinate_service_node:main',
+            'environment_mapping_node = kinova_interface.environment_mapping_node:main',
+            'json_parser_node = kinova_interface.json_parser_node:main',
         ],
     },
 )

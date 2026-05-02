@@ -6,10 +6,13 @@
   <description>Kinova Kortex ROS2 Middleware Interface</description>
   <maintainer email="jeremyallan@todo.todo">jeremyallan</maintainer>
   <license>Apache License 2.0</license>
+
   <buildtool_depend>ament_python</buildtool_depend>
+  
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
   <member_of_group>rosidl_interface_packages</member_of_group>
+
   <depend>rclpy</depend>
   <depend>geometry_msgs</depend>
   <depend>moveit_msgs</depend>
@@ -17,6 +20,10 @@
   <depend>control_msgs</depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+
+  <!-- Custom Services Package -->
+  <depend>kinova_interfaces</depend>
+
   <export>
     <build_type>ament_python</build_type>
   </export>
