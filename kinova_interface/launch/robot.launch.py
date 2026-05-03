@@ -48,10 +48,10 @@ def generate_launch_description():
     )
 
     # 3. Middleware Nodes (The new "Brain")
-    coordinate_dict_node = Node(
+    environment_mapping_node = Node(
         package='kinova_interface',
-        executable='coordinate_dictionary_node',
-        name='coordinate_dictionary_node',
+        executable='environment_mapping_node',
+        name='environment_mapping_node',
         output='screen'
     )
 
@@ -74,7 +74,7 @@ def generate_launch_description():
         recipe_arg,
         kortex_control_launch,
         move_group_launch,
-        coordinate_dict_node,
+        environment_mapping_node,
         hardware_interface_client,
         json_parser_node
     ])

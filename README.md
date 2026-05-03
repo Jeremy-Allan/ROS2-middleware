@@ -30,7 +30,7 @@ Ensure your ROS 2 workspace is built and sourced before running:
 
 ```bash
 cd ~/workspace/ros2_kortex_ws
-colcon build --packages-select kinova_interface
+colcon build --packages-select kinova_interface kinova_interfaces
 source install/setup.bash
 ```
 

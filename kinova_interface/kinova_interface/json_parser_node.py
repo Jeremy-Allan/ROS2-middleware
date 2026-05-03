@@ -9,6 +9,7 @@ import os
 import json
 import argparse
 from ament_index_python.packages import get_package_share_directory
+from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement
 
 class JsonParser:
     """Helper class to handle JSON loading and coordinate substitution."""
@@ -17,9 +18,9 @@ class JsonParser:
         self.recipe = None
         self.node = node_context # Reference to the ROS 2 node for logging/utils
         
-        # Create the client once and reuse it
-        self.dict_client = self.node.create_client(GetParameters, '/coordinate_dictionary_node/get_parameters')
-
+        self.coord_client = self.node.create_client(GetObjectCoordinates, 'get_coordinates')
+        self.relative_client = self.node.create_client(GetRelativeMovement, 'get_relative_movement')
+    
     def load_recipe(self):
         try:
             with open(self.recipe_path, 'r') as f:
@@ -28,39 +29,36 @@ class JsonParser:
         except Exception as e:
             self.node.get_logger().error(f"Error loading Recipe JSON: {e}")
             return False
-
-    def _get_params_from_dict(self, param_name):
-        """Internal helper to fetch parameters from the dictionary node."""
-        if not self.dict_client.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().error("Coordinate Dictionary Node service not available!")
+       
+    def get_static_object_coords(self, target_name):
+        if not self.coord_client.wait_for_service(timeout_sec=5.0):
+            self.node.get_logger().error("Coordinate service not available")
             return None
-
-        request = GetParameters.Request()
-        request.names = [param_name]
-        
-        future = self.dict_client.call_async(request)
+        req = GetObjectCoordinates.Request()
+        req.object_id = target_name
+        future = self.coord_client.call_async(req)
         while rclpy.ok() and not future.done():
             time.sleep(0.1)
+        if future.result() and future.result().success:
+            return {'x': future.result().x, 'y': future.result().y, 'z': future.result().z}
+        else:
+            self.node.get_logger().error(f"Failed to get coordinates for {target_name}: {future.result().message if future.result() else 'no response'}")
+            return None
 
-        if future.result() is not None:
-            values = future.result().values
-            if values and values[0].type == ParameterType.PARAMETER_DOUBLE_ARRAY:
-                return values[0].double_array_value
-        return None
-
-    def get_coords_from_dict_node(self, target_name):
-        """Fetches XYZ from the CoordinateDictionaryNode via ROS 2 Service."""
-        coords = self._get_params_from_dict(f"targets.{target_name}")
-        if coords:
-            return {'x': coords[0], 'y': coords[1], 'z': coords[2]}
-        return None
-
-    def get_vector_from_dict_node(self, vector_name):
-        """Fetches a relative vector from the CoordinateDictionaryNode."""
-        vector = self._get_params_from_dict(f"vectors.{vector_name}")
-        if vector:
-            return {'x': vector[0], 'y': vector[1], 'z': vector[2]}
-        return None
+    def get_relative_movement_vector(self, movement_name):
+        if not self.relative_client.wait_for_service(timeout_sec=5.0):
+            self.node.get_logger().error("Relative movement service not available")
+            return None
+        req = GetRelativeMovement.Request()
+        req.move_id = movement_name
+        future = self.relative_client.call_async(req)
+        while rclpy.ok() and not future.done():
+            time.sleep(0.1)
+        if future.result() and future.result().success:
+            return {'x': future.result().x, 'y': future.result().y, 'z': future.result().z}
+        else:
+            self.node.get_logger().error(f"Failed to get movement vector for {movement_name}: {future.result().message if future.result() else 'no response'}")
+            return None
 
     def get_executable_steps(self):
         executable_list = []
@@ -74,22 +72,20 @@ class JsonParser:
 
             if action == 'move_arm':
                 target_name = params['target']
-                coords = self.get_coords_from_dict_node(target_name)
+                coords = self.get_static_object_coords(target_name)
                 if coords:
                     cmd['values'] = coords
                 else:
                     self.node.get_logger().error(f"Could not resolve target: {target_name}")
                     continue
-            
             elif action == 'relative_move':
                 vector_name = params['vector']
-                vector = self.get_vector_from_dict_node(vector_name)
+                vector = self.get_relative_movement_vector(vector_name)
                 if vector:
                     cmd['values'] = vector
                 else:
                     self.node.get_logger().error(f"Could not resolve vector: {vector_name}")
                     continue
-
             elif action == 'gripper':
                 cmd['values'] = params['position']
             elif action == 'home':
