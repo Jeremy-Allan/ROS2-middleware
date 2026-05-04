@@ -9,8 +9,8 @@ def generate_launch_description():
     # Declare arguments
     recipe_arg = DeclareLaunchArgument(
         'recipe',
-        default_value='task_recipe.json',
-        description='The JSON recipe file to execute.'
+        default_value='none',
+        description='The JSON recipe file to execute (use "none" to start in dynamic listening mode).'
     )
 
     # 1. Start the main controller and RViz

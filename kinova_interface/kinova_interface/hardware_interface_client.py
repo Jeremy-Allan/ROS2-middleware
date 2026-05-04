@@ -278,7 +278,7 @@ def main(args=None):
     node = HardwareInterfaceClient()
     
     # Use MultiThreadedExecutor to allow concurrent callback execution
-    executor = MultiThreadedExecutor()
+    executor = MultiThreadedExecutor(num_threads=10)
     executor.add_node(node)
     
     try:

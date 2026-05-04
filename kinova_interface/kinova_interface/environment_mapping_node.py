@@ -14,9 +14,9 @@ class EnvironmentMappingNode(Node):
         self.static_objects = self.load_coordinate_dictionary()
         self.relative_movements = self.load_relative_movements()
 
-        self.srv_coords = self.create_service(GetObjectCoordinates, 'get_coordinates', self.get_coordinates_callback)
-        self.srv_move = self.create_service(GetRelativeMovement, 'get_relative_movement', self.get_relative_movement_callback)
-        self.srv_list = self.create_service(GetRobotParameters, 'get_robot_parameters', self.get_robot_parameters_callback)
+        self.srv_coords = self.create_service(GetObjectCoordinates, '/get_coordinates', self.get_coordinates_callback)
+        self.srv_move = self.create_service(GetRelativeMovement, '/get_relative_movement', self.get_relative_movement_callback)
+        self.srv_list = self.create_service(GetRobotParameters, '/get_robot_parameters', self.get_robot_parameters_callback)
     
     def load_coordinate_dictionary(self):
         pkg_share = get_package_share_directory('kinova_interface')
@@ -81,7 +81,7 @@ class EnvironmentMappingNode(Node):
 
     def get_robot_parameters_callback(self, request, response):
         # Service for the LLM Proxy || send list of objects + relative movements
-        response.object_list = all_keys = list(self.static_objects.keys()) + list(self.relative_movements.keys())
+        response.object_list = list(self.static_objects.keys()) + list(self.relative_movements.keys())
         return response
 
 

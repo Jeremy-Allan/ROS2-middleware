@@ -9,6 +9,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetObjectCoordinates.srv"
   "srv/GetRobotParameters.srv"
   "srv/GetRelativeMovement.srv"
+  "srv/ExecuteRecipe.srv"
   DEPENDENCIES geometry_msgs
 )
 
