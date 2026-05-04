@@ -9,9 +9,26 @@ def generate_launch_description():
     # Declare arguments
     recipe_arg = DeclareLaunchArgument(
         'recipe',
-        default_value='none',
-        description='The JSON recipe file to execute (use "none" to start in dynamic listening mode).'
+        default_value='task_recipe.json',
+        description='The JSON recipe file to execute.'
     )
+
+    robot_ip_arg = DeclareLaunchArgument(
+        'robot_ip',
+        default_value='192.168.1.10',
+        description='IP address of the robot.'
+    )
+
+    use_fake_hardware_arg = DeclareLaunchArgument(
+        'use_fake_hardware',
+        default_value='true',
+        description='Whether to use fake hardware (simulation) or physical hardware.'
+    )
+
+    # Launch configurations
+    recipe = LaunchConfiguration('recipe')
+    robot_ip = LaunchConfiguration('robot_ip')
+    use_fake_hardware = LaunchConfiguration('use_fake_hardware')
 
     # 1. Start the main controller and RViz
     kortex_control_launch = IncludeLaunchDescription(
@@ -23,8 +40,8 @@ def generate_launch_description():
             ])
         ]),
         launch_arguments={
-            'robot_ip': '192.168.1.10', 
-            'use_fake_hardware': 'true', 
+            'robot_ip': robot_ip, 
+            'use_fake_hardware': use_fake_hardware, 
             'robot_type': 'gen3_lite',
             'dof': '6',
             'gripper': 'gen3_lite_2f',
@@ -43,9 +60,10 @@ def generate_launch_description():
             ])
         ]),
         launch_arguments={
-            'use_fake_hardware': 'true'
+            'use_fake_hardware': use_fake_hardware
         }.items()
     )
+
 
     # 3. Middleware Nodes (The new "Brain")
     environment_mapping_node = Node(
