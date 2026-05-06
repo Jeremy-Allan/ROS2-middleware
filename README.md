@@ -38,15 +38,21 @@ source install/setup.bash
 
 ## 🚀 Running the Automated System
 
-You can launch the entire stack (Hardware, MoveIt, RViz, and the Automation Supervisor) with a single command:
+You can launch the entire stack (Hardware, MoveIt, RViz, and the Automation Supervisor) with a single command. By default, the system boots in simulation (`use_fake_hardware:=true`) and waits for recipes via a ROS service.
 
 ```bash
-# Launch with the default recipe (task_recipe.json)
+# Launch in simulation mode waiting for recipe service calls
 ros2 launch kinova_interface robot.launch.py
 
-# Launch with a custom recipe
-ros2 launch kinova_interface robot.launch.py recipe:=my_custom_task.json
+# Launch on physical hardware (REQUIRES robot_ip)
+ros2 launch kinova_interface robot.launch.py use_fake_hardware:=false robot_ip:=192.168.1.10
+
+# Launch and immediately execute a specific static recipe
+ros2 launch kinova_interface robot.launch.py recipe:=task_recipe.json
 ```
+
+**⚠️ Important Hardware Note:**
+If you set `use_fake_hardware:=false` to connect to the physical robot, you **MUST** explicitly provide the `robot_ip` argument. Failure to provide the IP will result in a pre-launch `RuntimeError` to prevent unintended connections.
 
 ---
 
