@@ -287,7 +287,7 @@ def main():
 
     node = JsonParserNode(recipe_path=recipe_path)
     
-    executor = rclpy.executors.MultiThreadedExecutor(num_threads=10)
+    executor = rclpy.executors.MultiThreadedExecutor(num_threads=10) # TODO (pulkit) change the hardcoded threads numbers
     executor.add_node(node)
     
     try:

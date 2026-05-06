@@ -278,7 +278,7 @@ def main(args=None):
     node = HardwareInterfaceClient()
     
     # Use MultiThreadedExecutor to allow concurrent callback execution
-    executor = MultiThreadedExecutor(num_threads=10)
+    executor = MultiThreadedExecutor(num_threads=10) # TODO (pulkit) change the hardcoded threads numbers
     executor.add_node(node)
     
     try:
