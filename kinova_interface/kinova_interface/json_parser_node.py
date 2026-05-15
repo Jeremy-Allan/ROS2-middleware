@@ -1,10 +1,9 @@
 import rclpy
 from rclpy.node import Node
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterType
 from std_srvs.srv import Trigger
-import threading
 import time
 import os
 import json
@@ -44,10 +43,13 @@ class JsonParserNode(Node):
     def __init__(self):
         super().__init__('json_parser_node')
         
-        # Create a reentrant callback group to avoid deadlocks when a service calls another service
+        # 1. Callback Groups
+        # Reentrant group for general service clients to allow multiple responses
         self.cb_group = ReentrantCallbackGroup()
+        # Mutually exclusive group for the execution sequence to ensure one recipe at a time
+        self.exec_cb_group = MutuallyExclusiveCallbackGroup()
 
-        # 1. Reuseable ROS 2 Service Clients
+        # 2. Reuseable ROS 2 Service Clients
         self.param_client = self.create_client(SetParameters, '/kinova_hardware_client/set_parameters', callback_group=self.cb_group)
         self.home_client = self.create_client(Trigger, '/kinova_hardware_client/home_arm', callback_group=self.cb_group)
         self.move_arm_client = self.create_client(Trigger, '/kinova_hardware_client/move_arm', callback_group=self.cb_group)
@@ -58,15 +60,16 @@ class JsonParserNode(Node):
         self.coord_client = self.create_client(GetObjectCoordinates, '/get_coordinates', callback_group=self.cb_group)
         self.relative_client = self.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=self.cb_group)
 
-        # 2. Initialize the Parser
+        # 3. Initialize the Parser
         self.parser = JsonParser(self)
         
-        # 3. Create Service to execute recipes dynamically
-        self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.cb_group)
+        # 4. Create Service to execute recipes dynamically
+        # Put this in the exec_cb_group so dynamic recipes don't overlap with static ones
+        self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
 
         self.get_logger().info(f"JSON Parser Node Online.")
 
-        # 4. Declare and get the recipe parameter
+        # 5. Declare and get the recipe parameter
         self.declare_parameter('recipe', 'none')
         recipe_file = self.get_parameter('recipe').get_parameter_value().string_value
         
@@ -84,15 +87,19 @@ class JsonParserNode(Node):
                     base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                     recipe_path = os.path.join(base_path, 'recipes', recipe_file)
 
-        # 5. If a static recipe was provided, execute it on startup
+        # 6. If a static recipe was provided, execute it on startup using a one-shot Timer
         if recipe_path:
             self.get_logger().info(f"Loading static recipe from {recipe_path}")
             if self.parser.load_recipe_from_file(recipe_path):
-                # Start the execution thread
-                self.thread = threading.Thread(target=self.execute_recipe_thread)
-                self.thread.start()
+                self.startup_timer = self.create_timer(2.0, self.startup_timer_callback, callback_group=self.exec_cb_group)
             else:
                 self.get_logger().error(f"Failed to load recipe from {recipe_path}")
+
+    def startup_timer_callback(self):
+        """One-shot timer callback to start the initial recipe."""
+        self.startup_timer.cancel()
+        self.get_logger().info("Starting initial recipe sequence...")
+        self.execute_recipe()
 
     def execute_recipe_callback(self, request, response):
         """Callback for the dynamic execution service."""
@@ -124,13 +131,14 @@ class JsonParserNode(Node):
             return None
         req = GetObjectCoordinates.Request()
         req.object_id = target_name
-        future = self.coord_client.call_async(req)
-        while rclpy.ok() and not future.done():
-            time.sleep(0.1)
-        if future.result() and future.result().success:
-            return {'x': future.result().x, 'y': future.result().y, 'z': future.result().z}
+        
+        # Use standard blocking call instead of polling loops
+        response = self.coord_client.call(req)
+        
+        if response and response.success:
+            return {'x': response.x, 'y': response.y, 'z': response.z}
         else:
-            self.get_logger().error(f"Failed to get coordinates for {target_name}: {future.result().message if future.result() else 'no response'}")
+            self.get_logger().error(f"Failed to get coordinates for {target_name}: {response.message if response else 'no response'}")
             return None
 
     def get_relative_movement_vector(self, movement_name):
@@ -139,13 +147,14 @@ class JsonParserNode(Node):
             return None
         req = GetRelativeMovement.Request()
         req.move_id = movement_name
-        future = self.relative_client.call_async(req)
-        while rclpy.ok() and not future.done():
-            time.sleep(0.1)
-        if future.result() and future.result().success:
-            return {'x': future.result().x, 'y': future.result().y, 'z': future.result().z}
+        
+        # Use standard blocking call instead of polling loops
+        response = self.relative_client.call(req)
+        
+        if response and response.success:
+            return {'x': response.x, 'y': response.y, 'z': response.z}
         else:
-            self.get_logger().error(f"Failed to get movement vector for {movement_name}: {future.result().message if future.result() else 'no response'}")
+            self.get_logger().error(f"Failed to get movement vector for {movement_name}: {response.message if response else 'no response'}")
             return None
 
     def call_trigger_service(self, client):
@@ -156,16 +165,12 @@ class JsonParserNode(Node):
             return False
         
         request = Trigger.Request()
-        future = client.call_async(request)
+        # Use standard blocking call instead of polling loops
+        response = client.call(request)
         
-        self.get_logger().info(f"Waiting for {client.srv_name} to complete...")
-        # In a background thread, we can block
-        while rclpy.ok() and not future.done():
-            time.sleep(0.1)
-        
-        if future.result() is not None:
-            self.get_logger().info(f"{client.srv_name} completed with success={future.result().success}")
-            return future.result().success
+        if response is not None:
+            self.get_logger().info(f"{client.srv_name} completed with success={response.success}")
+            return response.success
         self.get_logger().error(f"{client.srv_name} failed to return a valid result.")
         return False
 
@@ -188,20 +193,12 @@ class JsonParserNode(Node):
                 return False
             request.parameters.append(param)
         
-        future = self.param_client.call_async(request)
-        self.get_logger().info("Waiting for parameter update to complete...")
-        while rclpy.ok() and not future.done():
-            time.sleep(0.1)
+        # Use standard blocking call instead of polling loops
+        response = self.param_client.call(request)
         
-        success = future.result() is not None
+        success = response is not None
         self.get_logger().info(f"Parameter update completed. Success: {success}")
         return success
-
-    def execute_recipe_thread(self):
-        """Wrapper for thread execution."""
-        self.get_logger().info("Waiting for other nodes to be ready...")
-        time.sleep(2.0) 
-        self.execute_recipe()
 
     def execute_recipe(self):
         """Core execution logic."""
