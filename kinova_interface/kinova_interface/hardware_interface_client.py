@@ -19,7 +19,6 @@ from std_srvs.srv import Trigger
 
 # TF for Relative Movements
 from tf2_ros import Buffer, TransformListener
-import tf2_geometry_msgs
 
 class HardwareInterfaceClient(Node):
     def __init__(self):
