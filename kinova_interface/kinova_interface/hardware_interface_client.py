@@ -46,7 +46,7 @@ class HardwareInterfaceClient(Node):
         # Synchronous Movement Control
         self.movement_finished = threading.Event()
         self.movement_finished.set() 
-
+        self.last_action_successful = False
         # Parameters for movement goals
         self.declare_parameter('target_x', 0.0)
         self.declare_parameter('target_y', 0.0)
@@ -69,8 +69,8 @@ class HardwareInterfaceClient(Node):
         self.get_logger().info("Service Call: Home Arm")
         if self.send_home_goal():
             self.movement_finished.wait()
-            response.success = True
-            response.message = "Arm moved home successfully"
+            response.success = self.last_action_successful
+            response.message = "Arm moved home successfully" if response.success else "Arm movement failed"
         else:
             response.success = False
             response.message = "Failed to initiate home movement"
@@ -84,8 +84,8 @@ class HardwareInterfaceClient(Node):
         self.get_logger().info(f"Service Call: Move Arm to {x}, {y}, {z}")
         if self.send_goal(x, y, z):
             self.movement_finished.wait()
-            response.success = True
-            response.message = f"Arm moved to {x}, {y}, {z}"
+            response.success = self.last_action_successful
+            response.message = f"Arm moved to {x}, {y}, {z}" if response.success else "Arm movement failed"
         else:
             response.success = False
             response.message = "Failed to initiate arm movement"
@@ -115,8 +115,8 @@ class HardwareInterfaceClient(Node):
             
             if self.send_goal(target_x, target_y, target_z):
                 self.movement_finished.wait()
-                response.success = True
-                response.message = "Relative movement complete"
+                response.success = self.last_action_successful
+                response.message = "Relative movement complete" if response.success else "Relative movement failed"
             else:
                 response.success = False
                 response.message = "Failed to initiate relative movement"
@@ -133,8 +133,8 @@ class HardwareInterfaceClient(Node):
         self.get_logger().info(f"Service Call: Move Gripper to {pos}")
         if self.move_gripper(pos):
             self.movement_finished.wait()
-            response.success = True
-            response.message = f"Gripper moved to {pos}"
+            response.success = self.last_action_successful
+            response.message = f"Gripper moved to {pos}" if response.success else "Gripper movement failed"
         else:
             response.success = False
             response.message = "Failed to initiate gripper movement"
@@ -233,6 +233,7 @@ class HardwareInterfaceClient(Node):
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().error('Goal rejected by the Action Server.')
+            self.last_action_successful = False
             self.movement_finished.set()
             return
         
@@ -250,8 +251,16 @@ class HardwareInterfaceClient(Node):
         
         if error_code == result.error_code.SUCCESS:
             self.get_logger().info('Movement complete!')
+            self.last_action_successful = True
+        elif error_code == result.error_code.NO_IK_SOLUTION:
+            self.get_logger().error("ERROR: Coordinates out of reach! (Arm is too short)")
+            self.last_action_successful = False
+        elif error_code == result.error_code.PLANNING_FAILED:
+            self.get_logger().error("ERROR: Planning failed! (Likely trying to move through a table)")
+            self.last_action_successful = False
         else:
             self.get_logger().error(f'MoveIt failed with error code: {error_code}')
+            self.last_action_successful = False
 
         self.movement_finished.set()
 
@@ -259,6 +268,7 @@ class HardwareInterfaceClient(Node):
         goal_handle = future.result()
         if not goal_handle.accepted:
             self.get_logger().error('Gripper goal rejected.')
+            self.last_action_successful = False
             self.movement_finished.set()
             return
         result_future = goal_handle.get_result_async()
@@ -271,6 +281,7 @@ class HardwareInterfaceClient(Node):
 
     def gripper_result_callback(self, future):
         self.get_logger().info('Gripper movement complete!')
+        self.last_action_successful = True
         self.movement_finished.set()
 
 def main(args=None):
