@@ -181,6 +181,7 @@ class HardwareInterfaceClient(Node):
 
     def send_home_goal(self):
         if not self.arm_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error('Arm server not available (Home Goal)')
             return False
 
         goal_msg = MoveGroup.Goal()

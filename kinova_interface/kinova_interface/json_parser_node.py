@@ -12,13 +12,10 @@ from ament_index_python.packages import get_package_share_directory
 from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, ExecuteRecipe
 
 class JsonParser:
-    """Helper class to handle JSON loading and coordinate substitution."""
-    def __init__(self, node_context, cb_group=None):
+    """Helper class to handle JSON loading."""
+    def __init__(self, node_context):
         self.recipe = None
-        self.node = node_context # Reference to the ROS 2 node for logging/utils
-        
-        self.coord_client = self.node.create_client(GetObjectCoordinates, '/get_coordinates', callback_group=cb_group)
-        self.relative_client = self.node.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=cb_group)
+        self.node = node_context # Reference to the ROS 2 node for logging
     
     def load_recipe_from_file(self, recipe_path):
         try:
@@ -36,75 +33,11 @@ class JsonParser:
         except Exception as e:
             self.node.get_logger().error(f"Error loading Recipe JSON string: {e}")
             return False
-       
-    def get_static_object_coords(self, target_name):
-        if not self.coord_client.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().error("Coordinate service not available")
-            return None
-        req = GetObjectCoordinates.Request()
-        req.object_id = target_name
-        future = self.coord_client.call_async(req)
-        while rclpy.ok() and not future.done():
-            time.sleep(0.1)
-        if future.result() and future.result().success:
-            return {'x': future.result().x, 'y': future.result().y, 'z': future.result().z}
-        else:
-            self.node.get_logger().error(f"Failed to get coordinates for {target_name}: {future.result().message if future.result() else 'no response'}")
-            return None
 
-    def get_relative_movement_vector(self, movement_name):
-        if not self.relative_client.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().error("Relative movement service not available")
-            return None
-        req = GetRelativeMovement.Request()
-        req.move_id = movement_name
-        future = self.relative_client.call_async(req)
-        while rclpy.ok() and not future.done():
-            time.sleep(0.1)
-        if future.result() and future.result().success:
-            return {'x': future.result().x, 'y': future.result().y, 'z': future.result().z}
-        else:
-            self.node.get_logger().error(f"Failed to get movement vector for {movement_name}: {future.result().message if future.result() else 'no response'}")
-            return None
-
-    def get_executable_steps(self):
-        executable_list = []
+    def get_recipe_steps(self):
         if not self.recipe:
-            return executable_list
-
-        self.node.get_logger().debug("Resolving steps and fetching coordinates...")
-        for step in self.recipe.get('steps', []):
-            action = step['action']
-            params = step.get('parameters', {})
-            cmd = {'action': action, 'description': step.get('description', '')}
-            self.node.get_logger().debug(f"Processing step: {action}")
-
-            if action == 'move_arm':
-                target_name = params['target']
-                self.node.get_logger().debug(f"Fetching coordinates for target: {target_name}")
-                coords = self.get_static_object_coords(target_name)
-                if coords:
-                    cmd['values'] = coords
-                else:
-                    self.node.get_logger().error(f"Could not resolve target: {target_name}")
-                    continue
-            elif action == 'relative_move':
-                vector_name = params['vector']
-                self.node.get_logger().debug(f"Fetching vector for: {vector_name}")
-                vector = self.get_relative_movement_vector(vector_name)
-                if vector:
-                    cmd['values'] = vector
-                else:
-                    self.node.get_logger().error(f"Could not resolve vector: {vector_name}")
-                    continue
-            elif action == 'gripper':
-                cmd['values'] = params['position']
-            elif action == 'home':
-                cmd['values'] = None
-
-            executable_list.append(cmd)
-        self.node.get_logger().debug(f"Resolved {len(executable_list)} executable steps.")
-        return executable_list
+            return []
+        return self.recipe.get('steps', [])
 
 class JsonParserNode(Node):
     """ROS 2 Node that orchestrates tasks based on a JSON recipe."""
@@ -120,9 +53,13 @@ class JsonParserNode(Node):
         self.move_arm_client = self.create_client(Trigger, '/kinova_hardware_client/move_arm', callback_group=self.cb_group)
         self.move_gripper_client = self.create_client(Trigger, '/kinova_hardware_client/move_gripper', callback_group=self.cb_group)
         self.relative_move_client = self.create_client(Trigger, '/kinova_hardware_client/relative_move', callback_group=self.cb_group)
+        
+        # Service clients for coordinate fetching
+        self.coord_client = self.create_client(GetObjectCoordinates, '/get_coordinates', callback_group=self.cb_group)
+        self.relative_client = self.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=self.cb_group)
 
-        # 2. Initialize the Parser (it creates its own internal client)
-        self.parser = JsonParser(self, cb_group=self.cb_group)
+        # 2. Initialize the Parser
+        self.parser = JsonParser(self)
         
         # 3. Create Service to execute recipes dynamically
         self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.cb_group)
@@ -168,7 +105,7 @@ class JsonParserNode(Node):
             response.message = "Failed to parse JSON recipe string."
             return response
 
-        self.get_logger().info("Successfully parsed JSON recipe. Getting executable steps...")
+        self.get_logger().info("Successfully parsed JSON recipe. Executing...")
         success = self.execute_recipe()
 
         response.success = success
@@ -180,6 +117,36 @@ class JsonParserNode(Node):
             response.message = "Recipe execution failed. Check logs."
 
         return response
+
+    def get_static_object_coords(self, target_name):
+        if not self.coord_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Coordinate service not available")
+            return None
+        req = GetObjectCoordinates.Request()
+        req.object_id = target_name
+        future = self.coord_client.call_async(req)
+        while rclpy.ok() and not future.done():
+            time.sleep(0.1)
+        if future.result() and future.result().success:
+            return {'x': future.result().x, 'y': future.result().y, 'z': future.result().z}
+        else:
+            self.get_logger().error(f"Failed to get coordinates for {target_name}: {future.result().message if future.result() else 'no response'}")
+            return None
+
+    def get_relative_movement_vector(self, movement_name):
+        if not self.relative_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Relative movement service not available")
+            return None
+        req = GetRelativeMovement.Request()
+        req.move_id = movement_name
+        future = self.relative_client.call_async(req)
+        while rclpy.ok() and not future.done():
+            time.sleep(0.1)
+        if future.result() and future.result().success:
+            return {'x': future.result().x, 'y': future.result().y, 'z': future.result().z}
+        else:
+            self.get_logger().error(f"Failed to get movement vector for {movement_name}: {future.result().message if future.result() else 'no response'}")
+            return None
 
     def call_trigger_service(self, client):
         """Helper to call a Trigger service and wait for response."""
@@ -235,7 +202,7 @@ class JsonParserNode(Node):
 
     def execute_recipe(self):
         """Core execution logic."""
-        steps = self.parser.get_executable_steps()
+        steps = self.parser.get_recipe_steps()
         if not steps:
             self.get_logger().error("No executable steps found or recipe failed to load.")
             return False
@@ -244,30 +211,34 @@ class JsonParserNode(Node):
         
         all_success = True
         for i, step in enumerate(steps):
-            self.get_logger().info(f"[Step {i+1}] {step['description']}")
+            self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
             
             action = step['action']
-            values = step['values']
+            params = step.get('parameters', {})
 
             success = False
             if action == 'home':
                 success = self.call_trigger_service(self.home_client)
             elif action == 'move_arm':
-                if self.set_hw_parameters({
-                    'target_x': values['x'],
-                    'target_y': values['y'],
-                    'target_z': values['z']
+                target_name = params['target']
+                coords = self.get_static_object_coords(target_name)
+                if coords and self.set_hw_parameters({
+                    'target_x': coords['x'],
+                    'target_y': coords['y'],
+                    'target_z': coords['z']
                 }):
                     success = self.call_trigger_service(self.move_arm_client)
             elif action == 'relative_move':
-                if self.set_hw_parameters({
-                    'vector_x': values['x'],
-                    'vector_y': values['y'],
-                    'vector_z': values['z']
+                vector_name = params['vector']
+                vector = self.get_relative_movement_vector(vector_name)
+                if vector and self.set_hw_parameters({
+                    'vector_x': vector['x'],
+                    'vector_y': vector['y'],
+                    'vector_z': vector['z']
                 }):
                     success = self.call_trigger_service(self.relative_move_client)
             elif action == 'gripper':
-                if self.set_hw_parameters({'gripper_position': float(values)}):
+                if self.set_hw_parameters({'gripper_position': float(params['position'])}):
                     success = self.call_trigger_service(self.move_gripper_client)
 
             if success:
