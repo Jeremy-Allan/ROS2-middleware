@@ -8,7 +8,6 @@ import threading
 import time
 import os
 import json
-import argparse
 from ament_index_python.packages import get_package_share_directory
 from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, ExecuteRecipe
 
@@ -109,7 +108,7 @@ class JsonParser:
 
 class JsonParserNode(Node):
     """ROS 2 Node that orchestrates tasks based on a JSON recipe."""
-    def __init__(self, recipe_path=None):
+    def __init__(self):
         super().__init__('json_parser_node')
         
         # Create a reentrant callback group to avoid deadlocks when a service calls another service
@@ -130,7 +129,25 @@ class JsonParserNode(Node):
 
         self.get_logger().info(f"JSON Parser Node Online.")
 
-        # 4. If a static recipe was provided, execute it on startup
+        # 4. Declare and get the recipe parameter
+        self.declare_parameter('recipe', 'none')
+        recipe_file = self.get_parameter('recipe').get_parameter_value().string_value
+        
+        recipe_path = None
+        if recipe_file and recipe_file.lower() != 'none':
+            if os.path.isabs(recipe_file):
+                recipe_path = recipe_file
+            else:
+                try:
+                    package_share_directory = get_package_share_directory('kinova_interface')
+                    recipe_path = os.path.join(package_share_directory, 'recipes', recipe_file)
+                except Exception as e:
+                    # Fallback for local development
+                    self.get_logger().warning(f"Could not find package share directory, falling back to local path: {e}")
+                    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    recipe_path = os.path.join(base_path, 'recipes', recipe_file)
+
+        # 5. If a static recipe was provided, execute it on startup
         if recipe_path:
             self.get_logger().info(f"Loading static recipe from {recipe_path}")
             if self.parser.load_recipe_from_file(recipe_path):
@@ -265,27 +282,8 @@ class JsonParserNode(Node):
         return all_success
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--recipe', type=str, required=False, help='Path or name of static JSON recipe to execute on startup')
-    args, unknown = parser.parse_known_args()
-
     rclpy.init()
-    
-    recipe_path = None
-    if args.recipe and args.recipe.lower() != 'none':
-        recipe_file = args.recipe
-        if os.path.isabs(recipe_file):
-            recipe_path = recipe_file
-        else:
-            try:
-                package_share_directory = get_package_share_directory('kinova_interface')
-                recipe_path = os.path.join(package_share_directory, 'recipes', recipe_file)
-            except Exception:
-                # Fallback for local development
-                base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                recipe_path = os.path.join(base_path, 'recipes', recipe_file)
-
-    node = JsonParserNode(recipe_path=recipe_path)
+    node = JsonParserNode()
     
     executor = rclpy.executors.MultiThreadedExecutor(num_threads=10) # TODO (pulkit) change the hardcoded threads numbers
     executor.add_node(node)
