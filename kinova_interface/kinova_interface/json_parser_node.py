@@ -180,9 +180,12 @@ class JsonParserNode(Node):
         for name, value in params_dict.items():
             param = Parameter()
             param.name = name
-            if isinstance(value, float):
+            try:
                 param.value.type = ParameterType.PARAMETER_DOUBLE
-                param.value.double_value = value
+                param.value.double_value = float(value)
+            except (ValueError, TypeError) as e:
+                self.get_logger().error(f"Failed to cast parameter {name} value {value} to float: {e}")
+                return False
             request.parameters.append(param)
         
         future = self.param_client.call_async(request)
