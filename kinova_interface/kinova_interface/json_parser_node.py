@@ -1,25 +1,20 @@
 import rclpy
 from rclpy.node import Node
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from rcl_interfaces.srv import SetParameters
 from rcl_interfaces.msg import Parameter, ParameterType
 from std_srvs.srv import Trigger
-import threading
 import time
 import os
 import json
-import argparse
 from ament_index_python.packages import get_package_share_directory
 from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, ExecuteRecipe
 
 class JsonParser:
-    """Helper class to handle JSON loading and coordinate substitution."""
-    def __init__(self, node_context, cb_group=None):
+    """Helper class to handle JSON loading."""
+    def __init__(self, node_context):
         self.recipe = None
-        self.node = node_context # Reference to the ROS 2 node for logging/utils
-        
-        self.coord_client = self.node.create_client(GetObjectCoordinates, '/get_coordinates', callback_group=cb_group)
-        self.relative_client = self.node.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=cb_group)
+        self.node = node_context # Reference to the ROS 2 node for logging
     
     def load_recipe_from_file(self, recipe_path):
         try:
@@ -37,108 +32,74 @@ class JsonParser:
         except Exception as e:
             self.node.get_logger().error(f"Error loading Recipe JSON string: {e}")
             return False
-       
-    def get_static_object_coords(self, target_name):
-        if not self.coord_client.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().error("Coordinate service not available")
-            return None
-        req = GetObjectCoordinates.Request()
-        req.object_id = target_name
-        future = self.coord_client.call_async(req)
-        while rclpy.ok() and not future.done():
-            time.sleep(0.1)
-        if future.result() and future.result().success:
-            return {'x': future.result().x, 'y': future.result().y, 'z': future.result().z}
-        else:
-            self.node.get_logger().error(f"Failed to get coordinates for {target_name}: {future.result().message if future.result() else 'no response'}")
-            return None
 
-    def get_relative_movement_vector(self, movement_name):
-        if not self.relative_client.wait_for_service(timeout_sec=5.0):
-            self.node.get_logger().error("Relative movement service not available")
-            return None
-        req = GetRelativeMovement.Request()
-        req.move_id = movement_name
-        future = self.relative_client.call_async(req)
-        while rclpy.ok() and not future.done():
-            time.sleep(0.1)
-        if future.result() and future.result().success:
-            return {'x': future.result().x, 'y': future.result().y, 'z': future.result().z}
-        else:
-            self.node.get_logger().error(f"Failed to get movement vector for {movement_name}: {future.result().message if future.result() else 'no response'}")
-            return None
-
-    def get_executable_steps(self):
-        executable_list = []
+    def get_recipe_steps(self):
         if not self.recipe:
-            return executable_list
-
-        self.node.get_logger().debug("Resolving steps and fetching coordinates...")
-        for step in self.recipe.get('steps', []):
-            action = step['action']
-            params = step.get('parameters', {})
-            cmd = {'action': action, 'description': step.get('description', '')}
-            self.node.get_logger().debug(f"Processing step: {action}")
-
-            if action == 'move_arm':
-                target_name = params['target']
-                self.node.get_logger().debug(f"Fetching coordinates for target: {target_name}")
-                coords = self.get_static_object_coords(target_name)
-                if coords:
-                    cmd['values'] = coords
-                else:
-                    self.node.get_logger().error(f"Could not resolve target: {target_name}")
-                    continue
-            elif action == 'relative_move':
-                vector_name = params['vector']
-                self.node.get_logger().debug(f"Fetching vector for: {vector_name}")
-                vector = self.get_relative_movement_vector(vector_name)
-                if vector:
-                    cmd['values'] = vector
-                else:
-                    self.node.get_logger().error(f"Could not resolve vector: {vector_name}")
-                    continue
-            elif action == 'gripper':
-                cmd['values'] = params['position']
-            elif action == 'home':
-                cmd['values'] = None
-
-            executable_list.append(cmd)
-        self.node.get_logger().debug(f"Resolved {len(executable_list)} executable steps.")
-        return executable_list
+            return []
+        return self.recipe.get('steps', [])
 
 class JsonParserNode(Node):
     """ROS 2 Node that orchestrates tasks based on a JSON recipe."""
-    def __init__(self, recipe_path=None):
+    def __init__(self):
         super().__init__('json_parser_node')
         
-        # Create a reentrant callback group to avoid deadlocks when a service calls another service
+        # 1. Callback Groups
+        # Reentrant group for general service clients to allow multiple responses
         self.cb_group = ReentrantCallbackGroup()
+        # Mutually exclusive group for the execution sequence to ensure one recipe at a time
+        self.exec_cb_group = MutuallyExclusiveCallbackGroup()
 
-        # 1. Reuseable ROS 2 Service Clients
+        # 2. Reuseable ROS 2 Service Clients
         self.param_client = self.create_client(SetParameters, '/kinova_hardware_client/set_parameters', callback_group=self.cb_group)
         self.home_client = self.create_client(Trigger, '/kinova_hardware_client/home_arm', callback_group=self.cb_group)
         self.move_arm_client = self.create_client(Trigger, '/kinova_hardware_client/move_arm', callback_group=self.cb_group)
         self.move_gripper_client = self.create_client(Trigger, '/kinova_hardware_client/move_gripper', callback_group=self.cb_group)
         self.relative_move_client = self.create_client(Trigger, '/kinova_hardware_client/relative_move', callback_group=self.cb_group)
-
-        # 2. Initialize the Parser (it creates its own internal client)
-        self.parser = JsonParser(self, cb_group=self.cb_group)
         
-        # 3. Create Service to execute recipes dynamically
-        self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.cb_group)
+        # Service clients for coordinate fetching
+        self.coord_client = self.create_client(GetObjectCoordinates, '/get_coordinates', callback_group=self.cb_group)
+        self.relative_client = self.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=self.cb_group)
+
+        # 3. Initialize the Parser
+        self.parser = JsonParser(self)
+        
+        # 4. Create Service to execute recipes dynamically
+        # Put this in the exec_cb_group so dynamic recipes don't overlap with static ones
+        self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
 
         self.get_logger().info(f"JSON Parser Node Online.")
 
-        # 4. If a static recipe was provided, execute it on startup
+        # 5. Declare and get the recipe parameter
+        self.declare_parameter('recipe', 'none')
+        recipe_file = self.get_parameter('recipe').get_parameter_value().string_value
+        
+        recipe_path = None
+        if recipe_file and recipe_file.lower() != 'none':
+            if os.path.isabs(recipe_file):
+                recipe_path = recipe_file
+            else:
+                try:
+                    package_share_directory = get_package_share_directory('kinova_interface')
+                    recipe_path = os.path.join(package_share_directory, 'recipes', recipe_file)
+                except Exception as e:
+                    # Fallback for local development
+                    self.get_logger().warning(f"Could not find package share directory, falling back to local path: {e}")
+                    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    recipe_path = os.path.join(base_path, 'recipes', recipe_file)
+
+        # 6. If a static recipe was provided, execute it on startup using a one-shot Timer
         if recipe_path:
             self.get_logger().info(f"Loading static recipe from {recipe_path}")
             if self.parser.load_recipe_from_file(recipe_path):
-                # Start the execution thread
-                self.thread = threading.Thread(target=self.execute_recipe_thread)
-                self.thread.start()
+                self.startup_timer = self.create_timer(2.0, self.startup_timer_callback, callback_group=self.exec_cb_group)
             else:
                 self.get_logger().error(f"Failed to load recipe from {recipe_path}")
+
+    def startup_timer_callback(self):
+        """One-shot timer callback to start the initial recipe."""
+        self.startup_timer.cancel()
+        self.get_logger().info("Starting initial recipe sequence...")
+        self.execute_recipe()
 
     def execute_recipe_callback(self, request, response):
         """Callback for the dynamic execution service."""
@@ -151,7 +112,7 @@ class JsonParserNode(Node):
             response.message = "Failed to parse JSON recipe string."
             return response
 
-        self.get_logger().info("Successfully parsed JSON recipe. Getting executable steps...")
+        self.get_logger().info("Successfully parsed JSON recipe. Executing...")
         success = self.execute_recipe()
 
         response.success = success
@@ -164,6 +125,38 @@ class JsonParserNode(Node):
 
         return response
 
+    def get_static_object_coords(self, target_name):
+        if not self.coord_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Coordinate service not available")
+            return None
+        req = GetObjectCoordinates.Request()
+        req.object_id = target_name
+        
+        # Use standard blocking call instead of polling loops
+        response = self.coord_client.call(req)
+        
+        if response and response.success:
+            return {'x': response.x, 'y': response.y, 'z': response.z}
+        else:
+            self.get_logger().error(f"Failed to get coordinates for {target_name}: {response.message if response else 'no response'}")
+            return None
+
+    def get_relative_movement_vector(self, movement_name):
+        if not self.relative_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Relative movement service not available")
+            return None
+        req = GetRelativeMovement.Request()
+        req.move_id = movement_name
+        
+        # Use standard blocking call instead of polling loops
+        response = self.relative_client.call(req)
+        
+        if response and response.success:
+            return {'x': response.x, 'y': response.y, 'z': response.z}
+        else:
+            self.get_logger().error(f"Failed to get movement vector for {movement_name}: {response.message if response else 'no response'}")
+            return None
+
     def call_trigger_service(self, client):
         """Helper to call a Trigger service and wait for response."""
         self.get_logger().info(f"Calling trigger service: {client.srv_name}")
@@ -172,16 +165,12 @@ class JsonParserNode(Node):
             return False
         
         request = Trigger.Request()
-        future = client.call_async(request)
+        # Use standard blocking call instead of polling loops
+        response = client.call(request)
         
-        self.get_logger().info(f"Waiting for {client.srv_name} to complete...")
-        # In a background thread, we can block
-        while rclpy.ok() and not future.done():
-            time.sleep(0.1)
-        
-        if future.result() is not None:
-            self.get_logger().info(f"{client.srv_name} completed with success={future.result().success}")
-            return future.result().success
+        if response is not None:
+            self.get_logger().info(f"{client.srv_name} completed with success={response.success}")
+            return response.success
         self.get_logger().error(f"{client.srv_name} failed to return a valid result.")
         return False
 
@@ -196,29 +185,24 @@ class JsonParserNode(Node):
         for name, value in params_dict.items():
             param = Parameter()
             param.name = name
-            if isinstance(value, float):
+            try:
                 param.value.type = ParameterType.PARAMETER_DOUBLE
-                param.value.double_value = value
+                param.value.double_value = float(value)
+            except (ValueError, TypeError) as e:
+                self.get_logger().error(f"Failed to cast parameter {name} value {value} to float: {e}")
+                return False
             request.parameters.append(param)
         
-        future = self.param_client.call_async(request)
-        self.get_logger().info("Waiting for parameter update to complete...")
-        while rclpy.ok() and not future.done():
-            time.sleep(0.1)
+        # Use standard blocking call instead of polling loops
+        response = self.param_client.call(request)
         
-        success = future.result() is not None
+        success = response is not None
         self.get_logger().info(f"Parameter update completed. Success: {success}")
         return success
 
-    def execute_recipe_thread(self):
-        """Wrapper for thread execution."""
-        self.get_logger().info("Waiting for other nodes to be ready...")
-        time.sleep(2.0) 
-        self.execute_recipe()
-
     def execute_recipe(self):
         """Core execution logic."""
-        steps = self.parser.get_executable_steps()
+        steps = self.parser.get_recipe_steps()
         if not steps:
             self.get_logger().error("No executable steps found or recipe failed to load.")
             return False
@@ -227,30 +211,34 @@ class JsonParserNode(Node):
         
         all_success = True
         for i, step in enumerate(steps):
-            self.get_logger().info(f"[Step {i+1}] {step['description']}")
+            self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
             
             action = step['action']
-            values = step['values']
+            params = step.get('parameters', {})
 
             success = False
             if action == 'home':
                 success = self.call_trigger_service(self.home_client)
             elif action == 'move_arm':
-                if self.set_hw_parameters({
-                    'target_x': values['x'],
-                    'target_y': values['y'],
-                    'target_z': values['z']
+                target_name = params['target']
+                coords = self.get_static_object_coords(target_name)
+                if coords and self.set_hw_parameters({
+                    'target_x': coords['x'],
+                    'target_y': coords['y'],
+                    'target_z': coords['z']
                 }):
                     success = self.call_trigger_service(self.move_arm_client)
             elif action == 'relative_move':
-                if self.set_hw_parameters({
-                    'vector_x': values['x'],
-                    'vector_y': values['y'],
-                    'vector_z': values['z']
+                vector_name = params['vector']
+                vector = self.get_relative_movement_vector(vector_name)
+                if vector and self.set_hw_parameters({
+                    'vector_x': vector['x'],
+                    'vector_y': vector['y'],
+                    'vector_z': vector['z']
                 }):
                     success = self.call_trigger_service(self.relative_move_client)
             elif action == 'gripper':
-                if self.set_hw_parameters({'gripper_position': float(values)}):
+                if self.set_hw_parameters({'gripper_position': float(params['position'])}):
                     success = self.call_trigger_service(self.move_gripper_client)
 
             if success:
@@ -265,27 +253,8 @@ class JsonParserNode(Node):
         return all_success
 
 def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--recipe', type=str, required=False, help='Path or name of static JSON recipe to execute on startup')
-    args, unknown = parser.parse_known_args()
-
     rclpy.init()
-    
-    recipe_path = None
-    if args.recipe and args.recipe.lower() != 'none':
-        recipe_file = args.recipe
-        if os.path.isabs(recipe_file):
-            recipe_path = recipe_file
-        else:
-            try:
-                package_share_directory = get_package_share_directory('kinova_interface')
-                recipe_path = os.path.join(package_share_directory, 'recipes', recipe_file)
-            except Exception:
-                # Fallback for local development
-                base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-                recipe_path = os.path.join(base_path, 'recipes', recipe_file)
-
-    node = JsonParserNode(recipe_path=recipe_path)
+    node = JsonParserNode()
     
     executor = rclpy.executors.MultiThreadedExecutor(num_threads=10) # TODO (pulkit) change the hardcoded threads numbers
     executor.add_node(node)

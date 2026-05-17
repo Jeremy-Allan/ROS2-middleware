@@ -102,7 +102,7 @@ def generate_launch_description():
         executable='json_parser_node',
         name='json_parser_node',
         output='screen',
-        arguments=['--recipe', recipe]
+        parameters=[{'recipe': recipe}]
     )
 
     return LaunchDescription([
