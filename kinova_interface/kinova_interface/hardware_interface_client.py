@@ -15,7 +15,7 @@ from geometry_msgs.msg import Pose
 from control_msgs.action import GripperCommand
 
 # Services
-from std_srvs.srv import Trigger
+from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove
 
 # TF for Relative Movements
 from tf2_ros import Buffer, TransformListener
@@ -46,26 +46,18 @@ class HardwareInterfaceClient(Node):
         self.movement_finished = threading.Event()
         self.movement_finished.set() 
         self.last_action_successful = False
-        # Parameters for movement goals
-        self.declare_parameter('target_x', 0.0)
-        self.declare_parameter('target_y', 0.0)
-        self.declare_parameter('target_z', 0.0)
-        self.declare_parameter('gripper_position', 0.0)
-        
-        # Parameters for relative vectors
-        self.declare_parameter('vector_x', 0.0)
-        self.declare_parameter('vector_y', 0.0)
-        self.declare_parameter('vector_z', 0.0)
 
         # ROS 2 Services (The "API")
-        self.create_service(Trigger, '~/home_arm', self.handle_home_arm, callback_group=self.callback_group)
-        self.create_service(Trigger, '~/move_arm', self.handle_move_arm, callback_group=self.callback_group)
-        self.create_service(Trigger, '~/move_gripper', self.handle_move_gripper, callback_group=self.callback_group)
-        self.create_service(Trigger, '~/relative_move', self.handle_relative_move, callback_group=self.callback_group)
-
+        # Custom Service
+        self.home_arm = self.create_service(HomeArm, '~/home_arm', self.handle_home_arm,callback_group=self.callback_group)
+        self.move_arm_srv = self.create_service(MoveArm, '~/move_arm', self.handle_move_arm, callback_group=self.callback_group )
+        self.move_gripper_srv = self.create_service(MoveGripper, '~/move_gripper', self.handle_move_gripper,callback_group=self.callback_group)
+        self.relative_move_srv = self.create_service(RelativeMove, '~/relative_move', self.handle_relative_move,callback_group=self.callback_group)
+    
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
         self.get_logger().info("Service Call: Home Arm")
+
         if self.send_home_goal():
             self.movement_finished.wait()
             response.success = self.last_action_successful
@@ -76,12 +68,12 @@ class HardwareInterfaceClient(Node):
         return response
 
     def handle_move_arm(self, request, response):
-        x = self.get_parameter('target_x').get_parameter_value().double_value
-        y = self.get_parameter('target_y').get_parameter_value().double_value
-        z = self.get_parameter('target_z').get_parameter_value().double_value
-        
+        x = request.x
+        y = request.y
+        z = request.z
         self.get_logger().info(f"Service Call: Move Arm to {x}, {y}, {z}")
-        if self.send_goal(x, y, z):
+
+        if self.send_goal(x, y, z): 
             self.movement_finished.wait()
             response.success = self.last_action_successful
             response.message = f"Arm moved to {x}, {y}, {z}" if response.success else "Arm movement failed"
@@ -91,10 +83,9 @@ class HardwareInterfaceClient(Node):
         return response
 
     def handle_relative_move(self, request, response):
-        vx = self.get_parameter('vector_x').get_parameter_value().double_value
-        vy = self.get_parameter('vector_y').get_parameter_value().double_value
-        vz = self.get_parameter('vector_z').get_parameter_value().double_value
-        
+        vx = request.vx
+        vy = request.vy
+        vz = request.vz
         self.get_logger().info(f"Service Call: Relative Move by Vector [{vx}, {vy}, {vz}]")
         
         try:
@@ -128,8 +119,9 @@ class HardwareInterfaceClient(Node):
         return response
 
     def handle_move_gripper(self, request, response):
-        pos = self.get_parameter('gripper_position').get_parameter_value().double_value
+        pos = request.position
         self.get_logger().info(f"Service Call: Move Gripper to {pos}")
+
         if self.move_gripper(pos):
             self.movement_finished.wait()
             response.success = self.last_action_successful

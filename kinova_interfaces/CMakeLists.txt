@@ -13,6 +13,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MoveArm.srv"
   "srv/MoveGripper.srv"
   "srv/RelativeMove.srv"
+  "srv/HomeArm.srv"
   DEPENDENCIES geometry_msgs
 )
 
