@@ -1,0 +1,3 @@
+[Logging]
+debug_mode = False
+enable_individual_node_logs = False

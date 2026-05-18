@@ -18,7 +18,7 @@
       "step_id": 3,
       "action": "move_arm",
       "parameters": {
-        "target": "red_cube_pickup"
+        "target": "red_cube"
       },
       "description": "Navigate to the red cube"
     },

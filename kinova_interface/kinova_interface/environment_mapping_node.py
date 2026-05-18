@@ -1,14 +1,20 @@
-import os
 import json
 import rclpy
+from pathlib import Path
 from rclpy.node import Node
-from ament_index_python.packages import get_package_share_directory 
 from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement  
 
 
 class EnvironmentMappingNode(Node):
     def __init__(self):
         super().__init__("environment_mapping_node")
+        self.declare_parameter('config_dir', '')
+        self.config_dir = self.get_parameter('config_dir').value
+        
+        if not self.config_dir:
+            self.get_logger().fatal("Parameter 'config_dir' not set!")
+            raise SystemExit(1)
+
         self.get_logger().info('Environment Mapping Node started')
 
         self.static_objects = self.load_coordinate_dictionary()
@@ -19,8 +25,7 @@ class EnvironmentMappingNode(Node):
         self.srv_list = self.create_service(GetRobotParameters, '/get_robot_parameters', self.get_robot_parameters_callback)
     
     def load_coordinate_dictionary(self):
-        pkg_share = get_package_share_directory('kinova_interface')
-        json_path = os.path.join(pkg_share,'data','coordinate_dictionary.json')
+        json_path = Path(self.config_dir) / 'coordinate_dictionary.json'
         try:
             with open(json_path, 'r') as file:
                 objects = json.load(file)
@@ -35,8 +40,7 @@ class EnvironmentMappingNode(Node):
                 raise SystemExit(1)
 
     def load_relative_movements(self):
-        pkg_share = get_package_share_directory('kinova_interface')
-        json_path = os.path.join(pkg_share,'data','relative_movement.json')
+        json_path = Path(self.config_dir) / 'relative_movement.json'
         try:
             with open(json_path, 'r') as file:
                 movements = json.load(file)
