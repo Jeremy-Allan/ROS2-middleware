@@ -3,11 +3,12 @@ import os
 import pathlib
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
+import launch.logging
 
 def check_hardware_args(context, *args, **kwargs):
     use_fake_hardware = LaunchConfiguration('use_fake_hardware').perform(context)
@@ -27,13 +28,20 @@ def check_hardware_args(context, *args, **kwargs):
 
 def launch_setup(context, *args, **kwargs):
     debug_mode = LaunchConfiguration('debug_mode').perform(context).lower() == 'true'
+    core_debug = LaunchConfiguration('core_debug').perform(context).lower() == 'true'
     enable_individual_logs = LaunchConfiguration('enable_individual_logs').perform(context).lower() == 'true'
 
-    ros_args = []
-    if debug_mode:
-        ros_args.extend(['--log-level', 'debug'])
+    base_ros_args = []
     if not enable_individual_logs:
-        ros_args.extend(['--disable-external-lib-logs'])
+        base_ros_args.extend(['--disable-external-lib-logs'])
+
+    def get_ros_args(node_name):
+        args = list(base_ros_args)
+        if core_debug:
+            args.extend(['--log-level', 'debug'])
+        elif debug_mode:
+            args.extend(['--log-level', f'{node_name}:=debug'])
+        return args
 
     recipe = LaunchConfiguration('recipe')
     env_dir = PathJoinSubstitution([FindPackageShare('kinova_interface'), 'data', 'configs', 'env'])
@@ -44,7 +52,7 @@ def launch_setup(context, *args, **kwargs):
         name='environment_mapping_node',
         output='log',
         parameters=[{'config_dir': env_dir}],
-        ros_arguments=ros_args
+        ros_arguments=get_ros_args('environment_mapping_node')
     )
 
     hardware_interface_client = Node(
@@ -52,7 +60,7 @@ def launch_setup(context, *args, **kwargs):
         executable='hardware_interface_client',
         name='kinova_hardware_client',
         output='log',
-        ros_arguments=ros_args
+        ros_arguments=get_ros_args('kinova_hardware_client')
     )
 
     json_parser_node = Node(
@@ -61,7 +69,7 @@ def launch_setup(context, *args, **kwargs):
         name='json_parser_node',
         output='log',
         parameters=[{'recipe': recipe}],
-        ros_arguments=ros_args
+        ros_arguments=get_ros_args('json_parser_node')
     )
 
     return [environment_mapping_node, hardware_interface_client, json_parser_node]
@@ -70,7 +78,13 @@ def generate_launch_description():
     debug_mode_arg = DeclareLaunchArgument(
         'debug_mode',
         default_value='false',
-        description='Enable debug mode logging'
+        description='Enable targeted debug mode logging for middleware nodes'
+    )
+    
+    core_debug_arg = DeclareLaunchArgument(
+        'core_debug',
+        default_value='false',
+        description='Enable global debug logging, including rcl and dds_cpp'
     )
     
     enable_individual_logs_arg = DeclareLaunchArgument(
@@ -135,7 +149,9 @@ def generate_launch_description():
     )
 
     return LaunchDescription([
+        SetEnvironmentVariable('ROS_LOG_DIR', launch.logging.launch_config.log_dir),
         debug_mode_arg,
+        core_debug_arg,
         enable_individual_logs_arg,
         recipe_arg,
         robot_ip_arg,
