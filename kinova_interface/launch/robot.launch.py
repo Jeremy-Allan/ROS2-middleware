@@ -72,7 +72,15 @@ def launch_setup(context, *args, **kwargs):
         ros_arguments=get_ros_args('json_parser_node')
     )
 
-    return [environment_mapping_node, hardware_interface_client, json_parser_node]
+    telemetry_node = Node(
+        package='kinova_interface',
+        executable='telemetry_node',
+        name='telemetry_node',
+        output='log',
+        ros_arguments=get_ros_args('telemetry_node')
+    )
+
+    return [environment_mapping_node, hardware_interface_client, json_parser_node, telemetry_node]
 
 def generate_launch_description():
     debug_mode_arg = DeclareLaunchArgument(

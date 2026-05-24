@@ -9,6 +9,7 @@ import os
 import json
 from ament_index_python.packages import get_package_share_directory
 from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, ExecuteRecipe
+from kinova_interfaces.msg import ExtendedStatus
 
 class JsonParser:
     """Helper class to handle JSON loading."""
@@ -63,6 +64,13 @@ class JsonParserNode(Node):
         # 3. Initialize the Parser
         self.parser = JsonParser(self)
         
+        # Telemetry Setup
+        self.status_pub = self.create_publisher(ExtendedStatus, '/status/node_report', 10)
+        self.status_timer = self.create_timer(0.5, self.publish_status, callback_group=self.cb_group)
+        self.current_state = ExtendedStatus.STATE_IDLE
+        self.status_text = "JSON Parser Online & Ready"
+        self.command_success = True
+        
         # 4. Create Service to execute recipes dynamically
         # Put this in the exec_cb_group so dynamic recipes don't overlap with static ones
         self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
@@ -95,6 +103,14 @@ class JsonParserNode(Node):
             else:
                 self.get_logger().error(f"Failed to load recipe from {recipe_path}")
 
+    def publish_status(self):
+        msg = ExtendedStatus()
+        msg.node_name = self.get_name()
+        msg.state = self.current_state
+        msg.status_message = self.status_text
+        msg.last_command_valid = self.command_success
+        self.status_pub.publish(msg)
+
     def startup_timer_callback(self):
         """One-shot timer callback to start the initial recipe."""
         self.startup_timer.cancel()
@@ -110,6 +126,9 @@ class JsonParserNode(Node):
             self.get_logger().error("Failed to parse JSON recipe string.")
             response.success = False
             response.message = "Failed to parse JSON recipe string."
+            self.command_success = False
+            self.status_text = "Failed to parse dynamic JSON recipe"
+            self.publish_status()
             return response
 
         self.get_logger().info("Successfully parsed JSON recipe. Executing...")
@@ -119,9 +138,15 @@ class JsonParserNode(Node):
         if success:
             self.get_logger().info("Returning Success to client.")
             response.message = "Recipe executed successfully."
+            self.command_success = True
+            self.status_text = "Recipe execution complete (Success)"
+            self.publish_status()
         else:
             self.get_logger().error("Returning Failure to client.")
             response.message = "Recipe execution failed. Check logs."
+            self.command_success = False
+            self.status_text = "Recipe execution failed"
+            self.publish_status()
 
         return response
 
@@ -205,13 +230,21 @@ class JsonParserNode(Node):
         steps = self.parser.get_recipe_steps()
         if not steps:
             self.get_logger().error("No executable steps found or recipe failed to load.")
+            self.command_success = False
+            self.status_text = "No executable steps in recipe"
+            self.publish_status()
             return False
 
         self.get_logger().info(f"--- Starting Automated Sequence ({len(steps)} steps) ---")
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = f"Executing recipe: {self.parser.recipe.get('recipe_name', 'Unnamed')}"
+        self.publish_status()
         
         all_success = True
         for i, step in enumerate(steps):
             self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
+            self.status_text = f"Step {i+1}/{len(steps)}: {step.get('description', '')}"
+            self.publish_status()
             
             action = step['action']
             params = step.get('parameters', {})
@@ -249,6 +282,13 @@ class JsonParserNode(Node):
                 all_success = False
                 break
 
+        self.current_state = ExtendedStatus.STATE_IDLE
+        self.command_success = all_success
+        if all_success:
+            self.status_text = "Recipe execution complete (Success)"
+        else:
+            self.status_text = f"Recipe failed at step {i+1}"
+        self.publish_status()
         self.get_logger().info("--- All Tasks Completed ---")
         return all_success
 

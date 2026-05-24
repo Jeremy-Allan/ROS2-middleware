@@ -30,6 +30,7 @@ setup(
             'hardware_interface_client = kinova_interface.hardware_interface_client:main',
             'environment_mapping_node = kinova_interface.environment_mapping_node:main',
             'json_parser_node = kinova_interface.json_parser_node:main',
+            'telemetry_node = kinova_interface.telemetry_node:main',
         ],
     },
 )

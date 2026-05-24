@@ -19,6 +19,9 @@ from std_srvs.srv import Trigger
 from example_interfaces.msg import Bool
 from example_interfaces.srv import Trigger as ExampleTrigger
 
+# Custom telemetry message
+from kinova_interfaces.msg import ExtendedStatus
+
 # TF for Relative Movements
 from tf2_ros import Buffer, TransformListener
 
@@ -75,20 +78,42 @@ class HardwareInterfaceClient(Node):
         self.declare_parameter('vector_y', 0.0)
         self.declare_parameter('vector_z', 0.0)
 
+        # Telemetry Setup
+        self.status_pub = self.create_publisher(ExtendedStatus, '/status/node_report', 10)
+        self.status_timer = self.create_timer(0.5, self.publish_status, callback_group=self.callback_group)
+        self.current_state = ExtendedStatus.STATE_IDLE
+        self.status_text = "Hardware Interface Client Ready"
+        self.command_success = True
+
         # ROS 2 Services (The "API")
         self.create_service(Trigger, '~/home_arm', self.handle_home_arm, callback_group=self.callback_group)
         self.create_service(Trigger, '~/move_arm', self.handle_move_arm, callback_group=self.callback_group)
         self.create_service(Trigger, '~/move_gripper', self.handle_move_gripper, callback_group=self.callback_group)
         self.create_service(Trigger, '~/relative_move', self.handle_relative_move, callback_group=self.callback_group)
 
+    # --- Telemetry Status Publisher ---
+    def publish_status(self):
+        msg = ExtendedStatus()
+        msg.node_name = self.get_name()
+        msg.state = self.current_state
+        msg.status_message = self.status_text
+        msg.last_command_valid = self.command_success
+        self.status_pub.publish(msg)
+
     # --- Fault Handling ---
     def fault_callback(self, msg: Bool):
         """Asynchronously updates the internal fault status."""
         if msg.data and not self.is_faulted:
             self.get_logger().error("Robot entered a hardware FAULT state.")
+            self.current_state = ExtendedStatus.STATE_FAULT
+            self.status_text = "HARDWARE FAULT: Robot is faulted"
+            self.command_success = False
         elif not msg.data and self.is_faulted:
             self.get_logger().info("Robot hardware fault has been cleared.")
-        
+            self.current_state = ExtendedStatus.STATE_IDLE
+            self.status_text = "Robot Ready (Fault Cleared)"
+            self.command_success = True
+        self.publish_status()
         self.is_faulted = msg.data
 
     def handle_moveit_failure(self):
@@ -126,6 +151,9 @@ class HardwareInterfaceClient(Node):
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
         self.get_logger().info("Service Call: Home Arm")
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = "Sending arm to home position"
+        self.publish_status()
         if self.send_home_goal():
             self.movement_finished.wait()
             response.success = self.last_action_successful
@@ -133,6 +161,11 @@ class HardwareInterfaceClient(Node):
         else:
             response.success = False
             response.message = "Failed to initiate home movement"
+        
+        self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
+        self.command_success = response.success
+        self.status_text = response.message
+        self.publish_status()
         return response
 
     def handle_move_arm(self, request, response):
@@ -141,6 +174,9 @@ class HardwareInterfaceClient(Node):
         z = self.get_parameter('target_z').get_parameter_value().double_value
         
         self.get_logger().info(f"Service Call: Move Arm to {x}, {y}, {z}")
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = f"Moving arm to {x}, {y}, {z}..."
+        self.publish_status()
         if self.send_goal(x, y, z):
             self.movement_finished.wait()
             response.success = self.last_action_successful
@@ -148,6 +184,11 @@ class HardwareInterfaceClient(Node):
         else:
             response.success = False
             response.message = "Failed to initiate arm movement"
+        
+        self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
+        self.command_success = response.success
+        self.status_text = response.message
+        self.publish_status()
         return response
 
     def handle_relative_move(self, request, response):
@@ -156,6 +197,9 @@ class HardwareInterfaceClient(Node):
         vz = self.get_parameter('vector_z').get_parameter_value().double_value
         
         self.get_logger().info(f"Service Call: Relative Move by Vector [{vx}, {vy}, {vz}]")
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = f"Executing relative move by vector [{vx}, {vy}, {vz}]..."
+        self.publish_status()
         
         try:
             # Look up current pose of the tool frame
@@ -185,11 +229,18 @@ class HardwareInterfaceClient(Node):
             response.success = False
             response.message = str(e)
             
+        self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
+        self.command_success = response.success
+        self.status_text = response.message
+        self.publish_status()
         return response
 
     def handle_move_gripper(self, request, response):
         pos = self.get_parameter('gripper_position').get_parameter_value().double_value
         self.get_logger().info(f"Service Call: Move Gripper to {pos}")
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = f"Moving gripper to {pos}..."
+        self.publish_status()
         if self.move_gripper(pos):
             self.movement_finished.wait()
             response.success = self.last_action_successful
@@ -197,6 +248,11 @@ class HardwareInterfaceClient(Node):
         else:
             response.success = False
             response.message = "Failed to initiate gripper movement"
+        
+        self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
+        self.command_success = response.success
+        self.status_text = response.message
+        self.publish_status()
         return response
 
     # --- Action Client Methods ---
