@@ -16,6 +16,8 @@ from control_msgs.action import GripperCommand
 
 # Services
 from std_srvs.srv import Trigger
+from example_interfaces.msg import Bool
+from example_interfaces.srv import Trigger as ExampleTrigger
 
 # TF for Relative Movements
 from tf2_ros import Buffer, TransformListener
@@ -42,6 +44,22 @@ class HardwareInterfaceClient(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
+        # Fault Monitoring and Recovery
+        self.fault_sub = self.create_subscription(
+            Bool,
+            '/fault_controller/is_faulted',
+            self.fault_callback,
+            10,
+            callback_group=self.callback_group
+        )
+        self.is_faulted = False
+        
+        self.reset_client = self.create_client(
+            ExampleTrigger,
+            '/fault_controller/reset_fault',
+            callback_group=self.callback_group
+        )
+
         # Synchronous Movement Control
         self.movement_finished = threading.Event()
         self.movement_finished.set() 
@@ -62,6 +80,48 @@ class HardwareInterfaceClient(Node):
         self.create_service(Trigger, '~/move_arm', self.handle_move_arm, callback_group=self.callback_group)
         self.create_service(Trigger, '~/move_gripper', self.handle_move_gripper, callback_group=self.callback_group)
         self.create_service(Trigger, '~/relative_move', self.handle_relative_move, callback_group=self.callback_group)
+
+    # --- Fault Handling ---
+    def fault_callback(self, msg: Bool):
+        """Asynchronously updates the internal fault status."""
+        if msg.data and not self.is_faulted:
+            self.get_logger().error("Robot entered a hardware FAULT state.")
+        elif not msg.data and self.is_faulted:
+            self.get_logger().info("Robot hardware fault has been cleared.")
+        
+        self.is_faulted = msg.data
+
+    def handle_moveit_failure(self):
+        """Called when MoveIt execution fails."""
+        self.get_logger().warn("MoveIt trajectory execution failed. Inspecting hardware health...")
+        
+        if self.is_faulted:
+            self.get_logger().warn("Hardware fault confirmed. Initiating recovery sequence...")
+            self.trigger_fault_reset()
+        else:
+            self.get_logger().info("No hardware fault detected. Failure may be algorithmic (planning timeout).")
+
+    def trigger_fault_reset(self):
+        """Sends a request to clear the physical faults on the robot."""
+        if not self.reset_client.service_is_ready():
+            self.get_logger().error("Fault recovery service is not available!")
+            return
+
+        request = ExampleTrigger.Request()
+        self.get_logger().info("Sending ClearFaults request to Kinova controller...")
+        
+        future = self.reset_client.call_async(request)
+        future.add_done_callback(self.reset_response_callback)
+
+    def reset_response_callback(self, future):
+        try:
+            response = future.result()
+            if response.success:
+                self.get_logger().info(f"Success: {response.message}")
+            else:
+                self.get_logger().error(f"Failed to clear hardware faults: {response.message}")
+        except Exception as e:
+            self.get_logger().error(f"Service call failed with exception: {e}")
 
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
@@ -261,6 +321,7 @@ class HardwareInterfaceClient(Node):
         else:
             self.get_logger().error(f'MoveIt failed with error code: {error_code}')
             self.last_action_successful = False
+            self.handle_moveit_failure()
 
         self.movement_finished.set()
 
