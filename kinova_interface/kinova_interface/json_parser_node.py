@@ -12,7 +12,10 @@ from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, Exe
 class JsonParser:
     """Helper class to handle JSON loading."""
     def __init__(self, node_context):
+    """Helper class to handle JSON loading."""
+    def __init__(self, node_context):
         self.recipe = None
+        self.node = node_context # Reference to the ROS 2 node for logging
         self.node = node_context # Reference to the ROS 2 node for logging
     
     def load_recipe_from_file(self, recipe_path):
@@ -33,15 +36,22 @@ class JsonParser:
             return False
 
     def get_recipe_steps(self):
+
+    def get_recipe_steps(self):
         if not self.recipe:
+            return []
+        return self.recipe.get('steps', [])
             return []
         return self.recipe.get('steps', [])
 
 class JsonParserNode(Node):
     """ROS 2 Node that orchestrates tasks based on a JSON recipe."""
     def __init__(self):
+    def __init__(self):
         super().__init__('json_parser_node')
         
+        # 1. Callback Groups
+        # Reentrant group for general service clients to allow multiple responses
         # 1. Callback Groups
         # Reentrant group for general service clients to allow multiple responses
         self.cb_group = ReentrantCallbackGroup()
@@ -61,6 +71,9 @@ class JsonParserNode(Node):
         # 3. Initialize the Parser
         self.parser = JsonParser(self)
         
+        # 4. Create Service to execute recipes dynamically
+        # Put this in the exec_cb_group so dynamic recipes don't overlap with static ones
+        self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
         # 4. Create Service to execute recipes dynamically
         # Put this in the exec_cb_group so dynamic recipes don't overlap with static ones
         self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
@@ -86,9 +99,29 @@ class JsonParserNode(Node):
                     recipe_path = os.path.join(base_path, 'recipes', recipe_file)
 
         # 6. If a static recipe was provided, execute it on startup using a one-shot Timer
+        # 5. Declare and get the recipe parameter
+        self.declare_parameter('recipe', 'none')
+        recipe_file = self.get_parameter('recipe').get_parameter_value().string_value
+        
+        recipe_path = None
+        if recipe_file and recipe_file.lower() != 'none':
+            if os.path.isabs(recipe_file):
+                recipe_path = recipe_file
+            else:
+                try:
+                    package_share_directory = get_package_share_directory('kinova_interface')
+                    recipe_path = os.path.join(package_share_directory, 'recipes', recipe_file)
+                except Exception as e:
+                    # Fallback for local development
+                    self.get_logger().warning(f"Could not find package share directory, falling back to local path: {e}")
+                    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    recipe_path = os.path.join(base_path, 'recipes', recipe_file)
+
+        # 6. If a static recipe was provided, execute it on startup using a one-shot Timer
         if recipe_path:
             self.get_logger().info(f"Loading static recipe from {recipe_path}")
             if self.parser.load_recipe_from_file(recipe_path):
+                self.startup_timer = self.create_timer(2.0, self.startup_timer_callback, callback_group=self.exec_cb_group)
                 self.startup_timer = self.create_timer(2.0, self.startup_timer_callback, callback_group=self.exec_cb_group)
             else:
                 self.get_logger().error(f"Failed to load recipe from {recipe_path}")
@@ -121,6 +154,7 @@ class JsonParserNode(Node):
             response.message = "Failed to parse JSON recipe string."
             return response
 
+        self.get_logger().info("Successfully parsed JSON recipe. Executing...")
         self.get_logger().info("Successfully parsed JSON recipe. Executing...")
         success = self.execute_recipe()
 
@@ -241,6 +275,7 @@ class JsonParserNode(Node):
     def execute_recipe(self):
         """Core execution logic."""
         steps = self.parser.get_recipe_steps()
+        steps = self.parser.get_recipe_steps()
         if not steps:
             self.get_logger().error("No executable steps found or recipe failed to load.")
             return False
@@ -249,6 +284,7 @@ class JsonParserNode(Node):
         
         all_success = True
         for i, step in enumerate(steps):
+            self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
             self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
             
             action = step['action']
@@ -287,6 +323,7 @@ class JsonParserNode(Node):
 
 def main():
     rclpy.init()
+    node = JsonParserNode()
     node = JsonParserNode()
     
     executor = rclpy.executors.MultiThreadedExecutor(num_threads=10) # TODO (pulkit) change the hardcoded threads numbers
