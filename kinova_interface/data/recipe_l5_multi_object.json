@@ -1,0 +1,82 @@
+{
+  "recipe_name": "L5 - Multi Object Sequence",
+  "description": "Picks up two different objects and delivers both to the tray",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    },
+    {
+      "step_id": 2,
+      "action": "gripper",
+      "parameters": { "position": 1.0 },
+      "description": "Open gripper"
+    },
+    {
+      "step_id": 3,
+      "action": "move_arm",
+      "parameters": { "target": "red_cube_pickup" },
+      "description": "Move to red cube"
+    },
+    {
+      "step_id": 4,
+      "action": "gripper",
+      "parameters": { "position": 0.0 },
+      "description": "Grab red cube"
+    },
+    {
+      "step_id": 5,
+      "action": "relative_move",
+      "parameters": { "vector": "move_upwards" },
+      "description": "Lift red cube"
+    },
+    {
+      "step_id": 6,
+      "action": "move_arm",
+      "parameters": { "target": "delivery_tray" },
+      "description": "Move to delivery tray"
+    },
+    {
+      "step_id": 7,
+      "action": "gripper",
+      "parameters": { "position": 1.0 },
+      "description": "Release red cube"
+    },
+    {
+      "step_id": 8,
+      "action": "move_arm",
+      "parameters": { "target": "blue_cube_pickup" },
+      "description": "Move to blue cube"
+    },
+    {
+      "step_id": 9,
+      "action": "gripper",
+      "parameters": { "position": 0.0 },
+      "description": "Grab blue cube"
+    },
+    {
+      "step_id": 10,
+      "action": "relative_move",
+      "parameters": { "vector": "move_upwards" },
+      "description": "Lift blue cube"
+    },
+    {
+      "step_id": 11,
+      "action": "move_arm",
+      "parameters": { "target": "delivery_tray" },
+      "description": "Move to delivery tray"
+    },
+    {
+      "step_id": 12,
+      "action": "gripper",
+      "parameters": { "position": 1.0 },
+      "description": "Release blue cube"
+    },
+    {
+      "step_id": 13,
+      "action": "home",
+      "description": "Return to home position"
+    }
+  ]
+}

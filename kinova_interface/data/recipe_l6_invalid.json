@@ -1,0 +1,47 @@
+{
+  "recipe_name": "L6 - Invalid Recipes",
+  "description": "Tests system robustness against invalid inputs",
+  "test_cases": [
+    {
+      "test_name": "Unknown object",
+      "expect_success": false,
+      "steps": [
+        {
+          "step_id": 1,
+          "action": "move_arm",
+          "parameters": { "target": "nonexistent_object" },
+          "description": "Attempt to move to unknown object"
+        }
+      ]
+    },
+    {
+      "test_name": "Unsupported action",
+      "expect_success": false,
+      "steps": [
+        {
+          "step_id": 1,
+          "action": "fly",
+          "parameters": { "target": "red_cube_pickup" },
+          "description": "Attempt unsupported action"
+        }
+      ]
+    },
+    {
+      "test_name": "Gripper out of range",
+      "expect_success": false,
+      "steps": [
+        {
+          "step_id": 1,
+          "action": "gripper",
+          "parameters": { "position": 5.0 },
+          "description": "Attempt gripper position outside valid range"
+        }
+      ]
+    },
+    {
+      "test_name": "Empty steps",
+      "expect_success": false,
+      "steps": []
+    }
+  ]
+}
