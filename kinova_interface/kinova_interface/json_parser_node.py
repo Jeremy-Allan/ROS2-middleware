@@ -238,49 +238,6 @@ class JsonParserNode(Node):
             self.get_logger().error(f"Failed to Move Gripper to: {position}: {response.message if response else 'no response'}")
             return None
 
-    # def call_trigger_service(self, client):
-    #     """Helper to call a Trigger service and wait for response."""
-    #     self.get_logger().info(f"Calling trigger service: {client.srv_name}")
-    #     if not client.wait_for_service(timeout_sec=5.0):
-    #         self.get_logger().error(f"Service {client.srv_name} not available!")
-    #         return False
-        
-    #     request = Trigger.Request()
-    #     # Use standard blocking call instead of polling loops
-    #     response = client.call(request)
-        
-    #     if response is not None:
-    #         self.get_logger().info(f"{client.srv_name} completed with success={response.success}")
-    #         return response.success
-    #     self.get_logger().error(f"{client.srv_name} failed to return a valid result.")
-    #     return False
-
-    # def set_hw_parameters(self, params_dict):
-    #     """Helper to update parameters on the hardware node."""
-    #     self.get_logger().info(f"Setting HW parameters: {params_dict}")
-    #     if not self.param_client.wait_for_service(timeout_sec=5.0):
-    #         self.get_logger().error("Hardware parameter service not available!")
-    #         return False
-        
-    #     request = SetParameters.Request()
-    #     for name, value in params_dict.items():
-    #         param = Parameter()
-    #         param.name = name
-    #         try:
-    #             param.value.type = ParameterType.PARAMETER_DOUBLE
-    #             param.value.double_value = float(value)
-    #         except (ValueError, TypeError) as e:
-    #             self.get_logger().error(f"Failed to cast parameter {name} value {value} to float: {e}")
-    #             return False
-    #         request.parameters.append(param)
-        
-    #     # Use standard blocking call instead of polling loops
-    #     response = self.param_client.call(request)
-        
-    #     success = response is not None
-    #     self.get_logger().info(f"Parameter update completed. Success: {success}")
-    #     return success
-
     def execute_recipe(self):
         """Core execution logic."""
         steps = self.parser.get_recipe_steps()
