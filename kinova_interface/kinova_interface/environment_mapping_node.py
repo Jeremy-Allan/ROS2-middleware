@@ -12,24 +12,6 @@ from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose
 
 
-OBSTACLES = [
-    {
-        "id": "table",
-        "description": "Table the robot arm is mounted on",
-        "shape": SolidPrimitive.BOX,
-        "dimensions": [1.2, 0.8, 0.05],
-        "position": {"x": 0.0, "y": 0.0, "z": -0.03}
-    },
-    {
-        "id": "computer",
-        "description": "Computer monitor on the table near the robot",
-        "shape": SolidPrimitive.BOX,
-        "dimensions": [0.05, 0.35, 0.5],
-        "position": {"x": -0.3, "y": 0.3, "z": 0.25}
-    },
-]
-
-
 class EnvironmentMappingNode(Node):
     def __init__(self):
         super().__init__("environment_mapping_node")
@@ -37,6 +19,7 @@ class EnvironmentMappingNode(Node):
 
         self.static_objects = self.load_coordinate_dictionary()
         self.relative_movements = self.load_relative_movements()
+        self.obstacles = self.load_obstacles()
 
         self.srv_coords = self.create_service(GetObjectCoordinates, '/get_coordinates', self.get_coordinates_callback)
         self.srv_move = self.create_service(GetRelativeMovement, '/get_relative_movement', self.get_relative_movement_callback)
@@ -75,6 +58,21 @@ class EnvironmentMappingNode(Node):
             raise SystemExit(1)
         except json.JSONDecodeError:
             self.get_logger().fatal('Failed to decode JSON from Relative Movement File')
+            raise SystemExit(1)
+
+    def load_obstacles(self):
+        pkg_share = get_package_share_directory('kinova_interface')
+        json_path = os.path.join(pkg_share, 'data', 'obstacles.json')
+        try:
+            with open(json_path, 'r') as file:
+                obstacles = json.load(file)
+                self.get_logger().info('Loaded obstacles')
+            return obstacles
+        except FileNotFoundError:
+            self.get_logger().fatal(f'Obstacles file not found at: {json_path}')
+            raise SystemExit(1)
+        except json.JSONDecodeError:
+            self.get_logger().fatal('Failed to decode JSON from obstacles file')
             raise SystemExit(1)
 
     def get_coordinates_callback(self, request, response):
@@ -142,7 +140,7 @@ class EnvironmentMappingNode(Node):
         scene = PlanningScene()
         scene.is_diff = True
 
-        for obstacle in OBSTACLES:
+        for obstacle in self.obstacles:
             obj = self.build_collision_object(obstacle)
             scene.world.collision_objects.append(obj)
             self.get_logger().info(f"Adding obstacle: '{obstacle['id']}' - {obstacle['description']}")
@@ -156,8 +154,8 @@ class EnvironmentMappingNode(Node):
             time.sleep(0.1)
 
         if future.result() is not None and future.result().success:
-            self.get_logger().info(f'Planning scene updated with {len(OBSTACLES)} obstacle(s).')
-            for obstacle in OBSTACLES:
+            self.get_logger().info(f'Planning scene updated with {len(self.obstacles)} obstacle(s).')
+            for obstacle in self.obstacles:
                 self.get_logger().info(f"  '{obstacle['id']}' at x={obstacle['position']['x']}, y={obstacle['position']['y']}, z={obstacle['position']['z']}")
         else:
             self.get_logger().error('Failed to apply planning scene.')
