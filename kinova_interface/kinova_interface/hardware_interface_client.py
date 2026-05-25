@@ -57,12 +57,6 @@ class HardwareInterfaceClient(Node):
         )
         self.is_faulted = False
         
-        self.reset_client = self.create_client(
-            ExampleTrigger,
-            '/fault_controller/reset_fault',
-            callback_group=self.callback_group
-        )
-
         # Synchronous Movement Control
         self.movement_finished = threading.Event()
         self.movement_finished.set() 
@@ -118,35 +112,14 @@ class HardwareInterfaceClient(Node):
 
     def handle_moveit_failure(self):
         """Called when MoveIt execution fails."""
-        self.get_logger().warn("MoveIt trajectory execution failed. Inspecting hardware health...")
+        self.get_logger().error("MoveIt trajectory execution failed. Inspecting hardware health...")
         
         if self.is_faulted:
-            self.get_logger().warn("Hardware fault confirmed. Initiating recovery sequence...")
-            self.trigger_fault_reset()
+            self.status_text = "MoveIt Failure: Hardware fault confirmed. Awaiting fault-reset command."
+            self.publish_status()
+            self.get_logger().error(self.status_text)
         else:
             self.get_logger().info("No hardware fault detected. Failure may be algorithmic (planning timeout).")
-
-    def trigger_fault_reset(self):
-        """Sends a request to clear the physical faults on the robot."""
-        if not self.reset_client.service_is_ready():
-            self.get_logger().error("Fault recovery service is not available!")
-            return
-
-        request = ExampleTrigger.Request()
-        self.get_logger().info("Sending ClearFaults request to Kinova controller...")
-        
-        future = self.reset_client.call_async(request)
-        future.add_done_callback(self.reset_response_callback)
-
-    def reset_response_callback(self, future):
-        try:
-            response = future.result()
-            if response.success:
-                self.get_logger().info(f"Success: {response.message}")
-            else:
-                self.get_logger().error(f"Failed to clear hardware faults: {response.message}")
-        except Exception as e:
-            self.get_logger().error(f"Service call failed with exception: {e}")
 
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
@@ -368,15 +341,27 @@ class HardwareInterfaceClient(Node):
         if error_code == result.error_code.SUCCESS:
             self.get_logger().info('Movement complete!')
             self.last_action_successful = True
-        elif error_code == result.error_code.NO_IK_SOLUTION:
-            self.get_logger().error("ERROR: Coordinates out of reach! (Arm is too short)")
-            self.last_action_successful = False
-        elif error_code == result.error_code.PLANNING_FAILED:
-            self.get_logger().error("ERROR: Planning failed! (Likely trying to move through a table)")
-            self.last_action_successful = False
         else:
-            self.get_logger().error(f'MoveIt failed with error code: {error_code}')
             self.last_action_successful = False
+            
+            match error_code:
+                case result.error_code.NO_IK_SOLUTION:
+                    self.get_logger().error("ERROR: Coordinates out of reach! (Arm is too short or pose is physically impossible)")
+                case result.error_code.PLANNING_FAILED:
+                    self.get_logger().error("ERROR: Planning failed! (Path is blocked by an obstacle or self-collision)")
+                case result.error_code.TIMED_OUT:
+                    self.get_logger().error("ERROR: Movement timed out!")
+                case result.error_code.GOAL_IN_COLLISION:
+                    self.get_logger().error("ERROR: Goal is in collision! (Target position is inside an object)")
+                case result.error_code.START_STATE_IN_COLLISION:
+                    self.get_logger().error("ERROR: Start state is in collision! (Robot is already hitting itself or an obstacle)")
+                case result.error_code.CONTROL_FAILED:
+                    self.get_logger().error("ERROR: Control failed during execution! (Path planned successfully, but physical execution failed)")
+                case result.error_code.ABORT:
+                    self.get_logger().error("ERROR: Movement was aborted!")
+                case _:
+                    self.get_logger().error(f'MoveIt failed with error code: {error_code}')
+            
             self.handle_moveit_failure()
 
         self.movement_finished.set()

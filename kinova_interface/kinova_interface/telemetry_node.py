@@ -1,6 +1,10 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
+from std_srvs.srv import Trigger
+from example_interfaces.srv import Trigger as ExampleTrigger
 from kinova_interfaces.msg import ExtendedStatus, SystemSummary
 
 class TelemetryNode(Node):
@@ -31,11 +35,56 @@ class TelemetryNode(Node):
         # Stale heartbeat timeout (1.5 seconds)
         self.heartbeat_timeout = Duration(seconds=1.5)
         
+        self.cb_group = ReentrantCallbackGroup()
+        self.reset_client = self.create_client(
+            ExampleTrigger,
+            '/fault_controller/reset_fault',
+            callback_group=self.cb_group
+        )
+        self.reset_service = self.create_service(
+            Trigger,
+            '/system/reset_fault',
+            self.handle_reset_fault,
+            callback_group=self.cb_group
+        )
+        
         self.get_logger().info("Telemetry & Diagnostics Node Online - Monitoring system status...")
 
+    def handle_reset_fault(self, request, response):
+        self.get_logger().info("External fault reset requested via Telemetry Node. Forwarding to hardware driver...")
+        
+        if not self.reset_client.wait_for_service(timeout_sec=2.0):
+            self.get_logger().error("Hardware fault recovery service is not available!")
+            response.success = False
+            response.message = "Hardware driver service not ready."
+            return response
+            
+        req = ExampleTrigger.Request()
+        result = self.reset_client.call(req)
+        
+        if result.success:
+            self.get_logger().info(f"Successfully cleared hardware faults: {result.message}")
+            response.success = True
+            response.message = result.message
+        else:
+            self.get_logger().error(f"Failed to clear hardware faults: {result.message}")
+            response.success = False
+            response.message = result.message
+            
+        return response
+
     def report_callback(self, msg: ExtendedStatus):
-        """Update local registry with incoming heartbeat."""
-        self.tracked_nodes[msg.node_name] = {
+        """Update local registry with incoming heartbeat and log fault transitions."""
+        node_name = msg.node_name
+        
+        if node_name in self.tracked_nodes:
+            prev_state = self.tracked_nodes[node_name]["msg"].state
+            if msg.state == ExtendedStatus.STATE_FAULT and prev_state != ExtendedStatus.STATE_FAULT:
+                self.get_logger().error(f"Node '{node_name}' has entered FAULT state: {msg.status_message}")
+        elif msg.state == ExtendedStatus.STATE_FAULT:
+            self.get_logger().error(f"Node '{node_name}' has entered FAULT state: {msg.status_message}")
+
+        self.tracked_nodes[node_name] = {
             "msg": msg,
             "last_seen": self.get_clock().now()
         }
@@ -88,8 +137,10 @@ class TelemetryNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = TelemetryNode()
+    executor = MultiThreadedExecutor(num_threads=10) # TODO (pulkit): remove hardcoded thread count
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
