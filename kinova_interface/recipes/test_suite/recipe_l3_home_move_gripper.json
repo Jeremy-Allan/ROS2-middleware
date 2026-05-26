@@ -1,0 +1,29 @@
+{
+  "recipe_name": "L3 - Home, Move and Gripper",
+  "description": "Resets arm to home, moves to position, operates gripper",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    },
+    {
+      "step_id": 2,
+      "action": "gripper",
+      "parameters": { "position": 1.0 },
+      "description": "Open gripper"
+    },
+    {
+      "step_id": 3,
+      "action": "move_arm",
+      "parameters": { "target": "red_cube_pickup" },
+      "description": "Move to red cube pickup position"
+    },
+    {
+      "step_id": 4,
+      "action": "gripper",
+      "parameters": { "position": 0.0 },
+      "description": "Close gripper"
+    }
+  ]
+}

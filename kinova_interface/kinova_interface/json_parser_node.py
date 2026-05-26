@@ -1,14 +1,12 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
-from rcl_interfaces.srv import SetParameters
-from rcl_interfaces.msg import Parameter, ParameterType
-from std_srvs.srv import Trigger
 import time
 import os
 import json
 from ament_index_python.packages import get_package_share_directory
-from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, ExecuteRecipe
+#Services
+from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, ExecuteRecipe, HomeArm, MoveArm, MoveGripper, RelativeMove
 from kinova_interfaces.msg import ExtendedStatus
 
 class JsonParser:
@@ -50,27 +48,26 @@ class JsonParserNode(Node):
         # Mutually exclusive group for the execution sequence to ensure one recipe at a time
         self.exec_cb_group = MutuallyExclusiveCallbackGroup()
 
-        # 2. Reuseable ROS 2 Service Clients
-        self.param_client = self.create_client(SetParameters, '/kinova_hardware_client/set_parameters', callback_group=self.cb_group)
-        self.home_client = self.create_client(Trigger, '/kinova_hardware_client/home_arm', callback_group=self.cb_group)
-        self.move_arm_client = self.create_client(Trigger, '/kinova_hardware_client/move_arm', callback_group=self.cb_group)
-        self.move_gripper_client = self.create_client(Trigger, '/kinova_hardware_client/move_gripper', callback_group=self.cb_group)
-        self.relative_move_client = self.create_client(Trigger, '/kinova_hardware_client/relative_move', callback_group=self.cb_group)
-        
+        # Hardware Interface Services
+        self.home_client = self.create_client(HomeArm, '/kinova_hardware_client/home_arm', callback_group=self.cb_group)
+        self.move_arm_client = self.create_client(MoveArm, '/kinova_hardware_client/move_arm', callback_group=self.cb_group)
+        self.move_gripper_client = self.create_client(MoveGripper, '/kinova_hardware_client/move_gripper', callback_group=self.cb_group)
+        self.relative_move_client = self.create_client(RelativeMove, '/kinova_hardware_client/relative_move', callback_group=self.cb_group)
+
         # Service clients for coordinate fetching
         self.coord_client = self.create_client(GetObjectCoordinates, '/get_coordinates', callback_group=self.cb_group)
         self.relative_client = self.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=self.cb_group)
 
         # 3. Initialize the Parser
         self.parser = JsonParser(self)
-        
+
         # Telemetry Setup
         self.status_pub = self.create_publisher(ExtendedStatus, '/status/node_report', 10)
         self.status_timer = self.create_timer(0.5, self.publish_status, callback_group=self.cb_group)
         self.current_state = ExtendedStatus.STATE_IDLE
         self.status_text = "JSON Parser Online & Ready"
         self.command_success = True
-        
+
         # 4. Create Service to execute recipes dynamically
         # Put this in the exec_cb_group so dynamic recipes don't overlap with static ones
         self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
@@ -102,6 +99,17 @@ class JsonParserNode(Node):
                 self.startup_timer = self.create_timer(2.0, self.startup_timer_callback, callback_group=self.exec_cb_group)
             else:
                 self.get_logger().error(f"Failed to load recipe from {recipe_path}")
+
+    def wait_for_future(self, future, service_name):
+        """Safely wait for an async service call future to complete without deadlocking the executor."""
+        while rclpy.ok() and not future.done():
+            time.sleep(0.01) # Yields thread control temporarily to the executor mechanics
+
+        if future.done():
+            return future.result()
+        else:
+            self.get_logger().error(f"Future for {service_name} was cleared or canceled.")
+            return None
 
     def publish_status(self):
         msg = ExtendedStatus()
@@ -152,14 +160,15 @@ class JsonParserNode(Node):
 
     def get_static_object_coords(self, target_name):
         if not self.coord_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Coordinate service not available")
+            self.get_logger().error("Get Coordinate service not available")
             return None
         req = GetObjectCoordinates.Request()
         req.object_id = target_name
         
-        # Use standard blocking call instead of polling loops
-        response = self.coord_client.call(req)
-        
+        # Async call + safe wait loop
+        future = self.coord_client.call_async(req)
+        response = self.wait_for_future(future, '/get_coordinates')
+
         if response and response.success:
             return {'x': response.x, 'y': response.y, 'z': response.z}
         else:
@@ -168,13 +177,14 @@ class JsonParserNode(Node):
 
     def get_relative_movement_vector(self, movement_name):
         if not self.relative_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Relative movement service not available")
+            self.get_logger().error("Get Relative Movement Service not available")
             return None
         req = GetRelativeMovement.Request()
         req.move_id = movement_name
         
-        # Use standard blocking call instead of polling loops
-        response = self.relative_client.call(req)
+        # Async call + safe wait loop
+        future = self.relative_client.call_async(req)
+        response = self.wait_for_future(future, '/get_relative_movement')
         
         if response and response.success:
             return {'x': response.x, 'y': response.y, 'z': response.z}
@@ -182,48 +192,75 @@ class JsonParserNode(Node):
             self.get_logger().error(f"Failed to get movement vector for {movement_name}: {response.message if response else 'no response'}")
             return None
 
-    def call_trigger_service(self, client):
-        """Helper to call a Trigger service and wait for response."""
-        self.get_logger().info(f"Calling trigger service: {client.srv_name}")
-        if not client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error(f"Service {client.srv_name} not available!")
-            return False
-        
-        request = Trigger.Request()
-        # Use standard blocking call instead of polling loops
-        response = client.call(request)
-        
-        if response is not None:
-            self.get_logger().info(f"{client.srv_name} completed with success={response.success}")
-            return response.success
-        self.get_logger().error(f"{client.srv_name} failed to return a valid result.")
-        return False
+    def call_home_service(self):
+        if not self.home_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Home Arm Service not available")
+            return None
 
-    def set_hw_parameters(self, params_dict):
-        """Helper to update parameters on the hardware node."""
-        self.get_logger().info(f"Setting HW parameters: {params_dict}")
-        if not self.param_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Hardware parameter service not available!")
-            return False
+        req = HomeArm.Request()
+        # Async call + safe wait loop
+        future = self.home_client.call_async(req)
+        response = self.wait_for_future(future, '/kinova_hardware_client/home_arm')
         
-        request = SetParameters.Request()
-        for name, value in params_dict.items():
-            param = Parameter()
-            param.name = name
-            try:
-                param.value.type = ParameterType.PARAMETER_DOUBLE
-                param.value.double_value = float(value)
-            except (ValueError, TypeError) as e:
-                self.get_logger().error(f"Failed to cast parameter {name} value {value} to float: {e}")
-                return False
-            request.parameters.append(param)
+        if response and response.success:
+            return {'success': response.success, 'message': response.message}
+        else:
+            self.get_logger().error(f"Failed to move Home: {response.message if response else 'no response'}")
+            return None
+
+    def call_move_service(self, x, y, z):
+        if not self.move_arm_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Move Arm Service not available")
+            return None
+        req = MoveArm.Request()
+        req.x = x
+        req.y = y
+        req.z = z
+
+        # Async call + safe wait loop
+        future = self.move_arm_client.call_async(req)
+        response = self.wait_for_future(future, '/kinova_hardware_client/move_arm')
         
-        # Use standard blocking call instead of polling loops
-        response = self.param_client.call(request)
-        
-        success = response is not None
-        self.get_logger().info(f"Parameter update completed. Success: {success}")
-        return success
+        if response and response.success:
+            return {'success': response.success, 'message': response.message}
+        else:
+            self.get_logger().error(f"Failed to perform Move to:{x},{y},{z}: {response.message if response else 'no response'}")
+            return None
+
+    def call_relative_move_service(self, vx, vy, vz):
+        if not self.relative_move_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Relative Move Service not available")
+            return None
+        req = RelativeMove.Request()
+        req.vx = vx
+        req.vy = vy
+        req.vz = vz
+
+        # Async call + safe wait loop
+        future = self.relative_move_client.call_async(req)
+        response = self.wait_for_future(future, '/kinova_hardware_client/relative_move')
+
+        if response and response.success:
+            return {'success': response.success, 'message': response.message}
+        else:
+            self.get_logger().error(f"Failed to perform relative move:{vx},{vy},{vz}: {response.message if response else 'no response'}")
+            return None
+
+    def call_move_gripper_service(self, position):
+        if not self.move_gripper_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Move Gripper service not available")
+            return None
+        req = MoveGripper.Request()
+        req.position = position
+        # Async call + safe wait loop
+        future = self.move_gripper_client.call_async(req)
+        response = self.wait_for_future(future, '/kinova_hardware_client/move_gripper')
+
+        if response and response.success:
+            return {'success': response.success, 'message': response.message}
+        else:
+            self.get_logger().error(f"Failed to Move Gripper to: {position}: {response.message if response else 'no response'}")
+            return None
 
     def execute_recipe(self):
         """Core execution logic."""
@@ -239,40 +276,35 @@ class JsonParserNode(Node):
         self.current_state = ExtendedStatus.STATE_BUSY
         self.status_text = f"Executing recipe: {self.parser.recipe.get('recipe_name', 'Unnamed')}"
         self.publish_status()
-        
+
         all_success = True
         for i, step in enumerate(steps):
             self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
             self.status_text = f"Step {i+1}/{len(steps)}: {step.get('description', '')}"
             self.publish_status()
-            
+
             action = step['action']
             params = step.get('parameters', {})
-
             success = False
             if action == 'home':
-                success = self.call_trigger_service(self.home_client)
+                result = self.call_home_service()
+                success = result is not None and result['success']
             elif action == 'move_arm':
                 target_name = params['target']
                 coords = self.get_static_object_coords(target_name)
-                if coords and self.set_hw_parameters({
-                    'target_x': coords['x'],
-                    'target_y': coords['y'],
-                    'target_z': coords['z']
-                }):
-                    success = self.call_trigger_service(self.move_arm_client)
+                if coords:
+                    result = self.call_move_service(coords['x'], coords['y'], coords['z'])
+                    success = result is not None and result['success']
             elif action == 'relative_move':
                 vector_name = params['vector']
                 vector = self.get_relative_movement_vector(vector_name)
-                if vector and self.set_hw_parameters({
-                    'vector_x': vector['x'],
-                    'vector_y': vector['y'],
-                    'vector_z': vector['z']
-                }):
-                    success = self.call_trigger_service(self.relative_move_client)
+                if vector:
+                    result = self.call_relative_move_service(vector['x'], vector['y'], vector['z'])
+                    success = result is not None and result['success']
             elif action == 'gripper':
-                if self.set_hw_parameters({'gripper_position': float(params['position'])}):
-                    success = self.call_trigger_service(self.move_gripper_client)
+                gripper = float(params['position'])
+                result = self.call_move_gripper_service(gripper)
+                success = result is not None and result['success']
 
             if success:
                 self.get_logger().info(f"Step {i+1} completed successfully.")

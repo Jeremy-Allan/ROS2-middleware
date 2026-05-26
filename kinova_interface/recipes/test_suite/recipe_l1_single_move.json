@@ -1,0 +1,12 @@
+{
+  "recipe_name": "L1 - Single Move",
+  "description": "Moves the arm to a single known object position",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "move_arm",
+      "parameters": { "target": "red_cube_pickup" },
+      "description": "Move to red cube pickup position"
+    }
+  ]
+}

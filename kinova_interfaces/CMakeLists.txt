@@ -10,6 +10,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetRobotParameters.srv"
   "srv/GetRelativeMovement.srv"
   "srv/ExecuteRecipe.srv"
+  "srv/MoveArm.srv"
+  "srv/MoveGripper.srv"
+  "srv/RelativeMove.srv"
+  "srv/HomeArm.srv"
   "msg/ExtendedStatus.msg"
   "msg/SystemSummary.msg"
   DEPENDENCIES geometry_msgs
