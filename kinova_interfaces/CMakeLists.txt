@@ -19,9 +19,4 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   DEPENDENCIES geometry_msgs
 )
 
-install(DIRECTORY
-  ${CMAKE_CURRENT_BINARY_DIR}/rosidl_generator_py/kinova_interfaces
-  DESTINATION lib/python3.10/site-packages/
-)
-
 ament_package()

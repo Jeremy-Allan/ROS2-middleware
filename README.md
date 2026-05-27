@@ -60,6 +60,17 @@ When called, this service forwards a recovery command down to the physical Korte
 ros2 service call /system/reset_fault std_srvs/srv/Trigger {}
 ```
 
+#### ⚠️ Physical Hardware Startup Note: Fault Controller Delayed Initialization
+On the physical robot, the C++ hardware interface (`kortex_driver`) requires several seconds to successfully establish its network communication session with the physical Kinova Gen3 Lite over TCP/IP.
+
+In standard launch sequences, starting the `fault_controller_spawner` instantly alongside `control_node` causes it to attempt configuration before the state interfaces (like `reset_fault/internal_fault`) are fully exported by the active physical connection. This would leave the `fault_controller` in an **`unconfigured`** state, rendering it inoperable and leaving the middleware blind to hardware faults.
+
+**Our Fix (Self-Healing Workaround):** We implemented an automated, self-healing workaround within our ROS 2 middleware:
+1. **Health Checking:** The `hardware_interface_client` node runs a periodic 2Hz health timer that queries `/controller_manager/list_controllers`. If the `fault_controller` is loaded but in an inactive or `unconfigured` state, it publishes a warning alert inside its telemetry status message (`"SYSTEM CONFIG WARNING: fault_controller is NOT active"`). This check is safely skipped in simulation where the controller is not loaded.
+2. **Automated Activation:** The `telemetry_node` monitors heartbeats. Upon seeing this warning status, it automatically spins up a background thread that makes native ROS 2 service calls to the controller manager (`/controller_manager/configure_controller` and `/controller_manager/switch_controller`) to configure and activate the `fault_controller` on the fly.
+
+This allows the entire system to boot up, automatically self-heal the driver controllers within seconds, and handle faults seamlessly without editing a single line of the official `ros2_kortex` package!
+
 ---
 
 ## 🛠️ Building the Workspace

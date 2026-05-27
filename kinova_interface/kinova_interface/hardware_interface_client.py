@@ -23,6 +23,9 @@ from example_interfaces.srv import Trigger as ExampleTrigger
 from kinova_interfaces.msg import ExtendedStatus
 from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove
 
+# Controller Manager Messages
+from controller_manager_msgs.srv import ListControllers
+
 # TF for Relative Movements
 from tf2_ros import Buffer, TransformListener
 
@@ -57,6 +60,15 @@ class HardwareInterfaceClient(Node):
             callback_group=self.callback_group
         )
         self.is_faulted = False
+        self.fault_controller_warning_active = False
+
+        # Controller Manager Client for health monitoring of fault_controller
+        self.list_controllers_client = self.create_client(
+            ListControllers,
+            '/controller_manager/list_controllers',
+            callback_group=self.callback_group
+        )
+        self.health_timer = self.create_timer(3.0, self.check_fault_controller_health, callback_group=self.callback_group)
 
         # Synchronous Movement Control
         self.movement_finished = threading.Event()
@@ -85,6 +97,61 @@ class HardwareInterfaceClient(Node):
         msg.status_message = self.status_text
         msg.last_command_valid = self.command_success
         self.status_pub.publish(msg)
+
+    # --- Fault Controller Health Check & Helper ---
+    def check_fault_controller_health(self):
+        """Timer callback to check if the fault_controller is active on the controller_manager."""
+        if not self.list_controllers_client.service_is_ready():
+            self.get_logger().warn(
+                "Controller manager '/list_controllers' service not ready!",
+                throttle_duration_sec=10.0
+            )
+            return
+        
+        # Uses srv_type.Request() dynamically to avoid IDE/static analysis unresolved reference warnings
+        req = self.list_controllers_client.srv_type.Request()
+        future = self.list_controllers_client.call_async(req)
+        future.add_done_callback(self.list_controllers_callback)
+
+    def list_controllers_callback(self, future):
+        try:
+            response = future.result()
+            fault_ctrl_active = False
+            fault_ctrl_found = False
+            for controller in response.controller:
+                if controller.name == 'fault_controller':
+                    fault_ctrl_found = True
+                    if controller.state == 'active':
+                        fault_ctrl_active = True
+                    break
+            
+            if fault_ctrl_found and not fault_ctrl_active:
+                if not self.fault_controller_warning_active:
+                    self.fault_controller_warning_active = True
+                    self.get_logger().warn("fault_controller is present but NOT active!")
+                    self.status_text = "SYSTEM CONFIG WARNING: fault_controller is NOT active"
+                    self.publish_status()
+            elif fault_ctrl_found and fault_ctrl_active:
+                if self.fault_controller_warning_active:
+                    self.fault_controller_warning_active = False
+                    self.get_logger().info("fault_controller is now active! Clearing config warning status.")
+                    if self.status_text == "SYSTEM CONFIG WARNING: fault_controller is NOT active":
+                        self.status_text = "Hardware Interface Client Ready"
+                    self.publish_status()
+        except Exception as e:
+            self.get_logger().error(f"Failed to query controllers health: {e}")
+
+    def finalize_service_status(self, response):
+        """Helper to centralize state & status updates after a service completes."""
+        self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
+        self.command_success = response.success
+        if self.is_faulted:
+            # Preserve the more specific hardware fault status message set by the callback/diagnostics
+            pass
+        else:
+            self.status_text = response.message
+        self.publish_status()
+        return response
 
     # --- Fault Handling ---
     def fault_callback(self, msg: Bool):
@@ -127,11 +194,7 @@ class HardwareInterfaceClient(Node):
             response.success = False
             response.message = "Failed to initiate home movement"
 
-        self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
-        self.command_success = response.success
-        self.status_text = response.message
-        self.publish_status()
-        return response
+        return self.finalize_service_status(response)
 
     def handle_move_arm(self, request, response):
         x = request.x
@@ -149,11 +212,7 @@ class HardwareInterfaceClient(Node):
             response.success = False
             response.message = "Failed to initiate arm movement"
 
-        self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
-        self.command_success = response.success
-        self.status_text = response.message
-        self.publish_status()
-        return response
+        return self.finalize_service_status(response)
 
     def handle_relative_move(self, request, response):
         vx = request.vx
@@ -192,11 +251,7 @@ class HardwareInterfaceClient(Node):
             response.success = False
             response.message = str(e)
             
-        self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
-        self.command_success = response.success
-        self.status_text = response.message
-        self.publish_status()
-        return response
+        return self.finalize_service_status(response)
 
     def handle_move_gripper(self, request, response):
         pos = request.position
@@ -212,11 +267,7 @@ class HardwareInterfaceClient(Node):
             response.success = False
             response.message = "Failed to initiate gripper movement"
 
-        self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
-        self.command_success = response.success
-        self.status_text = response.message
-        self.publish_status()
-        return response
+        return self.finalize_service_status(response)
 
     # --- Action Client Methods ---
     def send_goal(self, x, y, z):
