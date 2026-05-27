@@ -1,4 +1,5 @@
 import json
+import os
 import time
 import threading
 import rclpy
@@ -84,7 +85,7 @@ class EnvironmentMappingNode(Node):
 
     def load_obstacles(self):
         pkg_share = get_package_share_directory('kinova_interface')
-        json_path = os.path.join(pkg_share, 'data', 'obstacles.json')
+        json_path = os.path.join(pkg_share, 'data', 'configs', 'env','obstacles.json')
         try:
             with open(json_path, 'r') as file:
                 obstacles = json.load(file)
