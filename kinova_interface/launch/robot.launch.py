@@ -138,6 +138,7 @@ def generate_launch_description():
             'dof': '6',
             'gripper': 'gen3_lite_2f',
             'controllers_file': 'ros2_controllers.yaml',
+            'gripper_joint_name': 'right_finger_bottom_joint',
             'robot_hand_controller': 'gen3_lite_2f_gripper_controller'
         }.items()
     )

@@ -4,7 +4,7 @@
         "description": "Table the robot arm is mounted on",
         "shape": 1,
         "dimensions": [1.2, 0.8, 0.05],
-        "position": {"x": 0.0, "y": 0.0, "z": -0.03}
+        "position": {"x": 0.0, "y": 0.0, "z": -0.05}
     },
     {
         "id": "small_wall",
