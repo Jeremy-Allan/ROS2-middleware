@@ -23,6 +23,70 @@ The middleware is now split into three specialized nodes that communicate over t
 *   **MoveIt 2 Integration:** Full path planning and self-collision avoidance are handled automatically.
 
 ---
+## Project Stucture
+```text
+
+ros2-middleware/
+├── readme.md                                             # JSON Parser POC + Sequential Action Execution              
+├── test.txt                                              # Updated HIC features for sprint 1 closure
+├── .gitignore                                            # Chore/launch file setup and minor fixes
+├── kinova_interface/                                     # remove merge conflict duplicates
+│   	├── package.xml				                              # Address JSON Parser PR comments
+│   	├── setup.cfg                                       # Updated HIC features for sprint 1 closure
+│   	├── setup.py                                        # JSON Parser POC + Sequential Action Execution
+│   	├── data/                                           # feat: replaced OBSTACLES data structure with obstacles.json
+│   	│		│
+│   	│		├── coordinate_dictionary.json                  # feat: replaced OBSTACLES data structure with obstacles.json
+│   	│		├── obstacle.json                               # feat: replaced OBSTACLES data structure with obstacles.json
+│   	│		└──  relative_movement.json                     # JSON Parser POC + Sequential Action Execution
+│   	│
+│   	│
+│   	├── kinova_interface/                               # remove merge conflict duplicates
+│   	│		│
+│   	│		├── __init__.py                                 # Updated HIC features for sprint 1 closure
+│   	│		├── environment_mapping_node.py                 # feat: replaced OBSTACLES data structure with obstacles.json
+│   	│		├── hardware_interface_client.py                # Refactored HIC to use only Custom Services + New custom Service HomeArm
+│   	│		└── json_parser_node.py                         # remove merge conflict duplicates
+│   	│  
+│   	│
+│   	├── launch/                                        # fix: removed redundant validation node and move testing scripts into the recipes/test_suites
+│   	│		│
+│   	│		└── robot.launch.py                            # Address JSON Parser PR comments
+│   	│
+│   	│
+│   	├── recipes/                                       #
+│   	│		│
+│   	│		├── task_recipe.json                           # JSON Parser POC + Sequential Action Execution
+│   	│		└── test_suite/                                # fix: removed redundant validation node and move testing scripts into the recipes/test_suites
+│   	│					├── recipe_l1_single_move.json           #
+│   	│					├── recipe_l2_move_and_gripper.json      #
+│   	│					├── recipe_l3_home_move_gripper.json     #
+│   	│					├── recipe_l4_pick_and_place.json        #
+│   	│					├── recipe_l5_multi_object.json          #
+│   	│					└── recipe_l6_invalid.json               #
+│   	│
+│   	│
+│   	└── resource/                                      #
+│   			│
+│   			├── PROJECT-OVERVIEW.md                        #
+│   			└── kinova_interface                           #         
+│   	  
+│
+└── kinova_interface/                                    #
+    │  
+   	├── CMakeLists.txt                                   #
+   	├── LICENSE                                          #
+   	└── package.xml                                      #
+        └── srv/                                         #
+               ├── ExecuteRecipe.srv                     #
+               ├── GetObjectCoordinates.srv              #
+               ├── GetRelativeMovement.srv               #
+               ├── GetRobotParamters.srv                 #
+               ├── HomeArm.srv                           #
+               ├── MoveArm.srv                           #
+               ├── MoveGripper.srv                       #
+               └── RelativeMove.srv                      #
+```
 
 ## 🛠️ Building the Workspace
 
