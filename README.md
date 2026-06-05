@@ -4,7 +4,7 @@ This repository contains a modular ROS 2 middleware for controlling the Kinova G
 
 ---
 
-## 💻 Prerequistites
+## Prerequistites
 
 Ensure your host machine meets the following requirements prior to building the workspace:
 ```text
@@ -16,7 +16,7 @@ External Requisite: LLM Proxy repository (not in this repo)
 
 ---
 
-## 🏗️ Distributed Architecture
+## Distributed Architecture
 
 The middleware is split into four specialized nodes that communicate over the ROS 2 network:
 
@@ -57,7 +57,7 @@ This contract defines the boundary between task intent and physical actuation.
 
 ---
 
-## 📖 Features & Capabilities
+## Features & Capabilities
 
 *   **Automated Recipes:** Define a sequence of tasks (pick, place, home) in a standard JSON format.
 *   **Object-Based Targeting:** Instead of raw coordinates, tell the robot to move to `"red_cube_pickup"`. The system resolves the physical location via the Environment Mapping Node.
@@ -71,7 +71,7 @@ This contract defines the boundary between task intent and physical actuation.
 
 ---
 
-## 🛰️ Centralized Telemetry & System Recovery
+## Centralized Telemetry & System Recovery
 
 The **Telemetry & Diagnostics Node** (`telemetry_node.py`) acts as the safety monitor for the entire system. It collects individual node heartbeats, aggregates the overall system status, and handles physical hardware fault recoveries.
 
@@ -103,7 +103,7 @@ When called, this service forwards a recovery command down to the physical Korte
 ros2 service call /system/reset_fault std_srvs/srv/Trigger {}
 ```
 
-#### ⚠️ Physical Hardware Startup Note: Fault Controller Delayed Initialization
+#### Physical Hardware Startup Note: Fault Controller Delayed Initialization
 On the physical robot, the C++ hardware interface (`kortex_driver`) requires several seconds to successfully establish its network communication session with the physical Kinova Gen3 Lite over TCP/IP.
 
 In standard launch sequences, starting the `fault_controller_spawner` instantly alongside `control_node` causes it to attempt configuration before the state interfaces (like `reset_fault/internal_fault`) are fully exported by the active physical connection. This would leave the `fault_controller` in an **`unconfigured`** state, rendering it inoperable and leaving the middleware blind to hardware faults.
@@ -197,7 +197,7 @@ ros2-middleware/
                └── RelativeMove.srv                      # Executes relative spatial movement command
 ```
 
-## 🛠️ Building the Workspace
+## Building the Workspace
 
 Ensure your ROS 2 workspace is built and sourced before running. Execute the following from the root of your ROS 2 workspace:
 
@@ -209,7 +209,7 @@ source install/setup.bash
 
 ---
 
-## 🚀 Running the Automated System
+## Running the Automated System
 
 Before running the launch commands, make sure you set the custom log directory so all the logs go to the `middleware_logs/` folder instead of the default ROS hidden directories:
 
@@ -252,16 +252,16 @@ Inside this folder, you will find:
 *   `python3_<pid>_<timestamp>.log` — Logs for our Python-based middleware nodes (since ROS 2 runs them using the `python3` interpreter).
 *   `move_group_*.log` and `ros2_control_node_*.log` — Logs specific to MoveIt 2 and standard C++ ROS 2 controller nodes.
 
-> 📝 **Note on `enable_individual_logs`:**
+> **Note on `enable_individual_logs`:**
 > When `enable_individual_logs:=true` is passed, the system actively splits and writes the individual log outputs of each custom node into distinct `python3_*` log files. When set to `false`, these individual log files are suppressed to save disk space and keep your workspace clean.
 
 ---
 
-**⚠️ Important Hardware Note:**
+** Important Hardware Note:**
 If you set `use_fake_hardware:=false` to connect to the physical robot, you **MUST** explicitly provide the `robot_ip` argument. Failure to provide the IP will result in a pre-launch `RuntimeError` to prevent unintended connections.
 
 ---
-📜 The JSON Recipe Contract
+## The JSON Recipe Contract
 
 Tasks are defined in a strict JSON format. The JSON Parser reads these steps sequentially.
 Simple Example 'recipe_l1_single_move.json':
@@ -377,7 +377,7 @@ If a safety violation is detected:
 
 ---
 
-## 📂 Configuration Files
+## Configuration Files
 
 *   **Recipes:** Found in `recipes/task_recipe.json`. Defines the steps.
 *   **Coordinates:** Found in `data/configs/env/coordinate_dictionary.json`. Maps object names to `X, Y, Z`.
