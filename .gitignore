@@ -1,4 +1,7 @@
 # ROS 2 build artifacts and logs
+.idea/
 build/
 install/
 log/
+middleware_logs/
+__pycache__/

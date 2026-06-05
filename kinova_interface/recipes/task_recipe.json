@@ -10,7 +10,7 @@
       "step_id": 2,
       "action": "gripper",
       "parameters": {
-        "position": 1.0
+        "position": 0.0
       },
       "description": "Release object"
     },
@@ -18,7 +18,7 @@
       "step_id": 3,
       "action": "move_arm",
       "parameters": {
-        "target": "red_cube_pickup"
+        "target": "red_cube"
       },
       "description": "Navigate to the red cube"
     },
@@ -26,7 +26,7 @@
       "step_id": 4,
       "action": "gripper",
       "parameters": {
-        "position": 0.0
+        "position": 1.0
       },
       "description": "Close fingers"
     },
@@ -50,7 +50,7 @@
       "step_id": 7,
       "action": "gripper",
       "parameters": {
-        "position": 1.0
+        "position": 0.0
       },
       "description": "Release object"
     },

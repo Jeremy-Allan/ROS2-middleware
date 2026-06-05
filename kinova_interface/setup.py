@@ -13,7 +13,7 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
-        (os.path.join('share', package_name, 'data'), glob('data/*.json')),
+        (os.path.join('share', package_name, 'data', 'configs', 'env'), glob('data/configs/env/*.json')),
         (os.path.join('share', package_name, 'recipes'), glob(os.path.join('recipes', '*.json'))),
     ],
     
@@ -29,6 +29,7 @@ setup(
             'hardware_interface_client = kinova_interface.hardware_interface_client:main',
             'environment_mapping_node = kinova_interface.environment_mapping_node:main',
             'json_parser_node = kinova_interface.json_parser_node:main',
+            'telemetry_node = kinova_interface.telemetry_node:main',
         ],
     },
 )

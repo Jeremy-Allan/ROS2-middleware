@@ -1,10 +1,14 @@
 import sys
+import os
+import pathlib
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
+import launch.logging
 
 def check_hardware_args(context, *args, **kwargs):
     use_fake_hardware = LaunchConfiguration('use_fake_hardware').perform(context)
@@ -22,8 +26,81 @@ def check_hardware_args(context, *args, **kwargs):
                 + "="*62 + "\n"
             )
 
+def launch_setup(context, *args, **kwargs):
+    debug_mode = LaunchConfiguration('debug_mode').perform(context).lower() == 'true'
+    core_debug = LaunchConfiguration('core_debug').perform(context).lower() == 'true'
+    enable_individual_logs = LaunchConfiguration('enable_individual_logs').perform(context).lower() == 'true'
+
+    base_ros_args = []
+    if not enable_individual_logs:
+        base_ros_args.extend(['--disable-external-lib-logs'])
+
+    def get_ros_args(node_name):
+        args = list(base_ros_args)
+        if core_debug:
+            args.extend(['--log-level', 'debug'])
+        elif debug_mode:
+            args.extend(['--log-level', f'{node_name}:=debug'])
+        return args
+
+    recipe = LaunchConfiguration('recipe')
+    env_dir = PathJoinSubstitution([FindPackageShare('kinova_interface'), 'data', 'configs', 'env'])
+
+    environment_mapping_node = Node(
+        package='kinova_interface',
+        executable='environment_mapping_node',
+        name='environment_mapping_node',
+        output='log',
+        parameters=[{'config_dir': env_dir}],
+        ros_arguments=get_ros_args('environment_mapping_node')
+    )
+
+    hardware_interface_client = Node(
+        package='kinova_interface',
+        executable='hardware_interface_client',
+        name='kinova_hardware_client',
+        output='log',
+        ros_arguments=get_ros_args('kinova_hardware_client')
+    )
+
+    json_parser_node = Node(
+        package='kinova_interface',
+        executable='json_parser_node',
+        name='json_parser_node',
+        output='log',
+        parameters=[{'recipe': recipe}],
+        ros_arguments=get_ros_args('json_parser_node')
+    )
+
+    telemetry_node = Node(
+        package='kinova_interface',
+        executable='telemetry_node',
+        name='telemetry_node',
+        output='log',
+        ros_arguments=get_ros_args('telemetry_node')
+    )
+
+    return [environment_mapping_node, hardware_interface_client, json_parser_node, telemetry_node]
+
 def generate_launch_description():
-    # Declare arguments
+    debug_mode_arg = DeclareLaunchArgument(
+        'debug_mode',
+        default_value='false',
+        description='Enable targeted debug mode logging for middleware nodes'
+    )
+    
+    core_debug_arg = DeclareLaunchArgument(
+        'core_debug',
+        default_value='false',
+        description='Enable global debug logging, including rcl and dds_cpp'
+    )
+    
+    enable_individual_logs_arg = DeclareLaunchArgument(
+        'enable_individual_logs',
+        default_value='false',
+        description='Enable individual node logs'
+    )
+
     recipe_arg = DeclareLaunchArgument(
         'recipe',
         default_value='none',
@@ -42,8 +119,6 @@ def generate_launch_description():
         description='Whether to use fake hardware (simulation) or physical hardware. Default value is true'
     )
 
-    # Launch configurations
-    recipe = LaunchConfiguration('recipe')
     robot_ip = LaunchConfiguration('robot_ip')
     use_fake_hardware = LaunchConfiguration('use_fake_hardware')
 
@@ -63,6 +138,7 @@ def generate_launch_description():
             'dof': '6',
             'gripper': 'gen3_lite_2f',
             'controllers_file': 'ros2_controllers.yaml',
+            'gripper_joint_name': 'right_finger_bottom_joint',
             'robot_hand_controller': 'gen3_lite_2f_gripper_controller'
         }.items()
     )
@@ -81,38 +157,16 @@ def generate_launch_description():
         }.items()
     )
 
-
-    # 3. Middleware Nodes (The new "Brain")
-    environment_mapping_node = Node(
-        package='kinova_interface',
-        executable='environment_mapping_node',
-        name='environment_mapping_node',
-        output='screen'
-    )
-
-    hardware_interface_client = Node(
-        package='kinova_interface',
-        executable='hardware_interface_client',
-        name='kinova_hardware_client',
-        output='screen'
-    )
-
-    json_parser_node = Node(
-        package='kinova_interface',
-        executable='json_parser_node',
-        name='json_parser_node',
-        output='screen',
-        parameters=[{'recipe': recipe}]
-    )
-
     return LaunchDescription([
+        SetEnvironmentVariable('ROS_LOG_DIR', launch.logging.launch_config.log_dir),
+        debug_mode_arg,
+        core_debug_arg,
+        enable_individual_logs_arg,
         recipe_arg,
         robot_ip_arg,
         use_fake_hardware_arg,
         OpaqueFunction(function=check_hardware_args),
         kortex_control_launch,
         move_group_launch,
-        environment_mapping_node,
-        hardware_interface_client,
-        json_parser_node
+        OpaqueFunction(function=launch_setup)
     ])

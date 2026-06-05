@@ -15,7 +15,16 @@ from geometry_msgs.msg import Pose
 from control_msgs.action import GripperCommand
 
 # Services
+from std_srvs.srv import Trigger
+from example_interfaces.msg import Bool
+from example_interfaces.srv import Trigger as ExampleTrigger
+
+# Custom telemetry message
+from kinova_interfaces.msg import ExtendedStatus
 from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove
+
+# Controller Manager Messages
+from controller_manager_msgs.srv import ListControllers
 
 # TF for Relative Movements
 from tf2_ros import Buffer, TransformListener
@@ -42,10 +51,36 @@ class HardwareInterfaceClient(Node):
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
+        # Fault Monitoring and Recovery
+        self.fault_sub = self.create_subscription(
+            Bool,
+            '/fault_controller/is_faulted',
+            self.fault_callback,
+            10,
+            callback_group=self.callback_group
+        )
+        self.is_faulted = False
+        self.fault_controller_warning_active = False
+
+        # Controller Manager Client for health monitoring of fault_controller
+        self.list_controllers_client = self.create_client(
+            ListControllers,
+            '/controller_manager/list_controllers',
+            callback_group=self.callback_group
+        )
+        self.health_timer = self.create_timer(3.0, self.check_fault_controller_health, callback_group=self.callback_group)
+
         # Synchronous Movement Control
         self.movement_finished = threading.Event()
         self.movement_finished.set() 
         self.last_action_successful = False
+
+        # Telemetry Setup
+        self.status_pub = self.create_publisher(ExtendedStatus, '/status/node_report', 10)
+        self.status_timer = self.create_timer(0.5, self.publish_status, callback_group=self.callback_group)
+        self.current_state = ExtendedStatus.STATE_IDLE
+        self.status_text = "Hardware Interface Client Ready"
+        self.command_success = True
 
         # ROS 2 Services (The "API")
         # Custom Service
@@ -53,11 +88,104 @@ class HardwareInterfaceClient(Node):
         self.move_arm_srv = self.create_service(MoveArm, '~/move_arm', self.handle_move_arm, callback_group=self.callback_group )
         self.move_gripper_srv = self.create_service(MoveGripper, '~/move_gripper', self.handle_move_gripper,callback_group=self.callback_group)
         self.relative_move_srv = self.create_service(RelativeMove, '~/relative_move', self.handle_relative_move,callback_group=self.callback_group)
-    
+
+    # --- Telemetry Status Publisher ---
+    def publish_status(self):
+        msg = ExtendedStatus()
+        msg.node_name = self.get_name()
+        msg.state = self.current_state
+        msg.status_message = self.status_text
+        msg.last_command_valid = self.command_success
+        self.status_pub.publish(msg)
+
+    # --- Fault Controller Health Check & Helper ---
+    def check_fault_controller_health(self):
+        """Timer callback to check if the fault_controller is active on the controller_manager."""
+        if not self.list_controllers_client.service_is_ready():
+            self.get_logger().warn(
+                "Controller manager '/list_controllers' service not ready!",
+                throttle_duration_sec=10.0
+            )
+            return
+        
+        # Uses srv_type.Request() dynamically to avoid IDE/static analysis unresolved reference warnings
+        req = self.list_controllers_client.srv_type.Request()
+        future = self.list_controllers_client.call_async(req)
+        future.add_done_callback(self.list_controllers_callback)
+
+    def list_controllers_callback(self, future):
+        try:
+            response = future.result()
+            fault_ctrl_active = False
+            fault_ctrl_found = False
+            for controller in response.controller:
+                if controller.name == 'fault_controller':
+                    fault_ctrl_found = True
+                    if controller.state == 'active':
+                        fault_ctrl_active = True
+                    break
+            
+            if fault_ctrl_found and not fault_ctrl_active:
+                if not self.fault_controller_warning_active:
+                    self.fault_controller_warning_active = True
+                    self.get_logger().warn("fault_controller is present but NOT active!")
+                    self.status_text = "SYSTEM CONFIG WARNING: fault_controller is NOT active"
+                    self.publish_status()
+            elif fault_ctrl_found and fault_ctrl_active:
+                if self.fault_controller_warning_active:
+                    self.fault_controller_warning_active = False
+                    self.get_logger().info("fault_controller is now active! Clearing config warning status.")
+                    if self.status_text == "SYSTEM CONFIG WARNING: fault_controller is NOT active":
+                        self.status_text = "Hardware Interface Client Ready"
+                    self.publish_status()
+        except Exception as e:
+            self.get_logger().error(f"Failed to query controllers health: {e}")
+
+    def finalize_service_status(self, response):
+        """Helper to centralize state & status updates after a service completes."""
+        self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
+        self.command_success = response.success
+        if self.is_faulted:
+            # Preserve the more specific hardware fault status message set by the callback/diagnostics
+            pass
+        else:
+            self.status_text = response.message
+        self.publish_status()
+        return response
+
+    # --- Fault Handling ---
+    def fault_callback(self, msg: Bool):
+        """Asynchronously updates the internal fault status."""
+        if msg.data and not self.is_faulted:
+            self.get_logger().error("Robot entered a hardware FAULT state.")
+            self.current_state = ExtendedStatus.STATE_FAULT
+            self.status_text = "HARDWARE FAULT: Robot is faulted"
+            self.command_success = False
+        elif not msg.data and self.is_faulted:
+            self.get_logger().info("Robot hardware fault has been cleared.")
+            self.current_state = ExtendedStatus.STATE_IDLE
+            self.status_text = "Robot Ready (Fault Cleared)"
+            self.command_success = True
+        self.publish_status()
+        self.is_faulted = msg.data
+
+    def handle_moveit_failure(self):
+        """Called when MoveIt execution fails."""
+        self.get_logger().error("MoveIt trajectory execution failed. Inspecting hardware health...")
+
+        if self.is_faulted:
+            self.status_text = "MoveIt Failure: Hardware fault confirmed. Awaiting fault-reset command."
+            self.publish_status()
+            self.get_logger().error(self.status_text)
+        else:
+            self.get_logger().info("No hardware fault detected. Failure may be algorithmic (planning timeout).")
+
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
         self.get_logger().info("Service Call: Home Arm")
-
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = "Sending arm to home position"
+        self.publish_status()
         if self.send_home_goal():
             self.movement_finished.wait()
             response.success = self.last_action_successful
@@ -65,29 +193,36 @@ class HardwareInterfaceClient(Node):
         else:
             response.success = False
             response.message = "Failed to initiate home movement"
-        return response
+
+        return self.finalize_service_status(response)
 
     def handle_move_arm(self, request, response):
         x = request.x
         y = request.y
         z = request.z
         self.get_logger().info(f"Service Call: Move Arm to {x}, {y}, {z}")
-
-        if self.send_goal(x, y, z): 
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = f"Moving arm to {x}, {y}, {z}..."
+        self.publish_status()
+        if self.send_goal(x, y, z):
             self.movement_finished.wait()
             response.success = self.last_action_successful
             response.message = f"Arm moved to {x}, {y}, {z}" if response.success else "Arm movement failed"
         else:
             response.success = False
             response.message = "Failed to initiate arm movement"
-        return response
+
+        return self.finalize_service_status(response)
 
     def handle_relative_move(self, request, response):
         vx = request.vx
         vy = request.vy
         vz = request.vz
         self.get_logger().info(f"Service Call: Relative Move by Vector [{vx}, {vy}, {vz}]")
-        
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = f"Executing relative move by vector [{vx}, {vy}, {vz}]..."
+        self.publish_status()
+
         try:
             # Look up current pose of the tool frame
             now = rclpy.time.Time()
@@ -116,12 +251,14 @@ class HardwareInterfaceClient(Node):
             response.success = False
             response.message = str(e)
             
-        return response
+        return self.finalize_service_status(response)
 
     def handle_move_gripper(self, request, response):
         pos = request.position
         self.get_logger().info(f"Service Call: Move Gripper to {pos}")
-
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = f"Moving gripper to {pos}..."
+        self.publish_status()
         if self.move_gripper(pos):
             self.movement_finished.wait()
             response.success = self.last_action_successful
@@ -129,7 +266,8 @@ class HardwareInterfaceClient(Node):
         else:
             response.success = False
             response.message = "Failed to initiate gripper movement"
-        return response
+
+        return self.finalize_service_status(response)
 
     # --- Action Client Methods ---
     def send_goal(self, x, y, z):
@@ -244,15 +382,28 @@ class HardwareInterfaceClient(Node):
         if error_code == result.error_code.SUCCESS:
             self.get_logger().info('Movement complete!')
             self.last_action_successful = True
-        elif error_code == result.error_code.NO_IK_SOLUTION:
-            self.get_logger().error("ERROR: Coordinates out of reach! (Arm is too short)")
-            self.last_action_successful = False
-        elif error_code == result.error_code.PLANNING_FAILED:
-            self.get_logger().error("ERROR: Planning failed! (Likely trying to move through a table)")
-            self.last_action_successful = False
         else:
-            self.get_logger().error(f'MoveIt failed with error code: {error_code}')
             self.last_action_successful = False
+
+            match error_code:
+                case result.error_code.NO_IK_SOLUTION:
+                    self.get_logger().error("ERROR: Coordinates out of reach! (Arm is too short or pose is physically impossible)")
+                case result.error_code.PLANNING_FAILED:
+                    self.get_logger().error("ERROR: Planning failed! (Path is blocked by an obstacle or self-collision)")
+                case result.error_code.TIMED_OUT:
+                    self.get_logger().error("ERROR: Movement timed out!")
+                case result.error_code.GOAL_IN_COLLISION:
+                    self.get_logger().error("ERROR: Goal is in collision! (Target position is inside an object)")
+                case result.error_code.START_STATE_IN_COLLISION:
+                    self.get_logger().error("ERROR: Start state is in collision! (Robot is already hitting itself or an obstacle)")
+                case result.error_code.CONTROL_FAILED:
+                    self.get_logger().error("ERROR: Control failed during execution! (Path planned successfully, but physical execution failed)")
+                case result.error_code.ABORT:
+                    self.get_logger().error("ERROR: Movement was aborted!")
+                case _:
+                    self.get_logger().error(f'MoveIt failed with error code: {error_code}')
+
+            self.handle_moveit_failure()
 
         self.movement_finished.set()
 
