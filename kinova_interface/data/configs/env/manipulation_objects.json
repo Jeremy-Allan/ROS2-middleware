@@ -1,9 +1,17 @@
 {
   "schema_version": 1,
-  "commissioned": false,
+  "commissioned": true,
   "robot": {
     "base_frame": "base_link",
     "arm_group": "arm",
+    "home_joint_positions": {
+      "joint_1": 0.0,
+      "joint_2": 0.0,
+      "joint_3": 1.5708,
+      "joint_4": 1.5708,
+      "joint_5": 1.5708,
+      "joint_6": 0.0
+    },
     "gripper_group": "gripper",
     "ik_frame": "tool_frame",
     "attach_link": "tool_frame",
@@ -43,16 +51,15 @@
         "position": [-0.3255, -0.1235, 0.01],
         "orientation": [0.0, 0.0, 0.0, 1.0]
       },
+      "pregrasp_pose": {
+        "frame_id": "base_link",
+        "position": [-0.3255, -0.1235, 0.09],
+        "orientation": [1.0, 0.0, 0.0, 0.0]
+      },
       "grasp_pose": {
         "frame_id": "base_link",
         "position": [-0.3255, -0.1235, 0.01],
         "orientation": [1.0, 0.0, 0.0, 0.0]
-      },
-      "approach": {
-        "frame_id": "base_link",
-        "direction": [0.0, 0.0, -1.0],
-        "min_distance": 0.06,
-        "max_distance": 0.1
       },
       "lift": {
         "frame_id": "base_link",
@@ -72,16 +79,15 @@
         "position": [0.45, 0.2, 0.12],
         "orientation": [0.0, 0.0, 0.0, 1.0]
       },
+      "pregrasp_pose": {
+        "frame_id": "base_link",
+        "position": [0.45, 0.2, 0.2],
+        "orientation": [1.0, 0.0, 0.0, 0.0]
+      },
       "grasp_pose": {
         "frame_id": "base_link",
         "position": [0.45, 0.2, 0.12],
         "orientation": [1.0, 0.0, 0.0, 0.0]
-      },
-      "approach": {
-        "frame_id": "base_link",
-        "direction": [0.0, 0.0, -1.0],
-        "min_distance": 0.06,
-        "max_distance": 0.1
       },
       "lift": {
         "frame_id": "base_link",

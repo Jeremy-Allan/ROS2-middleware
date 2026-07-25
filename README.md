@@ -77,7 +77,7 @@ This contract defines the boundary between task intent and physical actuation.
 
 ## Features & Capabilities
 
-*   **Automated Recipes:** Define a sequence of tasks (pick, place, home) in a standard JSON format.
+*   **Automated Recipes:** Accept only atomic MTC `pick_and_place` steps; homing and gripper control are internal task stages.
 *   **Object-Based Targeting:** Instead of raw coordinates, request configured IDs such as `"red_cube"` and `"delivery_tray"`.
 *   **Atomic Pick and Place:** MTC plans collision-object insertion, calibrated grasp IK, gripper contact, attachment, transfer, detachment, and retreat as one coherent task.
 *   **Deterministic Near-Object Motion:** Cartesian approach/lift/lower/retreat stages enforce the configured axes and full path fraction; OMPL remains responsible for collision-aware free-space connections.
@@ -185,9 +185,9 @@ ros2-middleware/
 │   	│		│
 │   	│		├── task_recipe.json                                 # Primary runtime execution recipe format (LLM-generated or static)
 │   	│		└── test_suite/                                      # Deterministic validation and regression test recipes
-│   	│					├── recipe_l1_single_move.json           # Minimal single-action movement validation
-│   	│					├── recipe_l2_move_and_gripper.json      # Combined motion + gripper coordination test
-│   	│					├── recipe_l3_home_move_gripper.json     # Home reset + sequential motion validation
+│   	│					├── recipe_l1_single_move.json           # Red-cube MTC execution validation
+│   	│					├── recipe_l2_move_and_gripper.json      # Blue-cube MTC execution validation
+│   	│					├── recipe_l3_home_move_gripper.json     # Multi-object MTC execution validation
 │   	│					├── recipe_l4_pick_and_place.json        # Full manipulation pipeline test
 │   	│					├── recipe_l5_multi_object.json          # Multi-object sequencing validation
 │   	│					└── recipe_l6_invalid.json               # Negative test case for validation failure handling
@@ -245,13 +245,12 @@ ros2 launch kinova_interface robot.launch.py
 # Launch on physical hardware; MTC execution remains disabled by default
 ros2 launch kinova_interface robot.launch.py use_fake_hardware:=false robot_ip:=192.168.1.10
 
-# Launch a plan-only static recipe
+# Launch a static recipe (it is rejected until execution gates are enabled)
 ros2 launch kinova_interface robot.launch.py recipe:=task_recipe.json
 
-# Only after commissioning and setting plan_only=false in the recipe:
-# enable physical execution for a static recipe
+# Physical execution is enabled by default; robot_ip remains required
 ros2 launch kinova_interface robot.launch.py use_fake_hardware:=false \
-  robot_ip:=192.168.1.10 allow_mtc_execution:=true recipe:=task_recipe.json
+  robot_ip:=192.168.1.10 recipe:=task_recipe.json
 ```
 
 ### New Launch Parameters for Logging & Debugging
@@ -284,46 +283,9 @@ If you set `use_fake_hardware:=false` to connect to the physical robot, you **MU
 ---
 ## The JSON Recipe Contract
 
-Tasks use an ordered JSON `steps` array. Pick-and-place must be expressed as
-one atomic action rather than separate move/gripper/relative-move steps:
-
-```json
-{
-  "recipe_name": "MTC plan-only check",
-  "steps": [
-    {
-      "step_id": 1,
-      "action": "pick_and_place",
-      "parameters": {
-        "object": "red_cube",
-        "destination": "delivery_tray",
-        "plan_only": true
-      },
-      "description": "Plan and publish a complete task without moving the robot"
-    }
-  ]
-}
-```
-
-After plan-only, RViz, fake-hardware, and commissioning checks pass, set
-`commissioned` to `true` in `manipulation_objects.json`, launch with
-`allow_mtc_execution:=true`, and set the recipe's `plan_only` to `false`.
-Both execution gates are required. The action result includes a MoveIt error
-code, failed stage, message, and complete-solution count. Legacy actions
-remain available for manual/backwards-compatible workflows: `home`,
-`move_arm`, `relative_move`, and `gripper`; direct gripper positions are
-restricted to `0.0` through `0.85`.
-
-The same action can be called directly:
-
-```bash
-ros2 action send_goal /mtc_task_node/pick_place \
-  kinova_interfaces/action/PickPlace \
-  "{object_id: red_cube, destination_id: delivery_tray, plan_only: true}" \
-  --feedback
-```
-
-Dynamic recipes still use `/execute_recipe`:
+Automated recipes accept only atomic `pick_and_place` steps. The middleware
+automatically opens the gripper, moves to configured home, follows the exact
+configured pre-grasp/grasp approach, and completes placement:
 
 ```json
 {
@@ -334,8 +296,43 @@ Dynamic recipes still use `/execute_recipe`:
       "action": "pick_and_place",
       "parameters": {
         "object": "red_cube",
-        "destination": "delivery_tray",
-        "plan_only": false
+        "destination": "delivery_tray"
+      },
+      "description": "Execute the calibrated home-started MTC task"
+    }
+  ]
+}
+```
+
+AI-generated recipes always request execution; the model controls only the
+object and destination. The committed configuration has `commissioned=true`
+and `allow_mtc_execution` defaults to `true`. Pass
+`allow_mtc_execution:=false` when execution must be disabled for diagnostics.
+Legacy low-level services remain externally available for supervised
+maintenance, but the recipe supervisor rejects them.
+
+The lower-level action retains `plan_only` for engineering diagnostics, but
+that field is not exposed to AI-generated recipes:
+
+```bash
+ros2 action send_goal /mtc_task_node/pick_place \
+  kinova_interfaces/action/PickPlace \
+  "{object_id: red_cube, destination_id: delivery_tray, plan_only: true}" \
+  --feedback
+```
+
+Dynamic execution recipes still use `/execute_recipe`:
+
+```json
+{
+  "recipe_name": "Object collection",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "pick_and_place",
+      "parameters": {
+        "object": "red_cube",
+        "destination": "delivery_tray"
       },
       "description": "Execute the commissioned complete task"
     }
@@ -348,8 +345,9 @@ Dynamic recipes still use `/execute_recipe`:
 
 The recipe supervisor executes steps in order and stops at the first failed
 step. Service/action waits have finite deadlines. The MTC server accepts only
-one task at a time, supports cancellation, returns the exact task failure it
-can identify, and never executes a `plan_only` goal.
+one task at a time, supports cancellation, and returns the exact task failure
+it can identify. Every automated recipe requests execution, but motion still
+requires the commissioning and launch gates.
 
 For MTC, this guarantee applies to the configured Cartesian near-object
 segments. Sampling-based free-space `Connect` stages may still find different

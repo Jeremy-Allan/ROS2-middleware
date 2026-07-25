@@ -47,6 +47,7 @@ class SceneObjectSpec:
 class RobotSpec:
     base_frame: str
     arm_group: str
+    home_joint_positions: tuple[tuple[str, float], ...]
     gripper_group: str
     ik_frame: str
     attach_link: str
@@ -75,6 +76,7 @@ class ObjectSpec:
     object_id: str
     shape: ShapeSpec
     collision_pose: PoseSpec
+    pregrasp_pose: PoseSpec
     grasp_pose: PoseSpec
     approach: MotionSpec
     lift: MotionSpec
@@ -241,6 +243,71 @@ def _motion(value: Any, path: str) -> MotionSpec:
     )
 
 
+def _tool_z_axis(orientation: tuple[float, float, float, float]):
+    """Return the tool-frame +Z axis expressed in the pose parent frame."""
+
+    x, y, z, w = orientation
+    return (
+        2.0 * (x * z + w * y),
+        2.0 * (y * z - w * x),
+        1.0 - 2.0 * (x * x + y * y),
+    )
+
+
+def _locked_approach(
+    pregrasp: PoseSpec,
+    grasp: PoseSpec,
+    base_frame: str,
+    path: str,
+) -> MotionSpec:
+    """Validate and derive one exact, vertically downward approach."""
+
+    if pregrasp.frame_id != base_frame or grasp.frame_id != base_frame:
+        raise ConfigurationError(
+            f"{path} pregrasp_pose and grasp_pose must use robot.base_frame "
+            f"'{base_frame}'"
+        )
+
+    orientation_dot = sum(
+        first * second
+        for first, second in zip(pregrasp.orientation, grasp.orientation)
+    )
+    if abs(abs(orientation_dot) - 1.0) > 1e-4:
+        raise ConfigurationError(
+            f"{path} pregrasp_pose and grasp_pose orientations must be identical"
+        )
+
+    for label, pose in (("pregrasp_pose", pregrasp), ("grasp_pose", grasp)):
+        tool_z = _tool_z_axis(pose.orientation)
+        if tool_z[2] > -0.999 or abs(tool_z[0]) > 0.045 or abs(tool_z[1]) > 0.045:
+            raise ConfigurationError(
+                f"{path}.{label} must point tool_frame +Z directly toward "
+                "the table (-Z in robot.base_frame)"
+            )
+
+    dx = grasp.position[0] - pregrasp.position[0]
+    dy = grasp.position[1] - pregrasp.position[1]
+    dz = grasp.position[2] - pregrasp.position[2]
+    if abs(dx) > 1e-4 or abs(dy) > 1e-4:
+        raise ConfigurationError(
+            f"{path} grasp_pose must be directly below pregrasp_pose "
+            "with identical X and Y"
+        )
+    distance = -dz
+    if not 0.02 <= distance <= 0.25:
+        raise ConfigurationError(
+            f"{path} vertical pregrasp-to-grasp distance must be between "
+            "0.02 and 0.25 metres"
+        )
+
+    return MotionSpec(
+        frame_id=base_frame,
+        direction=(0.0, 0.0, -1.0),
+        min_distance=distance,
+        max_distance=distance,
+    )
+
+
 def _shape(value: Any, path: str) -> ShapeSpec:
     data = _mapping(value, path)
     _reject_unknown(data, {"type", "dimensions"}, path)
@@ -275,6 +342,7 @@ def _robot(value: Any) -> RobotSpec:
         {
             "base_frame",
             "arm_group",
+            "home_joint_positions",
             "gripper_group",
             "ik_frame",
             "attach_link",
@@ -308,6 +376,23 @@ def _robot(value: Any) -> RobotSpec:
     )
     if not touch_links or len(set(touch_links)) != len(touch_links):
         raise ConfigurationError("robot.touch_links must contain unique link names")
+
+    home_raw = _mapping(
+        _required(data, "home_joint_positions", path),
+        "robot.home_joint_positions",
+    )
+    expected_home_joints = {f"joint_{index}" for index in range(1, 7)}
+    if set(home_raw) != expected_home_joints:
+        raise ConfigurationError(
+            "robot.home_joint_positions must define exactly joint_1 through joint_6"
+        )
+    home_joint_positions = tuple(
+        (
+            _identifier(joint, f"robot.home_joint_positions key {joint!r}"),
+            _number(value, f"robot.home_joint_positions.{joint}"),
+        )
+        for joint, value in sorted(home_raw.items())
+    )
 
     minimum = _number(
         _required(data, "gripper_min_position", path), "robot.gripper_min_position"
@@ -364,6 +449,7 @@ def _robot(value: Any) -> RobotSpec:
     return RobotSpec(
         base_frame=_frame(_required(data, "base_frame", path), "robot.base_frame"),
         arm_group=_identifier(_required(data, "arm_group", path), "robot.arm_group"),
+        home_joint_positions=home_joint_positions,
         gripper_group=_identifier(
             _required(data, "gripper_group", path), "robot.gripper_group"
         ),
@@ -470,12 +556,20 @@ def load_manipulation_config(config_path: str | Path) -> ManipulationConfig:
             {
                 "shape",
                 "collision_pose",
+                "pregrasp_pose",
                 "grasp_pose",
-                "approach",
                 "lift",
                 "support_surface",
             },
             object_path,
+        )
+        pregrasp_pose = _pose(
+            _required(data, "pregrasp_pose", object_path),
+            f"{object_path}.pregrasp_pose",
+        )
+        grasp_pose = _pose(
+            _required(data, "grasp_pose", object_path),
+            f"{object_path}.grasp_pose",
         )
         objects[object_id] = ObjectSpec(
             object_id=object_id,
@@ -484,12 +578,13 @@ def load_manipulation_config(config_path: str | Path) -> ManipulationConfig:
                 _required(data, "collision_pose", object_path),
                 f"{object_path}.collision_pose",
             ),
-            grasp_pose=_pose(
-                _required(data, "grasp_pose", object_path),
-                f"{object_path}.grasp_pose",
-            ),
-            approach=_motion(
-                _required(data, "approach", object_path), f"{object_path}.approach"
+            pregrasp_pose=pregrasp_pose,
+            grasp_pose=grasp_pose,
+            approach=_locked_approach(
+                pregrasp_pose,
+                grasp_pose,
+                robot.base_frame,
+                object_path,
             ),
             lift=_motion(_required(data, "lift", object_path), f"{object_path}.lift"),
             support_surface=_optional_surface(data, object_path),

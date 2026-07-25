@@ -34,15 +34,35 @@ class ManipulationConfigTest(unittest.TestCase):
         config = load_manipulation_config(CONFIG_PATH)
         object_spec, destination = config.resolve("red_cube", "delivery_tray")
 
-        self.assertFalse(config.commissioned)
+        self.assertTrue(config.commissioned)
         self.assertEqual(config.robot.arm_group, "arm")
+        self.assertEqual(
+            dict(config.robot.home_joint_positions),
+            {
+                "joint_1": 0.0,
+                "joint_2": 0.0,
+                "joint_3": 1.5708,
+                "joint_4": 1.5708,
+                "joint_5": 1.5708,
+                "joint_6": 0.0,
+            },
+        )
         self.assertEqual(config.robot.gripper_group, "gripper")
         self.assertLessEqual(
             config.robot.gripper_closed_position,
             config.robot.gripper_max_position,
         )
         self.assertEqual(object_spec.shape.kind, "box")
+        self.assertEqual(
+            object_spec.pregrasp_pose.position,
+            (-0.3255, -0.1235, 0.09),
+        )
         self.assertEqual(object_spec.approach.direction, (0.0, 0.0, -1.0))
+        self.assertAlmostEqual(object_spec.approach.min_distance, 0.08)
+        self.assertEqual(
+            object_spec.pregrasp_pose.orientation,
+            object_spec.grasp_pose.orientation,
+        )
         self.assertEqual(destination.retreat.direction, (0.0, 0.0, 1.0))
 
     def test_unknown_object_is_rejected_with_known_ids(self):
@@ -71,10 +91,21 @@ class ManipulationConfigTest(unittest.TestCase):
                 "zero quaternion",
             ),
             (
-                lambda data: data["objects"]["red_cube"]["approach"].update(
-                    {"direction": [0.0, 0.0, 0.0]}
+                lambda data: data["objects"]["red_cube"]["pregrasp_pose"].update(
+                    {"position": [-0.30, -0.1235, 0.09]}
                 ),
-                "zero vector",
+                "directly below pregrasp_pose",
+            ),
+            (
+                lambda data: (
+                    data["objects"]["red_cube"]["pregrasp_pose"].update(
+                        {"orientation": [0.0, 0.0, 0.0, 1.0]}
+                    ),
+                    data["objects"]["red_cube"]["grasp_pose"].update(
+                        {"orientation": [0.0, 0.0, 0.0, 1.0]}
+                    ),
+                ),
+                "directly toward the table",
             ),
             (
                 lambda data: data["robot"].update(

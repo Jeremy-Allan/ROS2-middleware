@@ -76,9 +76,10 @@ recipe or external caller
   -> return the exact failed stage and MoveIt error
 ```
 
-The legacy `move_arm`, `relative_move`, and gripper services can remain for
-manual movement and backwards compatibility. A pick-and-place recipe must use
-the atomic action instead of expanding the operation into legacy steps.
+The legacy `move_arm`, `relative_move`, home, and gripper services remain for
+supervised maintenance, but automated recipes reject them. Recipes accept
+only atomic `pick_and_place` steps and always request execution. The model
+chooses object and destination IDs; it does not choose execution policy.
 
 Only one task may plan or execute for this robot at a time. A second goal is
 rejected while the first owns the motion lease; it never shares mutable
@@ -253,26 +254,33 @@ is:
    - Group: `gripper`.
    - Goal: `{right_finger_bottom_joint: gripper_open_position}`.
    - Solver: joint interpolation.
+
+5. **`MoveTo("move arm to configured home")`**
+   - Group: `arm`.
+   - Goal: exact `home_joint_positions` from the manipulation file.
+   - Include current-to-home motion in the same collision-checked task.
    - Retain this stage as the monitored pre-grasp state.
 
-5. **`Connect("move to pre-grasp")`**
+6. **`Connect("move to pre-grasp")`**
    - Group: `arm`.
    - Solver: configured planning pipeline with path-length cost.
-   - Connect the open-hand state to the state before Cartesian approach.
+   - Connect the fixed home state to the exact configured pre-grasp state.
    - Use the bounded `stage_timeout`.
 
-6. **`SerialContainer("pick object")`**
+7. **`SerialContainer("pick object")`**
 
-   1. **`MoveRelative("approach object")`**
+   1. **`MoveRelative("exact vertical pregrasp to grasp")`**
       - Group: `arm`; IK frame/link: `tool_frame`.
       - Solver: Cartesian.
-      - Direction, frame, and min/max distance: object `approach`.
+      - Direction: exactly table-normal `-Z` in `base_link`.
+      - Distance: exactly the configured `pregrasp_pose` to `grasp_pose`
+        vertical separation.
       - Require the configured Cartesian completion fraction. This is the
         stage that prevents a sampled final approach.
 
    2. **`GeneratePose("generate calibrated grasp pose")`**
       - Emit the configured fixed `grasp_pose` as a `tool_frame` target.
-      - Monitor the retained `open gripper` stage.
+      - Monitor the retained configured-home stage.
       - The implementation deliberately does not sample unconstrained 3-D
         grasp orientations.
 
@@ -312,14 +320,14 @@ is:
       - Conditional on object `support_surface`.
       - Restore normal checking immediately after lift.
 
-7. **`Connect("transport object")`**
+8. **`Connect("transport object")`**
    - Group: `arm`.
    - Solver: configured planning pipeline with path-length cost.
    - Connect the lifted state to the pre-place state while the object remains
      attached.
    - Use the bounded `stage_timeout`.
 
-8. **`SerialContainer("place object")`**
+9. **`SerialContainer("place object")`**
 
    1. **`MoveRelative("lower object")`**
       - Group: `arm`; IK frame: `tool_frame`.
@@ -361,8 +369,8 @@ is:
       - Direction, frame, and distances: destination `retreat`.
       - Require the configured completion fraction.
 
-The implemented task deliberately ends after retreat. Returning home should be
-a separately reviewed future policy; do not copy Panda's `ready` state.
+The implemented task deliberately ends after retreat. The next task again
+moves to configured home before beginning its grasp sequence.
 
 Call `Task.plan(max_solutions)`, which performs reset and initialization in
 the Humble Python binding, then use its cost-ordered complete solutions and
@@ -377,11 +385,25 @@ All configured arrays use ROS ordering:
 - position: `[x, y, z]` in metres;
 - quaternion: `[x, y, z, w]`.
 
-`collision_pose` is the object-centre pose. `grasp_pose` and destination
-`tool_pose` are final `tool_frame` poses. The implemented fixed
+`collision_pose` is the object-centre pose. `pregrasp_pose`, `grasp_pose`,
+and destination `tool_pose` are `tool_frame` poses. The implemented fixed
 `GeneratePose` stages pass those tool targets to `ComputeIK` with
 `ik_frame=tool_frame`; they are not object-placement poses from
 `GeneratePlacePose`.
+
+For each object, `pregrasp_pose` and `grasp_pose` must:
+
+- use `base_link`;
+- have identical normalized orientations;
+- place `tool_frame` +Z directly along base-frame -Z, which points the
+  Gen3 Lite finger tips toward the table;
+- have identical X and Y; and
+- differ vertically by 0.02 to 0.25 m.
+
+The loader derives a Cartesian approach whose minimum and maximum distances
+are both that exact vertical separation. Humble MTC interprets equal
+MoveRelative limits as a required full-distance move, so a partial or lateral
+approach cannot satisfy the stage.
 
 If a future implementation changes to an object-pose generator, it must
 compute the object/tool rigid transform with TF/Eigen and normalized
@@ -401,7 +423,8 @@ the legacy-format `obstacles.json` before its table/wall primitives enter an
 MTC task. `manipulation_config.py` rejects missing
 fields, unknown schema versions, empty/invalid identifiers, zero or
 non-normalized quaternions, zero motion vectors, invalid shape dimensions,
-unsafe distance ranges, gripper commands outside configured limits, invalid
+unsafe distance ranges, non-downward tool orientations, misaligned
+pre-grasp/grasp poses, gripper commands outside configured limits, invalid
 planner/scaling values, and unknown object/destination IDs.
 
 The version 1 structure is:
@@ -412,6 +435,14 @@ The version 1 structure is:
   "robot": {
     "base_frame": "base_link",
     "arm_group": "arm",
+    "home_joint_positions": {
+      "joint_1": 0.0,
+      "joint_2": 0.0,
+      "joint_3": 1.5708,
+      "joint_4": 1.5708,
+      "joint_5": 1.5708,
+      "joint_6": 0.0
+    },
     "gripper_group": "gripper",
     "ik_frame": "tool_frame",
     "attach_link": "tool_frame",
@@ -445,16 +476,15 @@ The version 1 structure is:
         "position": [-0.3255, -0.1235, 0.01],
         "orientation": [0.0, 0.0, 0.0, 1.0]
       },
+      "pregrasp_pose": {
+        "frame_id": "base_link",
+        "position": [-0.3255, -0.1235, 0.09],
+        "orientation": [1.0, 0.0, 0.0, 0.0]
+      },
       "grasp_pose": {
         "frame_id": "base_link",
         "position": [-0.3255, -0.1235, 0.01],
         "orientation": [1.0, 0.0, 0.0, 0.0]
-      },
-      "approach": {
-        "frame_id": "base_link",
-        "direction": [0.0, 0.0, -1.0],
-        "min_distance": 0.06,
-        "max_distance": 0.1
       },
       "lift": {
         "frame_id": "base_link",
@@ -514,9 +544,10 @@ Do not treat the committed numeric values as commissioned measurements.
    fixture transform. Static JSON is appropriate only for fixed fixtures.
 6. Teach the final `tool_frame` grasp orientation in low-speed/manual mode.
    Normalize the quaternion and inspect its axes in RViz.
-7. Confirm the approach vector points toward the object and that reversing it
-   reaches a collision-free pre-grasp. Do the same for lift, lower, and
-   retreat.
+7. Teach an exact `pregrasp_pose` directly above `grasp_pose`. Keep X, Y, and
+   orientation identical, verify `tool_frame` +Z points toward table -Z, and
+   confirm the complete vertical segment is collision-free. Separately verify
+   lift, lower, and retreat directions.
 8. Determine open and closed gripper commands using the actual controller.
    Closed must grip the object without bottoming out or applying unsafe force.
 9. Start with conservative collision padding and 10% velocity/acceleration.

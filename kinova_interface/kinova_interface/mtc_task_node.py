@@ -80,7 +80,7 @@ class MtcTaskNode(Node):
         action_name = self._parameter(
             "pick_place_action", "/mtc_task_node/pick_place"
         )
-        self._allow_execution = self._parameter("allow_mtc_execution", False)
+        self._allow_execution = self._parameter("allow_mtc_execution", True)
         self._execution_timeout = float(
             self._parameter("mtc_execution_timeout_sec", 300.0)
         )
@@ -366,8 +366,7 @@ class MtcTaskNode(Node):
             return GoalResponse.REJECT
         if not goal_request.plan_only and not self._allow_execution:
             self.get_logger().error(
-                "Rejecting execution goal: launch with "
-                "allow_mtc_execution:=true only after commissioning"
+                "Rejecting execution goal because allow_mtc_execution=false"
             )
             return GoalResponse.REJECT
         if not goal_request.plan_only and not self._config.commissioned:
@@ -953,7 +952,13 @@ class MtcTaskNode(Node):
             robot.gripper_open_position,
         )
         task.add(open_hand)
-        initial_state = task["open gripper"]
+
+        move_home = stages.MoveTo("move arm to configured home", sampling)
+        move_home.group = robot.arm_group
+        move_home.timeout = robot.stage_timeout
+        move_home.setGoal(dict(robot.home_joint_positions))
+        task.add(move_home)
+        initial_state = task["move arm to configured home"]
 
         connect_pick = stages.Connect(
             "move to pre-grasp",
@@ -966,7 +971,7 @@ class MtcTaskNode(Node):
         pick = core.SerialContainer("pick object")
 
         approach = self._cartesian_stage(
-            "approach object",
+            "exact vertical pregrasp to grasp",
             cartesian,
             object_spec.approach,
         )

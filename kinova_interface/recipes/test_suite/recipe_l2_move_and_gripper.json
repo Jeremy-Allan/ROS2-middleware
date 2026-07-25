@@ -1,18 +1,15 @@
 {
-  "recipe_name": "L2 - Move and Gripper",
-  "description": "Moves the arm to a position then opens the gripper",
+  "recipe_name": "L2 - Blue Cube MTC Execution",
+  "description": "Requests one home-started MTC task for the second object",
   "steps": [
     {
       "step_id": 1,
-      "action": "move_arm",
-      "parameters": { "target": "red_cube" },
-      "description": "Move to red cube pickup position"
-    },
-    {
-      "step_id": 2,
-      "action": "gripper",
-      "parameters": { "position": 0.0 },
-      "description": "Open gripper"
+      "action": "pick_and_place",
+      "parameters": {
+        "object": "blue_cube",
+        "destination": "delivery_tray"
+      },
+      "description": "Pick and deliver the blue cube"
     }
   ]
 }

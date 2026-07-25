@@ -214,10 +214,10 @@ def generate_launch_description():
 
     allow_mtc_execution_arg = DeclareLaunchArgument(
         'allow_mtc_execution',
-        default_value='false',
+        default_value='true',
         description=(
-            'Permit non-plan-only MTC goals. The manipulation config must also '
-            'have commissioned=true.'
+            'Permit MTC execution goals. Defaults to true; set false to '
+            'disable execution for diagnostics.'
         )
     )
 

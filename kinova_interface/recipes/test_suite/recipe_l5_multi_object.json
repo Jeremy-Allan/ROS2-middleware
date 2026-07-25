@@ -4,33 +4,21 @@
   "steps": [
     {
       "step_id": 1,
-      "action": "home",
-      "description": "Reset arm to home position"
+      "action": "pick_and_place",
+      "parameters": {
+        "object": "red_cube",
+        "destination": "delivery_tray_left"
+      },
+      "description": "Pick and deliver the red cube"
     },
     {
       "step_id": 2,
       "action": "pick_and_place",
       "parameters": {
-        "object": "red_cube",
-        "destination": "delivery_tray_left",
-        "plan_only": false
-      },
-      "description": "Pick and deliver the red cube"
-    },
-    {
-      "step_id": 3,
-      "action": "pick_and_place",
-      "parameters": {
         "object": "blue_cube",
-        "destination": "delivery_tray_right",
-        "plan_only": false
+        "destination": "delivery_tray_right"
       },
       "description": "Pick and deliver the blue cube"
-    },
-    {
-      "step_id": 4,
-      "action": "home",
-      "description": "Return to home position"
     }
   ]
 }

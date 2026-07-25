@@ -1,29 +1,24 @@
 {
-  "recipe_name": "L3 - Home, Move and Gripper",
-  "description": "Resets arm to home, moves to position, operates gripper",
+  "recipe_name": "L3 - Multi Object MTC Execution",
+  "description": "Requests two sequential home-started MTC tasks",
   "steps": [
     {
       "step_id": 1,
-      "action": "home",
-      "description": "Reset arm to home position"
+      "action": "pick_and_place",
+      "parameters": {
+        "object": "red_cube",
+        "destination": "delivery_tray_left"
+      },
+      "description": "Deliver the red cube to the left tray slot"
     },
     {
       "step_id": 2,
-      "action": "gripper",
-      "parameters": { "position": 0.0 },
-      "description": "Open gripper"
-    },
-    {
-      "step_id": 3,
-      "action": "move_arm",
-      "parameters": { "target": "red_cube" },
-      "description": "Move to red cube pickup position"
-    },
-    {
-      "step_id": 4,
-      "action": "gripper",
-      "parameters": { "position": 0.8 },
-      "description": "Close gripper"
+      "action": "pick_and_place",
+      "parameters": {
+        "object": "blue_cube",
+        "destination": "delivery_tray_right"
+      },
+      "description": "Deliver the blue cube to the right tray slot"
     }
   ]
 }

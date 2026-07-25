@@ -1,12 +1,15 @@
 {
-  "recipe_name": "L1 - Single Move",
-  "description": "Moves the arm to a single known object position",
+  "recipe_name": "L1 - Red Cube MTC Execution",
+  "description": "Requests one home-started MTC task",
   "steps": [
     {
       "step_id": 1,
-      "action": "move_arm",
-      "parameters": { "target": "red_cube" },
-      "description": "Move to red cube pickup position"
+      "action": "pick_and_place",
+      "parameters": {
+        "object": "red_cube",
+        "destination": "delivery_tray"
+      },
+      "description": "Pick and deliver the red cube"
     }
   ]
 }

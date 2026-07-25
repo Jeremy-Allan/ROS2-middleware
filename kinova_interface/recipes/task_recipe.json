@@ -6,10 +6,9 @@
       "action": "pick_and_place",
       "parameters": {
         "object": "red_cube",
-        "destination": "delivery_tray",
-        "plan_only": true
+        "destination": "delivery_tray"
       },
-      "description": "Plan and publish one collision-aware MTC pick/place task"
+      "description": "Execute one home-started MTC pick/place task"
     }
   ]
 }

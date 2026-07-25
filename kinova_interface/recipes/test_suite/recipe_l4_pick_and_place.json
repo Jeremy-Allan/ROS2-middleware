@@ -4,23 +4,12 @@
   "steps": [
     {
       "step_id": 1,
-      "action": "home",
-      "description": "Reset arm to home position"
-    },
-    {
-      "step_id": 2,
       "action": "pick_and_place",
       "parameters": {
         "object": "red_cube",
-        "destination": "delivery_tray",
-        "plan_only": false
+        "destination": "delivery_tray"
       },
-      "description": "Run the complete MTC pick/place task"
-    },
-    {
-      "step_id": 3,
-      "action": "home",
-      "description": "Return to home position"
+      "description": "Run the complete home-started MTC pick/place task"
     }
   ]
 }

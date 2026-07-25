@@ -165,7 +165,7 @@ class JsonParserNode(Node):
             self.get_logger().error(f"Future for {service_name} was cleared or canceled.")
             return None
 
-    def call_pick_place_action(self, object_id, destination_id, plan_only=False):
+    def call_pick_place_action(self, object_id, destination_id):
         if not self.pick_place_client.wait_for_server(timeout_sec=10.0):
             self.get_logger().error("MTC pick/place action server is not available")
             return None
@@ -173,11 +173,14 @@ class JsonParserNode(Node):
         goal = PickPlace.Goal()
         goal.object_id = object_id
         goal.destination_id = destination_id
-        goal.plan_only = plan_only
+        # The model chooses semantics, not execution policy. Automated
+        # recipes always request execution; the action-level plan_only field
+        # remains available only for engineering diagnostics.
+        goal.plan_only = False
 
         self.get_logger().info(
-            f"Requesting MTC pick/place: {object_id} -> {destination_id} "
-            f"(plan_only={plan_only})"
+            f"Requesting MTC pick/place execution: "
+            f"{object_id} -> {destination_id}"
         )
         goal_future = self.pick_place_client.send_goal_async(
             goal,
@@ -420,50 +423,23 @@ class JsonParserNode(Node):
                 self.get_logger().error(
                     f"Step {i+1} parameters must be a JSON object"
                 )
-            elif action == 'home':
-                result = self.call_home_service()
-                success = result is not None and result['success']
-            elif action == 'move_arm':
-                target_name = params.get('target')
-                if not isinstance(target_name, str) or not target_name:
-                    self.get_logger().error("move_arm requires a string 'target'")
-                else:
-                    coords = self.get_static_object_coords(target_name)
-                    if coords:
-                        result = self.call_move_service(coords['x'], coords['y'], coords['z'])
-                        success = result is not None and result['success']
-            elif action == 'relative_move':
-                vector_name = params.get('vector')
-                if not isinstance(vector_name, str) or not vector_name:
-                    self.get_logger().error(
-                        "relative_move requires a string 'vector'"
-                    )
-                else:
-                    vector = self.get_relative_movement_vector(vector_name)
-                    if vector:
-                        result = self.call_relative_move_service(vector['x'], vector['y'], vector['z'])
-                        success = result is not None and result['success']
-            elif action == 'gripper':
-                try:
-                    gripper = float(params['position'])
-                except (KeyError, TypeError, ValueError):
-                    self.get_logger().error(
-                        "gripper requires a numeric 'position'"
-                    )
-                else:
-                    if not 0.0 <= gripper <= 0.85:
-                        self.get_logger().error(
-                            "gripper position must be between 0.0 and 0.85 "
-                            "for physical Gen3 Lite hardware"
-                        )
-                    else:
-                        result = self.call_move_gripper_service(gripper)
-                        success = result is not None and result['success']
-            elif action == 'pick_and_place':
+            elif action != 'pick_and_place':
+                self.get_logger().error(
+                    f"Recipe action {action!r} is disabled: automated recipes "
+                    "accept only atomic 'pick_and_place' steps"
+                )
+            else:
                 object_id = params.get('object')
                 destination_id = params.get('destination')
-                plan_only = params.get('plan_only', False)
-                if not isinstance(object_id, str) or not object_id:
+                unexpected = set(params).difference(
+                    {"object", "destination"}
+                )
+                if unexpected:
+                    self.get_logger().error(
+                        "pick_and_place contains unsupported parameter(s): "
+                        + ", ".join(sorted(unexpected))
+                    )
+                elif not isinstance(object_id, str) or not object_id:
                     self.get_logger().error(
                         "pick_and_place requires a string 'object'"
                     )
@@ -471,19 +447,12 @@ class JsonParserNode(Node):
                     self.get_logger().error(
                         "pick_and_place requires a string 'destination'"
                     )
-                elif not isinstance(plan_only, bool):
-                    self.get_logger().error(
-                        "pick_and_place 'plan_only' must be true or false"
-                    )
                 else:
                     result = self.call_pick_place_action(
                         object_id,
                         destination_id,
-                        plan_only,
                     )
                     success = result is not None and result['success']
-            else:
-                self.get_logger().error(f"Unknown recipe action: {action!r}")
 
             if success:
                 self.get_logger().info(f"Step {i+1} completed successfully.")
