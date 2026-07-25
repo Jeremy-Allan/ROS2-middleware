@@ -1,0 +1,12 @@
+string object_id
+string destination_id
+bool plan_only
+---
+bool success
+int32 error_code
+string message
+string failed_stage
+uint32 solutions_found
+---
+string current_stage
+uint32 solutions_found

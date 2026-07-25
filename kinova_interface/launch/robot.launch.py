@@ -1,13 +1,11 @@
 import sys
-import os
-import pathlib
-from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
+from moveit_configs_utils import MoveItConfigsBuilder
 import launch.logging
 
 def check_hardware_args(context, *args, **kwargs):
@@ -44,7 +42,56 @@ def launch_setup(context, *args, **kwargs):
         return args
 
     recipe = LaunchConfiguration('recipe')
+    robot_ip = LaunchConfiguration('robot_ip')
+    use_fake_hardware = LaunchConfiguration('use_fake_hardware')
+    gripper_max_velocity = LaunchConfiguration('gripper_max_velocity')
+    gripper_max_force = LaunchConfiguration('gripper_max_force')
+    use_sim_time = LaunchConfiguration('use_sim_time')
+    allow_mtc_execution = LaunchConfiguration('allow_mtc_execution')
+    mtc_execution_timeout_sec = LaunchConfiguration('mtc_execution_timeout_sec')
+    mtc_planning_timeout_sec = LaunchConfiguration('mtc_planning_timeout_sec')
     env_dir = PathJoinSubstitution([FindPackageShare('kinova_interface'), 'data', 'configs', 'env'])
+    manipulation_config = PathJoinSubstitution([env_dir, 'manipulation_objects.json'])
+
+    moveit_config = (
+        MoveItConfigsBuilder(
+            'gen3_lite_gen3_lite_2f',
+            package_name='kinova_gen3_lite_moveit_config'
+        )
+        .robot_description(mappings={
+            'robot_ip': robot_ip,
+            'use_fake_hardware': use_fake_hardware,
+            'gripper': 'gen3_lite_2f',
+            'gripper_joint_name': 'right_finger_bottom_joint',
+            'dof': '6',
+            'gripper_max_velocity': gripper_max_velocity,
+            'gripper_max_force': gripper_max_force,
+        })
+        .trajectory_execution(file_path='config/moveit_controllers.yaml')
+        .planning_scene_monitor(
+            publish_robot_description=True,
+            publish_robot_description_semantic=True
+        )
+        .planning_pipelines(pipelines=['ompl', 'pilz_industrial_motion_planner'])
+        .to_moveit_configs()
+    )
+    moveit_config.moveit_cpp.update({
+        'use_sim_time': use_sim_time.perform(context).lower() == 'true'
+    })
+
+    move_group_node = Node(
+        package='moveit_ros_move_group',
+        executable='move_group',
+        name='move_group',
+        output='screen',
+        parameters=[
+            moveit_config.to_dict(),
+            {
+                'capabilities': 'move_group/ExecuteTaskSolutionCapability',
+                'use_sim_time': use_sim_time,
+            },
+        ],
+    )
 
     environment_mapping_node = Node(
         package='kinova_interface',
@@ -60,6 +107,7 @@ def launch_setup(context, *args, **kwargs):
         executable='hardware_interface_client',
         name='kinova_hardware_client',
         output='log',
+        parameters=[{'use_fake_hardware': use_fake_hardware}],
         ros_arguments=get_ros_args('kinova_hardware_client')
     )
 
@@ -80,7 +128,34 @@ def launch_setup(context, *args, **kwargs):
         ros_arguments=get_ros_args('telemetry_node')
     )
 
-    return [environment_mapping_node, hardware_interface_client, json_parser_node, telemetry_node]
+    # Keep ``name`` unset: on Humble launch_ros then writes dictionary
+    # parameters under /**. This process contains both the rclpy action node
+    # and MTC's embedded rclcpp planning node, and both require these values.
+    mtc_task_node = Node(
+        package='kinova_interface',
+        executable='mtc_task_node',
+        output='screen',
+        parameters=[
+            moveit_config.to_dict(),
+            {
+                'manipulation_config': manipulation_config,
+                'use_sim_time': use_sim_time,
+                'allow_mtc_execution': allow_mtc_execution,
+                'mtc_execution_timeout_sec': mtc_execution_timeout_sec,
+                'mtc_planning_timeout_sec': mtc_planning_timeout_sec,
+            },
+        ],
+        ros_arguments=get_ros_args('mtc_task_node')
+    )
+
+    return [
+        move_group_node,
+        environment_mapping_node,
+        hardware_interface_client,
+        json_parser_node,
+        telemetry_node,
+        mtc_task_node,
+    ]
 
 def generate_launch_description():
     debug_mode_arg = DeclareLaunchArgument(
@@ -119,6 +194,45 @@ def generate_launch_description():
         description='Whether to use fake hardware (simulation) or physical hardware. Default value is true'
     )
 
+    gripper_max_velocity_arg = DeclareLaunchArgument(
+        'gripper_max_velocity',
+        default_value='100.0',
+        description='Maximum Gen3 Lite gripper velocity percentage'
+    )
+
+    gripper_max_force_arg = DeclareLaunchArgument(
+        'gripper_max_force',
+        default_value='100.0',
+        description='Maximum Gen3 Lite gripper force percentage'
+    )
+
+    use_sim_time_arg = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='false',
+        description='Use simulated ROS time'
+    )
+
+    allow_mtc_execution_arg = DeclareLaunchArgument(
+        'allow_mtc_execution',
+        default_value='false',
+        description=(
+            'Permit non-plan-only MTC goals. The manipulation config must also '
+            'have commissioned=true.'
+        )
+    )
+
+    mtc_execution_timeout_arg = DeclareLaunchArgument(
+        'mtc_execution_timeout_sec',
+        default_value='300.0',
+        description='Deadline for complete MTC solution execution'
+    )
+
+    mtc_planning_timeout_arg = DeclareLaunchArgument(
+        'mtc_planning_timeout_sec',
+        default_value='120.0',
+        description='Overall wall-time deadline for MTC task planning'
+    )
+
     robot_ip = LaunchConfiguration('robot_ip')
     use_fake_hardware = LaunchConfiguration('use_fake_hardware')
 
@@ -139,21 +253,9 @@ def generate_launch_description():
             'gripper': 'gen3_lite_2f',
             'controllers_file': 'ros2_controllers.yaml',
             'gripper_joint_name': 'right_finger_bottom_joint',
-            'robot_hand_controller': 'gen3_lite_2f_gripper_controller'
-        }.items()
-    )
-
-    # 2. Start MoveIt 2
-    move_group_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            PathJoinSubstitution([
-                FindPackageShare('kinova_gen3_lite_moveit_config'),
-                'launch',
-                'move_group.launch.py'
-            ])
-        ]),
-        launch_arguments={
-            'use_fake_hardware': use_fake_hardware
+            'robot_hand_controller': 'gen3_lite_2f_gripper_controller',
+            'gripper_max_velocity': LaunchConfiguration('gripper_max_velocity'),
+            'gripper_max_force': LaunchConfiguration('gripper_max_force')
         }.items()
     )
 
@@ -165,8 +267,13 @@ def generate_launch_description():
         recipe_arg,
         robot_ip_arg,
         use_fake_hardware_arg,
+        gripper_max_velocity_arg,
+        gripper_max_force_arg,
+        use_sim_time_arg,
+        allow_mtc_execution_arg,
+        mtc_execution_timeout_arg,
+        mtc_planning_timeout_arg,
         OpaqueFunction(function=check_hardware_args),
         kortex_control_launch,
-        move_group_launch,
         OpaqueFunction(function=launch_setup)
     ])

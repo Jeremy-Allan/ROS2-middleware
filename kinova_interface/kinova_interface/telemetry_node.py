@@ -36,6 +36,18 @@ class TelemetryNode(Node):
         
         # Registry to track status of each node
         self.tracked_nodes = {}
+        self.declare_parameter(
+            'required_status_nodes',
+            [
+                'environment_mapping_node',
+                'kinova_hardware_client',
+                'json_parser_node',
+                'mtc_task_node',
+            ],
+        )
+        self.required_status_nodes = set(
+            self.get_parameter('required_status_nodes').value
+        )
         
         # Stale heartbeat timeout (1.5 seconds)
         self.heartbeat_timeout = Duration(seconds=1.5)
@@ -186,11 +198,16 @@ class TelemetryNode(Node):
         has_busy = False
         has_fault = False
 
-        # If zero nodes have checked in yet, flag as system fault (not ready)
-        if not self.tracked_nodes:
-            summary.summary_state = SystemSummary.SYSTEM_FAULT
-            self.pub.publish(summary)
-            return
+        missing_nodes = self.required_status_nodes.difference(self.tracked_nodes)
+        if missing_nodes:
+            has_fault = True
+            for node_name in sorted(missing_nodes):
+                missing = ExtendedStatus()
+                missing.node_name = node_name
+                missing.state = ExtendedStatus.STATE_FAULT
+                missing.status_message = "Required node has not reported status"
+                missing.last_command_valid = False
+                summary.individual_states.append(missing)
 
         for node_name, info in self.tracked_nodes.items():
             msg = info["msg"]
@@ -210,6 +227,8 @@ class TelemetryNode(Node):
                 has_fault = True
             elif msg.state == ExtendedStatus.STATE_BUSY:
                 has_busy = True
+            elif not msg.last_command_valid:
+                has_fault = True
 
             summary.individual_states.append(msg)
 

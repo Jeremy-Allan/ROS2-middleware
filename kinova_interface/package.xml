@@ -2,18 +2,18 @@
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>kinova_interface</name>
-  <version>0.0.0</version>
+  <version>0.1.0</version>
   <description>Kinova Kortex ROS2 Middleware Interface</description>
   <maintainer email="jeremyallan@todo.todo">jeremyallan</maintainer>
   <license>Apache License 2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
   
-  <buildtool_depend>rosidl_default_generators</buildtool_depend>
-  <exec_depend>rosidl_default_runtime</exec_depend>
-  <member_of_group>rosidl_interface_packages</member_of_group>
-
+  <depend>action_msgs</depend>
+  <depend>controller_manager_msgs</depend>
+  <exec_depend>rclcpp</exec_depend>
   <depend>rclpy</depend>
+  <depend>std_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>moveit_msgs</depend>
   <depend>shape_msgs</depend>
@@ -22,12 +22,22 @@
   <depend>tf2_ros</depend>
   <depend>rcl_interfaces</depend>
   <depend>ament_index_python</depend>
+  <exec_depend>kinova_gen3_lite_moveit_config</exec_depend>
+  <exec_depend>kortex_bringup</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>moveit_ros_move_group</exec_depend>
+  <exec_depend>moveit_task_constructor_capabilities</exec_depend>
+  <exec_depend>moveit_task_constructor_core</exec_depend>
+  <exec_depend>moveit_task_constructor_msgs</exec_depend>
+  <exec_depend>py_binding_tools</exec_depend>
 
   <!-- Custom Services Package -->
   <depend>kinova_interfaces</depend>
   <depend>example_interfaces</depend>
+
+  <test_depend>ament_pytest</test_depend>
 
   <export>
     <build_type>ament_python</build_type>

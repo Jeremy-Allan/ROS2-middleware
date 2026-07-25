@@ -5,14 +5,14 @@
     {
       "step_id": 1,
       "action": "move_arm",
-      "parameters": { "target": "red_cube_pickup" },
+      "parameters": { "target": "red_cube" },
       "description": "Move to red cube pickup position"
     },
     {
       "step_id": 2,
       "action": "gripper",
       "parameters": { "position": 0.0 },
-      "description": "Close gripper"
+      "description": "Open gripper"
     }
   ]
 }

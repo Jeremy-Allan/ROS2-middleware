@@ -1,6 +1,8 @@
 # Swinburne Lab: Kinova Gen3 Lite - ROS 2 Unified Controller
 
-This repository contains a modular ROS 2 middleware for controlling the Kinova Gen3 Lite robotic arm. It has evolved from a simple manual CLI to a distributed "Supervisor" architecture that uses JSON recipes for automated task execution.
+This repository contains modular ROS 2 middleware for controlling the Kinova Gen3 Lite robotic arm. It includes an atomic MoveIt Task Constructor (MTC) pick-and-place path so that grasp approach, lift, lower, and retreat motions are planned as constrained Cartesian stages instead of unrelated position-only goals.
+
+Read [the MTC integration and commissioning guide](docs/MTC_INTEGRATION.md) before changing manipulation geometry or executing on physical hardware.
 
 ---
 
@@ -14,16 +16,31 @@ Ensure your host machine meets the following requirements prior to building the 
 ```
 External Requisite: LLM Proxy repository (not in this repo)
 
+The ROS workspace must also provide the Humble versions of
+`moveit_task_constructor_core`, `moveit_task_constructor_capabilities`,
+`py_binding_tools`, `kortex_bringup`, and
+`kinova_gen3_lite_moveit_config`. The Python implementation was checked
+against MTC `humble` commit
+`756634951326ae17ae099882f7110c6f1d0a98c0`; build that source in the same
+MoveIt overlay. The executor intentionally refuses to start unless the
+repository patch
+`patches/moveit_task_constructor_humble_release_gil.patch` has been applied.
+Use the ROS 2 branch of `py_binding_tools` pinned at
+`8918f0ece3d7977a4963c54472531906e01e40c2`, then run the ABI smoke test in
+the integration guide. Do not assume an older Humble binary exposes the same
+bindings, and do not mix Rolling bindings with Humble libraries.
+
 ---
 
 ## Distributed Architecture
 
-The middleware is split into four specialized nodes that communicate over the ROS 2 network:
+The middleware is split into five specialized nodes that communicate over the ROS 2 network:
 
 1.  **Hardware Interface Server (`hardware_interface_client.py`):** Acts as the "Muscle." It provides low-level Action Clients for MoveIt 2 (Arm) and the Gripper Controller. It also monitors physical hardware faults and reports execution failures (like planning errors or timeouts).
 2.  **Environment Mapping Node (`environment_mapping_node.py`):** Acts as the database node mapping coordinate positions to semantic names. It provides coordinate lookup, relative movement vectors, and robot parameters via custom services.
 3.  **JSON Parser Node (`json_parser_node.py`):** Acts as the "Brain" or "Supervisor." It reads a high-level `task_recipe.json`, fetches target coordinates, and orchestrates the step-by-step movement sequence.
 4.  **Telemetry & Diagnostics Node (`telemetry_node.py`):** Acts as the "Monitor." It aggregates status heartbeats from all nodes, flags timeouts if any node crashes, and handles physical robot fault resets.
+5.  **MTC Task Node (`mtc_task_node.py`):** Serves the cancellable `/mtc_task_node/pick_place` action. It validates object geometry and calibrated TCP poses, builds a complete MTC task, publishes the best solution for inspection, and optionally executes it.
 
 ---
 
@@ -43,6 +60,7 @@ The Kinova Gen3 Lite middleware enforces a strict execution contract to ensure s
   - move_gripper
   - relative_move
   - home_arm
+  - pick_and_place
 
 - Execution is strictly sequential unless explicitly parallelised via executor policy.
 
@@ -60,9 +78,9 @@ This contract defines the boundary between task intent and physical actuation.
 ## Features & Capabilities
 
 *   **Automated Recipes:** Define a sequence of tasks (pick, place, home) in a standard JSON format.
-*   **Object-Based Targeting:** Instead of raw coordinates, tell the robot to move to `"red_cube_pickup"`. The system resolves the physical location via the Environment Mapping Node.
-*   **Real-time Parameter Updates:** Update object coordinates in the Environment Mapping Node without restarting the supervisor
-*   .
+*   **Object-Based Targeting:** Instead of raw coordinates, request configured IDs such as `"red_cube"` and `"delivery_tray"`.
+*   **Atomic Pick and Place:** MTC plans collision-object insertion, calibrated grasp IK, gripper contact, attachment, transfer, detachment, and retreat as one coherent task.
+*   **Deterministic Near-Object Motion:** Cartesian approach/lift/lower/retreat stages enforce the configured axes and full path fraction; OMPL remains responsible for collision-aware free-space connections.
 *   **Smart Threading:** Uses `MultiThreadedExecutor` and `threading.Event()` to ensure one action completes before the next begins.
 *   **MoveIt 2 Integration:** Full path planning and self-collision avoidance are handled automatically.
 *   **Centralized Telemetry & Heartbeats (New):** Nodes report their state (IDLE, BUSY, FAULT) at 2Hz to `/status/node_report`. If any node stops responding for more than 1.5 seconds, the system flags a heartbeat timeout and transitions to a global fault state.
@@ -203,7 +221,8 @@ Ensure your ROS 2 workspace is built and sourced before running. Execute the fol
 
 ```bash
 cd ~/workspace/ros2_kortex_ws
-colcon build --packages-select kinova_interface kinova_interfaces
+rosdep install --from-paths src --ignore-src --rosdistro humble -r -y
+colcon build --packages-up-to kinova_interface
 source install/setup.bash
 ```
 
@@ -223,14 +242,16 @@ Once that's exported, you can launch the entire stack (Hardware, MoveIt, RViz, a
 # Launch in simulation mode waiting for recipe service calls
 ros2 launch kinova_interface robot.launch.py
 
-# Launch on physical hardware (REQUIRES robot_ip)
+# Launch on physical hardware; MTC execution remains disabled by default
 ros2 launch kinova_interface robot.launch.py use_fake_hardware:=false robot_ip:=192.168.1.10
 
-# Launch and immediately execute a specific static recipe
+# Launch a plan-only static recipe
 ros2 launch kinova_interface robot.launch.py recipe:=task_recipe.json
 
-# Execute recipe on the physical robot
-ros2 launch kinova_interface robot.launch.py use_fake_hardware:=false robot_ip:=192.168.1.10 recipe:=task_recipe.json
+# Only after commissioning and setting plan_only=false in the recipe:
+# enable physical execution for a static recipe
+ros2 launch kinova_interface robot.launch.py use_fake_hardware:=false \
+  robot_ip:=192.168.1.10 allow_mtc_execution:=true recipe:=task_recipe.json
 ```
 
 ### New Launch Parameters for Logging & Debugging
@@ -263,50 +284,60 @@ If you set `use_fake_hardware:=false` to connect to the physical robot, you **MU
 ---
 ## The JSON Recipe Contract
 
-Tasks are defined in a strict JSON format. The JSON Parser reads these steps sequentially.
-Simple Example 'recipe_l1_single_move.json':
+Tasks use an ordered JSON `steps` array. Pick-and-place must be expressed as
+one atomic action rather than separate move/gripper/relative-move steps:
+
 ```json
 {
-  "recipe_name": "L1 - Single Move",
-  "description": "Moves the arm to a single known object position",
+  "recipe_name": "MTC plan-only check",
   "steps": [
     {
       "step_id": 1,
-      "action": "move_arm",
-      "parameters": { "target": "red_cube_pickup" },
-      "description": "Move to red cube pickup position"
+      "action": "pick_and_place",
+      "parameters": {
+        "object": "red_cube",
+        "destination": "delivery_tray",
+        "plan_only": true
+      },
+      "description": "Plan and publish a complete task without moving the robot"
     }
   ]
 }
 ```
-Complex Routine Example 'task_recipe.json' snippet:
+
+After plan-only, RViz, fake-hardware, and commissioning checks pass, set
+`commissioned` to `true` in `manipulation_objects.json`, launch with
+`allow_mtc_execution:=true`, and set the recipe's `plan_only` to `false`.
+Both execution gates are required. The action result includes a MoveIt error
+code, failed stage, message, and complete-solution count. Legacy actions
+remain available for manual/backwards-compatible workflows: `home`,
+`move_arm`, `relative_move`, and `gripper`; direct gripper positions are
+restricted to `0.0` through `0.85`.
+
+The same action can be called directly:
+
+```bash
+ros2 action send_goal /mtc_task_node/pick_place \
+  kinova_interfaces/action/PickPlace \
+  "{object_id: red_cube, destination_id: delivery_tray, plan_only: true}" \
+  --feedback
+```
+
+Dynamic recipes still use `/execute_recipe`:
+
 ```json
 {
-  "recipe_name": "Object Collection Routine",
+  "recipe_name": "Object collection",
   "steps": [
     {
-      "step_id": 3,
-      "action": "move_arm",
+      "step_id": 1,
+      "action": "pick_and_place",
       "parameters": {
-        "target": "red_cube_pickup"
+        "object": "red_cube",
+        "destination": "delivery_tray",
+        "plan_only": false
       },
-      "description": "Navigate to the red cube"
-    },
-    {
-      "step_id": 4,
-      "action": "gripper",
-      "parameters": {
-        "position": 0.0
-      },
-      "description": "Close fingers"
-    },
-    {
-      "step_id": 5,
-      "action": "relative_move",
-      "parameters": {
-        "vector": "move_upwards"
-      },
-      "description": "Lift the cube slightly"
+      "description": "Execute the commissioned complete task"
     }
   ]
 }
@@ -315,65 +346,30 @@ Complex Routine Example 'task_recipe.json' snippet:
 
 ## Runtime Execution Guarantees
 
-The middleware enforces deterministic execution semantics.
+The recipe supervisor executes steps in order and stops at the first failed
+step. Service/action waits have finite deadlines. The MTC server accepts only
+one task at a time, supports cancellation, returns the exact task failure it
+can identify, and never executes a `plan_only` goal.
 
-### Guarantees
-- Steps execute strictly in declared order
-- Each step must complete before the next begins
-- Failed steps do NOT propagate silently
-- Partial execution states are explicitly tracked
+For MTC, this guarantee applies to the configured Cartesian near-object
+segments. Sampling-based free-space `Connect` stages may still find different
+collision-free transfers between runs.
 
-### Execution State Model
-Each task maintains the following states:
-- PENDING
-- RUNNING
-- COMPLETED
-- FAILED
-- ABORTED
+The MTC configuration loader rejects unsafe/missing geometry, zero or
+non-normalized quaternions, zero direction vectors, out-of-range gripper
+positions, and unknown IDs before task construction. MoveIt checks the full
+task against the robot model and planning scene. Hardware limits, the Kortex
+fault controller, lab procedures, and an accessible emergency stop remain
+independent safety layers.
 
-### Determinism Constraint
-Given identical input recipes and environment state, execution behaviour remains consistent unless:
-- Physical hardware constraints intervene
-- ROS2 planning failure occurs
-- External interruption is triggered
-
----
-
-## Safety Model
-
-This middleware enforces a multi-layer safety system across planning and execution.
-
-### Safety Layers
-
-#### 1. Schema Validation Layer
-- Rejects malformed or incomplete JSON structures
-
-#### 2. Action Whitelist Layer
-- Only pre-approved actions are executable
-
-#### 3. Motion Planning Layer
-- Enforces collision avoidance
-- Validates movement feasibility
-
-#### 4. Execution Guard Layer
-- Prevents simultaneous conflicting commands
-- Ensures single active execution thread per robot
-
-#### 5. Hardware Protection Layer
-- Enforces joint limits
-- Prevents unsafe velocity or torque commands
-
-### Emergency Behaviour
-If a safety violation is detected:
-- Execution is immediately halted
-- Robot transitions to safe idle state
-- Error is propagated upstream via ROS diagnostics
-
-### Safety Contract
-- No action bypasses MoveIt planning layer.
-- No raw joint commands are accepted from external sources.
-- All movements are collision-checked before execution.
-- Execution halts immediately on invalid or missing parameters.
+The MTC server and legacy low-level services share one host-level OS motion
+lease, so these middleware processes cannot command the robot concurrently.
+All command-producing nodes must run on the same host and use the same
+`motion_lock_path`; direct controller clients outside this middleware still
+require ROS/DDS access control. After cancellation or execution failure while
+an object may be attached, the lease is deliberately retained. Do not restart
+or retry until the real robot state and planning-scene attachment have been
+reconciled.
 
 ---
 
@@ -382,7 +378,8 @@ If a safety violation is detected:
 *   **Recipes:** Found in `recipes/task_recipe.json`. Defines the steps.
 *   **Coordinates:** Found in `data/configs/env/coordinate_dictionary.json`. Maps object names to `X, Y, Z`.
 *   **Relative Movements:** Found in `data/configs/env/relative_movement.json`. Maps movement names to `X, Y, Z`.
-*   **Obstacles:** Found in `data/obstacles.json`. Defines the physical obstacles spawned in MoveIt's planning scene.
+*   **Obstacles:** Found in `data/configs/env/obstacles.json`. Defines static collision objects.
+*   **MTC Manipulation Objects:** Found in `data/configs/env/manipulation_objects.json`. Defines strict, versioned robot names, object collision geometry, normalized grasp/place quaternions, Cartesian directions/distances, touch links, planner settings, and gripper limits.
 
 ---
 
@@ -393,6 +390,9 @@ The middleware is considered operational only if all conditions are satisfied:
 - ROS2 core is running and responsive
 - All middleware nodes are active and registered
 - MoveIt planning pipeline is operational
+- `/execute_task_solution` is available from `move_group/ExecuteTaskSolutionCapability`
+- The MTC Python ABI smoke test passes and `mtc_task_node` is reporting a heartbeat
+- The selected object/destination configuration and calibration are valid
 - Environment mapping service responds correctly
 - JSON parser node successfully executes test recipe
 - No unresolved ROS2 service exceptions exist

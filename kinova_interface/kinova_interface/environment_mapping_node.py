@@ -1,11 +1,9 @@
 import json
-import os
 import time
 import threading
 import rclpy
 from pathlib import Path
 from rclpy.node import Node
-from ament_index_python.packages import get_package_share_directory
 from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement
 from moveit_msgs.msg import PlanningScene, CollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
@@ -43,6 +41,8 @@ class EnvironmentMappingNode(Node):
 
         self.scene_client = self.create_client(ApplyPlanningScene, '/apply_planning_scene')
 
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = "Waiting to apply the static collision scene"
         self.scene_thread = threading.Thread(target=self.publish_planning_scene, daemon=True)
         self.scene_thread.start()
 
@@ -84,8 +84,7 @@ class EnvironmentMappingNode(Node):
             raise SystemExit(1)
 
     def load_obstacles(self):
-        pkg_share = get_package_share_directory('kinova_interface')
-        json_path = os.path.join(pkg_share, 'data', 'configs', 'env','obstacles.json')
+        json_path = Path(self.config_dir) / 'obstacles.json'
         try:
             with open(json_path, 'r') as file:
                 obstacles = json.load(file)
@@ -169,35 +168,62 @@ class EnvironmentMappingNode(Node):
 
     def publish_planning_scene(self):
         self.get_logger().info('Waiting for /apply_planning_scene service...')
-        if not self.scene_client.wait_for_service(timeout_sec=15.0):
-            self.get_logger().warn('/apply_planning_scene not available. MoveIt may not be running. Skipping planning scene setup.')
-            return
+        while rclpy.ok():
+            if not self.scene_client.wait_for_service(timeout_sec=2.0):
+                self.status_text = "Waiting for MoveIt planning-scene service"
+                self.command_success = False
+                continue
 
-        self.get_logger().info('MoveIt ready. Publishing collision objects to planning scene...')
-        time.sleep(1.0)
-
-        scene = PlanningScene()
-        scene.is_diff = True
-
-        for obstacle in self.obstacles:
-            obj = self.build_collision_object(obstacle)
-            scene.world.collision_objects.append(obj)
-            self.get_logger().info(f"Adding obstacle: '{obstacle['id']}' - {obstacle['description']}")
-
-        request = ApplyPlanningScene.Request()
-        request.scene = scene
-
-        future = self.scene_client.call_async(request)
-
-        while rclpy.ok() and not future.done():
-            time.sleep(0.1)
-
-        if future.result() is not None and future.result().success:
-            self.get_logger().info(f'Planning scene updated with {len(self.obstacles)} obstacle(s).')
+            scene = PlanningScene()
+            scene.is_diff = True
             for obstacle in self.obstacles:
-                self.get_logger().info(f"  '{obstacle['id']}' at x={obstacle['position']['x']}, y={obstacle['position']['y']}, z={obstacle['position']['z']}")
-        else:
-            self.get_logger().error('Failed to apply planning scene.')
+                scene.world.collision_objects.append(
+                    self.build_collision_object(obstacle)
+                )
+
+            request = ApplyPlanningScene.Request()
+            request.scene = scene
+            future = self.scene_client.call_async(request)
+            deadline = time.monotonic() + 15.0
+            while (
+                rclpy.ok()
+                and not future.done()
+                and time.monotonic() < deadline
+            ):
+                time.sleep(0.1)
+
+            try:
+                result = future.result() if future.done() else None
+            except Exception as exc:
+                self.get_logger().error(
+                    f"Planning-scene request failed: {exc}"
+                )
+                result = None
+
+            if result is not None and result.success:
+                self.current_state = ExtendedStatus.STATE_IDLE
+                self.status_text = (
+                    f"Planning scene ready with {len(self.obstacles)} obstacle(s)"
+                )
+                self.command_success = True
+                self.publish_status()
+                self.get_logger().info(self.status_text)
+                return
+
+            if not future.done():
+                future.cancel()
+                self.get_logger().error(
+                    "Timed out applying the planning scene; retrying"
+                )
+            else:
+                self.get_logger().error(
+                    "MoveIt rejected the planning scene; retrying"
+                )
+            self.current_state = ExtendedStatus.STATE_FAULT
+            self.status_text = "Static planning scene is not ready; retrying"
+            self.command_success = False
+            self.publish_status()
+            time.sleep(2.0)
 
 
 def main(args=None):

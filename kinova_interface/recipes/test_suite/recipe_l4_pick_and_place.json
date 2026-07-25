@@ -1,6 +1,6 @@
 {
   "recipe_name": "L4 - Full Pick and Place",
-  "description": "Complete pick and place sequence with relative move",
+  "description": "Complete atomic MoveIt Task Constructor pick and place",
   "steps": [
     {
       "step_id": 1,
@@ -9,42 +9,16 @@
     },
     {
       "step_id": 2,
-      "action": "gripper",
-      "parameters": { "position": 1.0 },
-      "description": "Open gripper"
+      "action": "pick_and_place",
+      "parameters": {
+        "object": "red_cube",
+        "destination": "delivery_tray",
+        "plan_only": false
+      },
+      "description": "Run the complete MTC pick/place task"
     },
     {
       "step_id": 3,
-      "action": "move_arm",
-      "parameters": { "target": "red_cube_pickup" },
-      "description": "Move to red cube pickup position"
-    },
-    {
-      "step_id": 4,
-      "action": "gripper",
-      "parameters": { "position": 0.0 },
-      "description": "Close gripper to grab cube"
-    },
-    {
-      "step_id": 5,
-      "action": "relative_move",
-      "parameters": { "vector": "move_upwards" },
-      "description": "Lift cube upwards"
-    },
-    {
-      "step_id": 6,
-      "action": "move_arm",
-      "parameters": { "target": "delivery_tray" },
-      "description": "Move to delivery tray"
-    },
-    {
-      "step_id": 7,
-      "action": "gripper",
-      "parameters": { "position": 1.0 },
-      "description": "Release cube into tray"
-    },
-    {
-      "step_id": 8,
       "action": "home",
       "description": "Return to home position"
     }

@@ -1,0 +1,40 @@
+diff --git a/core/python/bindings/src/core.cpp b/core/python/bindings/src/core.cpp
+index 01e94c0..bf8b15a 100644
+--- a/core/python/bindings/src/core.cpp
++++ b/core/python/bindings/src/core.cpp
+@@ -79,6 +79,8 @@ void setForwardedProperties(Stage& self, const py::object& names) {
+ }  // anonymous namespace
+ 
+ void export_core(pybind11::module& m) {
++	m.attr("blocking_calls_release_gil") = true;
++
+ 	/// translate InitStageException into InitStageError
+ 	PYBIND11_CONSTINIT static py::gil_safe_call_once_and_store<py::object> exc_storage;
+ 	exc_storage.call_once_and_store_result([&]() { return py::exception<InitStageException>(m, "InitStageError"); });
+@@ -413,6 +415,8 @@ void export_core(pybind11::module& m) {
+ 	    .def_property_readonly("solutions", &Task::solutions, "Successful Solutions of the stage (read-only)")
+ 	    .def_property_readonly("failures", &Task::failures, "Solutions: Failed Solutions of the stage (read-only)")
+ 	    .def_property("name", &Task::name, &Task::setName, "str: name of the task displayed e.g. in rviz")
++	    .def_property("timeout", &Task::timeout, &Task::setTimeout,
++	                  "float: Maximum wall time [s] for overall task planning")
+ 
+ 	    .def("loadRobotModel", &Task::loadRobotModel, "node"_a, "robot_description"_a = "robot_description",
+ 	         "Load robot model from given ROS parameter")
+@@ -470,13 +474,15 @@ void export_core(pybind11::module& m) {
+ 	    .def("init", py::overload_cast<>(&Task::init), "Initialize the task (and all its stages)")
+ 	    .def("plan", &Task::plan, "max_solutions"_a = 0, R"(
+ 			Reset, init, and plan. Planning is limited to ``max_allowed_solutions``.
+-			Returns if planning was successful.)")
++			Returns if planning was successful.)",
++	         py::call_guard<py::gil_scoped_release>())
+ 	    .def("preempt", &Task::preempt, "Interrupt current planning (or execution)")
+ 	    .def(
+ 	        "publish",
+ 	        [](Task& self, const SolutionBasePtr& solution) { self.introspection().publishSolution(*solution); },
+ 	        "solution"_a, "Publish the given solution to the ROS topic ``solution``")
+-	    .def("execute", &Task::execute, "solution"_a, "Send given solution to ``move_group`` node for execution");
++	    .def("execute", &Task::execute, "solution"_a, "Send given solution to ``move_group`` node for execution",
++	         py::call_guard<py::gil_scoped_release>());
+ }
+ }  // namespace python
+ }  // namespace moveit

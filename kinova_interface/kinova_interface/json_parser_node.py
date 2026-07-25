@@ -1,4 +1,6 @@
 import rclpy
+from action_msgs.msg import GoalStatus
+from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 import time
@@ -6,6 +8,7 @@ import os
 import json
 from ament_index_python.packages import get_package_share_directory
 #Services
+from kinova_interfaces.action import PickPlace
 from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, ExecuteRecipe, HomeArm, MoveArm, MoveGripper, RelativeMove
 from kinova_interfaces.msg import ExtendedStatus
 
@@ -18,24 +21,49 @@ class JsonParser:
     def load_recipe_from_file(self, recipe_path):
         try:
             with open(recipe_path, 'r') as f:
-                self.recipe = json.load(f)
+                recipe = json.load(f)
+            self._set_recipe(recipe)
             return True
         except Exception as e:
+            self.recipe = None
             self.node.get_logger().error(f"Error loading Recipe JSON file: {e}")
             return False
 
     def load_recipe_from_service(self, recipe_str):
         try:
-            self.recipe = json.loads(recipe_str)
+            recipe = json.loads(recipe_str)
+            self._set_recipe(recipe)
             return True
         except Exception as e:
+            self.recipe = None
             self.node.get_logger().error(f"Error loading Recipe JSON string: {e}")
             return False
 
+    def _set_recipe(self, recipe):
+        if not isinstance(recipe, dict):
+            raise ValueError("recipe root must be a JSON object")
+        if 'steps' not in recipe:
+            raise ValueError("recipe root must contain a 'steps' array")
+        steps = recipe['steps']
+        if not isinstance(steps, list):
+            raise ValueError("recipe.steps must be a JSON array")
+        for index, step in enumerate(steps):
+            if not isinstance(step, dict):
+                raise ValueError(
+                    f"recipe.steps[{index}] must be a JSON object"
+                )
+        recipe_name = recipe.get('recipe_name')
+        if recipe_name is not None and (
+            not isinstance(recipe_name, str) or not recipe_name.strip()
+        ):
+            raise ValueError("recipe.recipe_name must be a non-empty string")
+        self.recipe = recipe
+
     def get_recipe_steps(self):
-        if not self.recipe:
+        if not isinstance(self.recipe, dict):
             return []
-        return self.recipe.get('steps', [])
+        steps = self.recipe.get('steps')
+        return steps if isinstance(steps, list) else []
 
 class JsonParserNode(Node):
     """ROS 2 Node that orchestrates tasks based on a JSON recipe."""
@@ -53,6 +81,12 @@ class JsonParserNode(Node):
         self.move_arm_client = self.create_client(MoveArm, '/kinova_hardware_client/move_arm', callback_group=self.cb_group)
         self.move_gripper_client = self.create_client(MoveGripper, '/kinova_hardware_client/move_gripper', callback_group=self.cb_group)
         self.relative_move_client = self.create_client(RelativeMove, '/kinova_hardware_client/relative_move', callback_group=self.cb_group)
+        self.pick_place_client = ActionClient(
+            self,
+            PickPlace,
+            '/mtc_task_node/pick_place',
+            callback_group=self.cb_group,
+        )
 
         # Service clients for coordinate fetching
         self.coord_client = self.create_client(GetObjectCoordinates, '/get_coordinates', callback_group=self.cb_group)
@@ -76,6 +110,12 @@ class JsonParserNode(Node):
 
         # 5. Declare and get the recipe parameter
         self.declare_parameter('recipe', 'none')
+        self.declare_parameter('service_timeout_sec', 120.0)
+        self.declare_parameter('pick_place_timeout_sec', 600.0)
+        self.service_timeout_sec = self.get_parameter('service_timeout_sec').value
+        self.pick_place_timeout_sec = self.get_parameter('pick_place_timeout_sec').value
+        if self.service_timeout_sec <= 0.0 or self.pick_place_timeout_sec <= 0.0:
+            raise ValueError("Recipe service/action timeouts must be positive")
         recipe_file = self.get_parameter('recipe').get_parameter_value().string_value
         
         recipe_path = None
@@ -100,16 +140,104 @@ class JsonParserNode(Node):
             else:
                 self.get_logger().error(f"Failed to load recipe from {recipe_path}")
 
-    def wait_for_future(self, future, service_name):
-        """Safely wait for an async service call future to complete without deadlocking the executor."""
+    def wait_for_future(self, future, service_name, timeout_sec=None):
+        """Wait for an async result with a finite deadline."""
+        timeout = self.service_timeout_sec if timeout_sec is None else timeout_sec
+        deadline = time.monotonic() + timeout
         while rclpy.ok() and not future.done():
-            time.sleep(0.01) # Yields thread control temporarily to the executor mechanics
+            if time.monotonic() >= deadline:
+                future.cancel()
+                self.get_logger().error(
+                    f"Timed out after {timeout:.1f}s waiting for {service_name}"
+                )
+                return None
+            time.sleep(0.01)
 
         if future.done():
-            return future.result()
+            try:
+                return future.result()
+            except Exception as exc:
+                self.get_logger().error(
+                    f"{service_name} completed with an exception: {exc}"
+                )
+                return None
         else:
             self.get_logger().error(f"Future for {service_name} was cleared or canceled.")
             return None
+
+    def call_pick_place_action(self, object_id, destination_id, plan_only=False):
+        if not self.pick_place_client.wait_for_server(timeout_sec=10.0):
+            self.get_logger().error("MTC pick/place action server is not available")
+            return None
+
+        goal = PickPlace.Goal()
+        goal.object_id = object_id
+        goal.destination_id = destination_id
+        goal.plan_only = plan_only
+
+        self.get_logger().info(
+            f"Requesting MTC pick/place: {object_id} -> {destination_id} "
+            f"(plan_only={plan_only})"
+        )
+        goal_future = self.pick_place_client.send_goal_async(
+            goal,
+            feedback_callback=self.pick_place_feedback,
+        )
+        goal_handle = self.wait_for_future(
+            goal_future,
+            '/mtc_task_node/pick_place goal',
+            timeout_sec=15.0,
+        )
+        if goal_handle is None or not goal_handle.accepted:
+            self.get_logger().error(
+                "MTC pick/place goal was rejected (invalid configuration or server busy)"
+            )
+            return None
+
+        result_future = goal_handle.get_result_async()
+        result_response = self.wait_for_future(
+            result_future,
+            '/mtc_task_node/pick_place result',
+            timeout_sec=self.pick_place_timeout_sec,
+        )
+        if result_response is None:
+            cancel_future = goal_handle.cancel_goal_async()
+            self.wait_for_future(
+                cancel_future,
+                '/mtc_task_node/pick_place cancellation',
+                timeout_sec=5.0,
+            )
+            return None
+
+        result = result_response.result
+        if (
+            result_response.status == GoalStatus.STATUS_SUCCEEDED
+            and result.success
+        ):
+            return {
+                'success': True,
+                'message': result.message,
+                'solutions_found': result.solutions_found,
+            }
+
+        self.get_logger().error(
+            f"MTC pick/place failed at '{result.failed_stage or 'unknown'}' "
+            f"(MoveIt code {result.error_code}): {result.message}"
+        )
+        return {
+            'success': False,
+            'message': result.message,
+            'failed_stage': result.failed_stage,
+            'error_code': result.error_code,
+        }
+
+    def pick_place_feedback(self, feedback_message):
+        feedback = feedback_message.feedback
+        self.status_text = (
+            f"MTC: {feedback.current_stage} "
+            f"({feedback.solutions_found} solution(s))"
+        )
+        self.publish_status()
 
     def publish_status(self):
         msg = ExtendedStatus()
@@ -283,28 +411,79 @@ class JsonParserNode(Node):
             self.status_text = f"Step {i+1}/{len(steps)}: {step.get('description', '')}"
             self.publish_status()
 
-            action = step['action']
+            action = step.get('action')
             params = step.get('parameters', {})
             success = False
-            if action == 'home':
+            if not isinstance(action, str) or not action:
+                self.get_logger().error(f"Step {i+1} has no valid action")
+            elif not isinstance(params, dict):
+                self.get_logger().error(
+                    f"Step {i+1} parameters must be a JSON object"
+                )
+            elif action == 'home':
                 result = self.call_home_service()
                 success = result is not None and result['success']
             elif action == 'move_arm':
-                target_name = params['target']
-                coords = self.get_static_object_coords(target_name)
-                if coords:
-                    result = self.call_move_service(coords['x'], coords['y'], coords['z'])
-                    success = result is not None and result['success']
+                target_name = params.get('target')
+                if not isinstance(target_name, str) or not target_name:
+                    self.get_logger().error("move_arm requires a string 'target'")
+                else:
+                    coords = self.get_static_object_coords(target_name)
+                    if coords:
+                        result = self.call_move_service(coords['x'], coords['y'], coords['z'])
+                        success = result is not None and result['success']
             elif action == 'relative_move':
-                vector_name = params['vector']
-                vector = self.get_relative_movement_vector(vector_name)
-                if vector:
-                    result = self.call_relative_move_service(vector['x'], vector['y'], vector['z'])
-                    success = result is not None and result['success']
+                vector_name = params.get('vector')
+                if not isinstance(vector_name, str) or not vector_name:
+                    self.get_logger().error(
+                        "relative_move requires a string 'vector'"
+                    )
+                else:
+                    vector = self.get_relative_movement_vector(vector_name)
+                    if vector:
+                        result = self.call_relative_move_service(vector['x'], vector['y'], vector['z'])
+                        success = result is not None and result['success']
             elif action == 'gripper':
-                gripper = float(params['position'])
-                result = self.call_move_gripper_service(gripper)
-                success = result is not None and result['success']
+                try:
+                    gripper = float(params['position'])
+                except (KeyError, TypeError, ValueError):
+                    self.get_logger().error(
+                        "gripper requires a numeric 'position'"
+                    )
+                else:
+                    if not 0.0 <= gripper <= 0.85:
+                        self.get_logger().error(
+                            "gripper position must be between 0.0 and 0.85 "
+                            "for physical Gen3 Lite hardware"
+                        )
+                    else:
+                        result = self.call_move_gripper_service(gripper)
+                        success = result is not None and result['success']
+            elif action == 'pick_and_place':
+                object_id = params.get('object')
+                destination_id = params.get('destination')
+                plan_only = params.get('plan_only', False)
+                if not isinstance(object_id, str) or not object_id:
+                    self.get_logger().error(
+                        "pick_and_place requires a string 'object'"
+                    )
+                elif not isinstance(destination_id, str) or not destination_id:
+                    self.get_logger().error(
+                        "pick_and_place requires a string 'destination'"
+                    )
+                elif not isinstance(plan_only, bool):
+                    self.get_logger().error(
+                        "pick_and_place 'plan_only' must be true or false"
+                    )
+                else:
+                    result = self.call_pick_place_action(
+                        object_id,
+                        destination_id,
+                        plan_only,
+                    )
+                    success = result is not None and result['success']
+            else:
+                self.get_logger().error(f"Unknown recipe action: {action!r}")
 
             if success:
                 self.get_logger().info(f"Step {i+1} completed successfully.")

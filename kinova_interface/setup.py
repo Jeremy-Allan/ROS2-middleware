@@ -6,7 +6,7 @@ package_name = 'kinova_interface'
 
 setup(
     name=package_name,
-    version='0.0.0',
+    version='0.1.0',
     packages=[package_name],
     data_files=[
         ('share/ament_index/resource_index/packages',
@@ -15,6 +15,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'data', 'configs', 'env'), glob('data/configs/env/*.json')),
         (os.path.join('share', package_name, 'recipes'), glob(os.path.join('recipes', '*.json'))),
+        (os.path.join('share', package_name, 'recipes', 'test_suite'), glob(os.path.join('recipes', 'test_suite', '*.json'))),
     ],
     
     install_requires=['setuptools'],
@@ -30,6 +31,7 @@ setup(
             'environment_mapping_node = kinova_interface.environment_mapping_node:main',
             'json_parser_node = kinova_interface.json_parser_node:main',
             'telemetry_node = kinova_interface.telemetry_node:main',
+            'mtc_task_node = kinova_interface.mtc_task_node:main',
         ],
     },
 )

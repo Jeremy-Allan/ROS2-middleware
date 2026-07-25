@@ -1,0 +1,154 @@
+{
+  "schema_version": 1,
+  "commissioned": false,
+  "robot": {
+    "base_frame": "base_link",
+    "arm_group": "arm",
+    "gripper_group": "gripper",
+    "ik_frame": "tool_frame",
+    "attach_link": "tool_frame",
+    "gripper_joint": "right_finger_bottom_joint",
+    "touch_links": [
+      "gripper_base_link",
+      "left_finger_prox_link",
+      "left_finger_dist_link",
+      "right_finger_prox_link",
+      "right_finger_dist_link"
+    ],
+    "gripper_min_position": 0.0,
+    "gripper_max_position": 0.85,
+    "gripper_open_position": 0.0,
+    "gripper_closed_position": 0.8,
+    "planning_pipeline": "ompl",
+    "planner_id": "RRTConnectkConfigDefault",
+    "num_planning_attempts": 5,
+    "max_solutions": 10,
+    "max_ik_solutions": 8,
+    "min_ik_solution_distance": 0.5,
+    "stage_timeout": 10.0,
+    "cartesian_step_size": 0.005,
+    "cartesian_jump_threshold": 2.0,
+    "cartesian_min_fraction": 1.0,
+    "max_velocity_scaling_factor": 0.1,
+    "max_acceleration_scaling_factor": 0.1
+  },
+  "objects": {
+    "red_cube": {
+      "shape": {
+        "type": "box",
+        "dimensions": [0.025, 0.025, 0.025]
+      },
+      "collision_pose": {
+        "frame_id": "base_link",
+        "position": [-0.3255, -0.1235, 0.01],
+        "orientation": [0.0, 0.0, 0.0, 1.0]
+      },
+      "grasp_pose": {
+        "frame_id": "base_link",
+        "position": [-0.3255, -0.1235, 0.01],
+        "orientation": [1.0, 0.0, 0.0, 0.0]
+      },
+      "approach": {
+        "frame_id": "base_link",
+        "direction": [0.0, 0.0, -1.0],
+        "min_distance": 0.06,
+        "max_distance": 0.1
+      },
+      "lift": {
+        "frame_id": "base_link",
+        "direction": [0.0, 0.0, 1.0],
+        "min_distance": 0.06,
+        "max_distance": 0.1
+      },
+      "support_surface": "table"
+    },
+    "blue_cube": {
+      "shape": {
+        "type": "box",
+        "dimensions": [0.025, 0.025, 0.025]
+      },
+      "collision_pose": {
+        "frame_id": "base_link",
+        "position": [0.45, 0.2, 0.12],
+        "orientation": [0.0, 0.0, 0.0, 1.0]
+      },
+      "grasp_pose": {
+        "frame_id": "base_link",
+        "position": [0.45, 0.2, 0.12],
+        "orientation": [1.0, 0.0, 0.0, 0.0]
+      },
+      "approach": {
+        "frame_id": "base_link",
+        "direction": [0.0, 0.0, -1.0],
+        "min_distance": 0.06,
+        "max_distance": 0.1
+      },
+      "lift": {
+        "frame_id": "base_link",
+        "direction": [0.0, 0.0, 1.0],
+        "min_distance": 0.06,
+        "max_distance": 0.1
+      },
+      "support_surface": "table"
+    }
+  },
+  "destinations": {
+    "delivery_tray": {
+      "tool_pose": {
+        "frame_id": "base_link",
+        "position": [-0.235, -0.425, 0.05],
+        "orientation": [1.0, 0.0, 0.0, 0.0]
+      },
+      "lower": {
+        "frame_id": "base_link",
+        "direction": [0.0, 0.0, -1.0],
+        "min_distance": 0.06,
+        "max_distance": 0.1
+      },
+      "retreat": {
+        "frame_id": "base_link",
+        "direction": [0.0, 0.0, 1.0],
+        "min_distance": 0.08,
+        "max_distance": 0.12
+      }
+    },
+    "delivery_tray_left": {
+      "tool_pose": {
+        "frame_id": "base_link",
+        "position": [-0.285, -0.425, 0.05],
+        "orientation": [1.0, 0.0, 0.0, 0.0]
+      },
+      "lower": {
+        "frame_id": "base_link",
+        "direction": [0.0, 0.0, -1.0],
+        "min_distance": 0.06,
+        "max_distance": 0.1
+      },
+      "retreat": {
+        "frame_id": "base_link",
+        "direction": [0.0, 0.0, 1.0],
+        "min_distance": 0.08,
+        "max_distance": 0.12
+      }
+    },
+    "delivery_tray_right": {
+      "tool_pose": {
+        "frame_id": "base_link",
+        "position": [-0.185, -0.425, 0.05],
+        "orientation": [1.0, 0.0, 0.0, 0.0]
+      },
+      "lower": {
+        "frame_id": "base_link",
+        "direction": [0.0, 0.0, -1.0],
+        "min_distance": 0.06,
+        "max_distance": 0.1
+      },
+      "retreat": {
+        "frame_id": "base_link",
+        "direction": [0.0, 0.0, 1.0],
+        "min_distance": 0.08,
+        "max_distance": 0.12
+      }
+    }
+  }
+}

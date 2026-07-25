@@ -3,61 +3,13 @@
   "steps": [
     {
       "step_id": 1,
-      "action": "home",
-      "description": "Start at home"
-    },
-    {
-      "step_id": 2,
-      "action": "gripper",
+      "action": "pick_and_place",
       "parameters": {
-        "position": 0.0
+        "object": "red_cube",
+        "destination": "delivery_tray",
+        "plan_only": true
       },
-      "description": "Release object"
-    },
-    {
-      "step_id": 3,
-      "action": "move_arm",
-      "parameters": {
-        "target": "red_cube"
-      },
-      "description": "Navigate to the red cube"
-    },
-    {
-      "step_id": 4,
-      "action": "gripper",
-      "parameters": {
-        "position": 1.0
-      },
-      "description": "Close fingers"
-    },
-    {
-      "step_id": 5,
-      "action": "relative_move",
-      "parameters": {
-        "vector": "move_upwards"
-      },
-      "description": "Lift the cube slightly"
-    },
-    {
-      "step_id": 6,
-      "action": "move_arm",
-      "parameters": {
-        "target": "delivery_tray"
-      },
-      "description": "Move to the drop-off zone"
-    },
-    {
-      "step_id": 7,
-      "action": "gripper",
-      "parameters": {
-        "position": 0.0
-      },
-      "description": "Release object"
-    },
-    {
-      "step_id": 8,
-      "action": "home",
-      "description": "Return to home"
+      "description": "Plan and publish one collision-aware MTC pick/place task"
     }
   ]
 }
