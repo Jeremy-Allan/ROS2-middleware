@@ -10,7 +10,7 @@
         "id": "small_wall",
         "description": "Small wall that the arm can reach over",
         "shape": 1,
-        "dimensions": [0.02, 0.5, 0.2],
-        "position": {"x": -0.15, "y": 0.3, "z": 0.1}
+        "dimensions": [0.082, 0.276, 0.205],
+        "position": {"x": -0.1665, "y": -0.0855, "z": 0.052}
     }
 ]
