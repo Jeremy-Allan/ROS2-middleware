@@ -293,8 +293,26 @@ class JsonParserNode(Node):
                 target_name = params['target']
                 coords = self.get_static_object_coords(target_name)
                 if coords:
-                    result = self.call_move_service(coords['x'], coords['y'], coords['z'])
-                    success = result is not None and result['success']
+                    approach_height = params.get('approach_height', 0.0)
+                    if approach_height > 0.0:
+                        self.get_logger().info(f"Two-stage vertical approach requested for '{target_name}' (height: {approach_height}m)")
+                        
+                        # Phase 1: Move to pre-grasp approach pose directly above the target
+                        pre_grasp_z = coords['z'] + approach_height
+                        self.get_logger().info(f"Phase 1: Navigating to approach pose at [{coords['x']}, {coords['y']}, {pre_grasp_z}]...")
+                        result = self.call_move_service(coords['x'], coords['y'], pre_grasp_z)
+                        
+                        if result and result['success']:
+                            # Phase 2: Straight-line Cartesian vertical descent to final coordinates
+                            self.get_logger().info(f"Phase 2: Performing straight-line Cartesian vertical descent down to target...")
+                            result = self.call_relative_move_service(0.0, 0.0, -approach_height)
+                            success = result is not None and result['success']
+                        else:
+                            self.get_logger().error("Phase 1 (approach navigation) failed. Aborting approach.")
+                            success = False
+                    else:
+                        result = self.call_move_service(coords['x'], coords['y'], coords['z'])
+                        success = result is not None and result['success']
             elif action == 'relative_move':
                 vector_name = params['vector']
                 vector = self.get_relative_movement_vector(vector_name)

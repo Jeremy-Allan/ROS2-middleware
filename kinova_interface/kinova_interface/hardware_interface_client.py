@@ -6,10 +6,12 @@ from rclpy.executors import MultiThreadedExecutor
 import threading
 
 # Arm Actions and Messages
-from moveit_msgs.action import MoveGroup
-from moveit_msgs.msg import Constraints, PositionConstraint, JointConstraint
+from moveit_msgs.action import MoveGroup, ExecuteTrajectory
+from moveit_msgs.msg import Constraints, PositionConstraint, JointConstraint, OrientationConstraint
+from moveit_msgs.srv import GetCartesianPath
 from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose
+from action_msgs.msg import GoalStatus
 
 # Gripper Actions and Messages
 from control_msgs.action import GripperCommand
@@ -44,6 +46,16 @@ class HardwareInterfaceClient(Node):
         )
         self.gripper_client = ActionClient(
             self, GripperCommand, '/gen3_lite_2f_gripper_controller/gripper_cmd',
+            callback_group=self.callback_group
+        )
+
+        # Cartesian Path Planning and Execution Clients
+        self.cartesian_planning_client = self.create_client(
+            GetCartesianPath, '/compute_cartesian_path',
+            callback_group=self.callback_group
+        )
+        self.execute_trajectory_client = ActionClient(
+            self, ExecuteTrajectory, '/execute_trajectory',
             callback_group=self.callback_group
         )
 
@@ -186,6 +198,25 @@ class HardwareInterfaceClient(Node):
         self.current_state = ExtendedStatus.STATE_BUSY
         self.status_text = "Sending arm to home position"
         self.publish_status()
+
+        # Automatically check if the arm is low to the table. If so, perform a safe vertical Cartesian lift
+        # first to clear any contact/collision states with the table or objects before planning joint-space Home path.
+        try:
+            now = rclpy.time.Time()
+            trans = self.tf_buffer.lookup_transform('base_link', 'tool_frame', now, timeout=rclpy.duration.Duration(seconds=1.0))
+            curr_x = trans.transform.translation.x
+            curr_y = trans.transform.translation.y
+            curr_z = trans.transform.translation.z
+            
+            if curr_z < 0.15:
+                self.get_logger().info(f"Arm is low (z={curr_z:.3f}m). Performing automatic 10cm vertical Cartesian lift to clear table collision...")
+                self.status_text = "Performing automatic clear-table lift..."
+                self.publish_status()
+                if not self.send_cartesian_goal(curr_x, curr_y, curr_z + 0.10):
+                    self.get_logger().warn("Automatic clear-table lift failed or incomplete. Attempting to proceed to Home anyway.")
+        except Exception as e:
+            self.get_logger().warn(f"Could not determine arm height for automatic clear-table lift: {e}. Proceeding directly to Home.")
+
         if self.send_home_goal():
             self.movement_finished.wait()
             response.success = self.last_action_successful
@@ -236,15 +267,14 @@ class HardwareInterfaceClient(Node):
             target_y = curr_y + vy
             target_z = curr_z + vz
             
-            self.get_logger().info(f"Calculated target: {target_x}, {target_y}, {target_z}")
+            self.get_logger().info(f"Calculated target Cartesian coordinates: {target_x}, {target_y}, {target_z}")
             
-            if self.send_goal(target_x, target_y, target_z):
-                self.movement_finished.wait()
+            if self.send_cartesian_goal(target_x, target_y, target_z):
                 response.success = self.last_action_successful
-                response.message = "Relative movement complete" if response.success else "Relative movement failed"
+                response.message = "Relative movement complete (Cartesian linear)" if response.success else "Relative movement failed"
             else:
                 response.success = False
-                response.message = "Failed to initiate relative movement"
+                response.message = "Failed to plan or execute Cartesian relative movement"
                 
         except Exception as e:
             self.get_logger().error(f"Could not calculate relative move: {e}")
@@ -268,6 +298,109 @@ class HardwareInterfaceClient(Node):
             response.message = "Failed to initiate gripper movement"
 
         return self.finalize_service_status(response)
+
+    def wait_for_future(self, future):
+        """Safely wait for an async future to complete without deadlocking the executor."""
+        import time
+        while rclpy.ok() and not future.done():
+            time.sleep(0.01)
+        return future.result() if future.done() else None
+
+    def send_cartesian_goal(self, target_x, target_y, target_z):
+        """Plan and execute a straight-line Cartesian path to the target coordinates."""
+        if not self.cartesian_planning_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('Cartesian planning service (/compute_cartesian_path) not available')
+            return False
+
+        if not self.execute_trajectory_client.wait_for_server(timeout_sec=5.0):
+            self.get_logger().error('Execute trajectory action server (/execute_trajectory) not available')
+            return False
+
+        try:
+            # Look up current pose of the tool frame to set the start state and orientation
+            now = rclpy.time.Time()
+            trans = self.tf_buffer.lookup_transform('base_link', 'tool_frame', now, timeout=rclpy.duration.Duration(seconds=1.0))
+            
+            start_pose = Pose()
+            start_pose.position.x = trans.transform.translation.x
+            start_pose.position.y = trans.transform.translation.y
+            start_pose.position.z = trans.transform.translation.z
+            start_pose.orientation = trans.transform.rotation
+
+            target_pose = Pose()
+            target_pose.position.x = float(target_x)
+            target_pose.position.y = float(target_y)
+            target_pose.position.z = float(target_z)
+            # Lock the orientation to the starting orientation to prevent twisting
+            target_pose.orientation = trans.transform.rotation
+
+            # Create GetCartesianPath Request
+            req = GetCartesianPath.Request()
+            req.header.frame_id = "base_link"
+            req.header.stamp = self.get_clock().now().to_msg()
+            req.group_name = "arm"
+            req.link_name = "tool_frame"
+            req.waypoints = [target_pose]
+            req.max_step = 0.01  # 1 cm steps
+            req.jump_threshold = 0.0  # Disable jump threshold check
+            req.avoid_collisions = True
+
+            self.get_logger().info(f"Computing Cartesian path to [{target_x}, {target_y}, {target_z}]...")
+            future = self.cartesian_planning_client.call_async(req)
+            
+            # Wait safely
+            res = self.wait_for_future(future)
+            if res is None:
+                self.get_logger().error("Failed to call Cartesian planning service (None response or timeout)")
+                return False
+
+            self.get_logger().info(f"Cartesian path planning fraction: {res.fraction}")
+            if res.fraction < 0.9:  # Cartesian planning should plan nearly 100% of the path
+                self.get_logger().error(f"Cartesian path plan incomplete (planned only {res.fraction*100:.1f}%)")
+                return False
+
+            # Execute the planned trajectory using ExecuteTrajectory Action
+            goal_msg = ExecuteTrajectory.Goal()
+            goal_msg.trajectory = res.solution
+
+            self.get_logger().info("Executing Cartesian trajectory...")
+            self.movement_finished.clear()
+            
+            # Send the action goal
+            send_goal_future = self.execute_trajectory_client.send_goal_async(goal_msg)
+            goal_handle = self.wait_for_future(send_goal_future)
+            
+            if goal_handle is None or not goal_handle.accepted:
+                self.get_logger().error("Execute trajectory goal was rejected or timed out")
+                self.movement_finished.set()
+                return False
+
+            self.get_logger().info('Cartesian trajectory goal accepted! Executing...')
+            get_result_future = goal_handle.get_result_async()
+            action_result = self.wait_for_future(get_result_future)
+            
+            if action_result is None:
+                self.get_logger().error("Cartesian trajectory execution result was None or timed out")
+                self.last_action_successful = False
+                self.movement_finished.set()
+                return False
+
+            if action_result.status == GoalStatus.STATUS_SUCCEEDED:
+                self.get_logger().info("Cartesian trajectory execution succeeded.")
+                self.last_action_successful = True
+                self.movement_finished.set()
+                return True
+            else:
+                self.get_logger().error(f"Cartesian trajectory execution failed with status: {action_result.status}")
+                self.last_action_successful = False
+                self.movement_finished.set()
+                return False
+
+        except Exception as e:
+            self.get_logger().error(f"Error in send_cartesian_goal: {e}")
+            self.last_action_successful = False
+            self.movement_finished.set()
+            return False
 
     # --- Action Client Methods ---
     def send_goal(self, x, y, z):
@@ -299,6 +432,29 @@ class HardwareInterfaceClient(Node):
 
         goal_constraints = Constraints()
         goal_constraints.position_constraints.append(pos_constraint)
+
+        # Enforce a perfect downward-pointing vertical orientation constraint (x=1.0, y=0.0, z=0.0, w=0.0)
+        # for elevated targets (z > 0.05), such as pre-grasp approach poses. This guarantees that the arm
+        # always approaches and descends in the exact same orientation. For low targets (z <= 0.05), orientation
+        # is left unconstrained to maximize reachability.
+        if float(z) > 0.05:
+            ori_constraint = OrientationConstraint()
+            ori_constraint.header.frame_id = "base_link"
+            ori_constraint.link_name = "tool_frame"
+            ori_constraint.orientation.x = 1.0
+            ori_constraint.orientation.y = 0.0
+            ori_constraint.orientation.z = 0.0
+            ori_constraint.orientation.w = 0.0
+            
+            # Tight tolerance (0.10 radians = ~5.7 degrees) to ensure highly predictable vertical approach
+            ori_constraint.absolute_x_axis_tolerance = 0.10
+            ori_constraint.absolute_y_axis_tolerance = 0.10
+            ori_constraint.absolute_z_axis_tolerance = 0.10
+            ori_constraint.weight = 1.0
+            
+            goal_constraints.orientation_constraints.append(ori_constraint)
+            self.get_logger().info(f"Target height z={float(z):.3f}m > 0.05m: Enforced tight vertical downward orientation constraint.")
+
         goal_msg.request.goal_constraints.append(goal_constraints)
         
         self.movement_finished.clear()

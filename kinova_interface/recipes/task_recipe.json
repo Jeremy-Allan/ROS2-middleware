@@ -18,9 +18,10 @@
       "step_id": 3,
       "action": "move_arm",
       "parameters": {
-        "target": "red_cube"
+        "target": "red_cube",
+        "approach_height": 0.10
       },
-      "description": "Navigate to the red cube"
+      "description": "Navigate and approach the red cube vertically"
     },
     {
       "step_id": 4,
@@ -42,9 +43,10 @@
       "step_id": 6,
       "action": "move_arm",
       "parameters": {
-        "target": "delivery_tray"
+        "target": "delivery_tray",
+        "approach_height": 0.10
       },
-      "description": "Move to the drop-off zone"
+      "description": "Move to the drop-off zone vertically"
     },
     {
       "step_id": 7,

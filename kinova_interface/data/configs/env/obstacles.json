@@ -5,12 +5,5 @@
         "shape": 1,
         "dimensions": [1.2, 0.8, 0.05],
         "position": {"x": 0.0, "y": 0.0, "z": -0.05}
-    },
-    {
-        "id": "small_wall",
-        "description": "Small wall that the arm can reach over",
-        "shape": 1,
-        "dimensions": [0.082, 0.276, 0.205],
-        "position": {"x": -0.1665, "y": -0.0855, "z": 0.052}
     }
 ]
