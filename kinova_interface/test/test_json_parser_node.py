@@ -17,6 +17,11 @@ from kinova_interfaces.srv import (
 from kinova_interfaces.msg import ExtendedStatus
 
 
+"""
+Test with: 
+pytest src/ROS2-middleware/kinova_interface/test/test_json_parser_node.py -v
+"""
+
 # Fixtures
 
 @pytest.fixture(scope="session")

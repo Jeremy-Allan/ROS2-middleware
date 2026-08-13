@@ -15,6 +15,11 @@ from control_msgs.action import GripperCommand
 # Change this import only if your package/module name is different
 from kinova_interface.hardware_interface_client import HardwareInterfaceClient
 
+"""
+Test with: 
+pytest src/ROS2-middleware/kinova_interface/test/test_hardware_interface_client.py -v
+"""
+
 
 @pytest.fixture(scope="module")
 def ros_context():

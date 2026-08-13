@@ -17,6 +17,11 @@ from kinova_interfaces.msg import ExtendedStatus
 
 from moveit_msgs.msg import CollisionObject
 
+"""
+Test with: 
+pytest src/ROS2-middleware/kinova_interface/test/test_environment_mapping_node.py -v
+"""
+
 # Fixtures
 
 @pytest.fixture(scope="session")

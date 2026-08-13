@@ -10,6 +10,11 @@ from std_srvs.srv import Trigger
 from example_interfaces.srv import Trigger as ExampleTrigger
 
 
+"""
+Test with: 
+pytest src/ROS2-middleware/kinova_interface/test/test_telemetry_node.py -v
+"""
+
 # Fixtures
 @pytest.fixture(scope="session")
 def ros_context():
