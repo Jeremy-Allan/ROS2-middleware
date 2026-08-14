@@ -3,6 +3,7 @@ import os
 import time
 import threading
 import rclpy
+import math
 from pathlib import Path
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
@@ -33,9 +34,9 @@ class EnvironmentMappingNode(Node):
         self.status_text = "Environment Mapper Active"
         self.command_success = True
 
-        self.static_objects = self.load_coordinate_dictionary()
+        self.static_objects = self.load_object_dictionary()
         self.relative_movements = self.load_relative_movements()
-        self.obstacles = self.load_obstacles()
+        self.obstacles = self.load_obstacles_dictionary()
 
         self.srv_coords = self.create_service(GetObjectCoordinates, '/get_coordinates', self.get_coordinates_callback)
         self.srv_move = self.create_service(GetRelativeMovement, '/get_relative_movement', self.get_relative_movement_callback)
@@ -55,19 +56,113 @@ class EnvironmentMappingNode(Node):
         msg.last_command_valid = self.command_success
         self.status_pub.publish(msg)
 
-    def load_coordinate_dictionary(self):
-        json_path = Path(self.config_dir) / 'coordinate_dictionary.json'
+    def load_object_dictionary(self):
+        json_path = Path(self.config_dir) / 'object_dictionary.json'
         try:
             with open(json_path, 'r') as file:
                 objects = json.load(file)
-                self.get_logger().info('Loaded static objects')
-            return objects
+            self.get_logger().info('Loaded object dictionary JSON file')
         except FileNotFoundError:
-            self.get_logger().fatal(f'Coordinate Dictionary file not found at: {json_path}')
+            self.get_logger().fatal(f'Object Dictionary file not found at: {json_path}')
             raise SystemExit(1)
         except json.JSONDecodeError:
-            self.get_logger().fatal('Failed to decode JSON from the file')
+            self.get_logger().fatal('Failed to decode JSON from the object dictionary file')
             raise SystemExit(1)
+        
+        # Process each object using the helper
+        for obj_id, obj_data in objects.items():
+            objects[obj_id] = self.parse_object_data(obj_id, obj_data)
+        
+        self.get_logger().info(f'Processed {len(objects)} objects')
+        return objects
+    
+    def load_obstacles_dictionary(self):
+        pkg_share = get_package_share_directory('kinova_interface')
+        json_path = os.path.join(pkg_share, 'data', 'configs', 'env', 'obstacles.json')
+        try:
+            with open(json_path, 'r') as file:
+                obstacles = json.load(file)
+            self.get_logger().info('Loaded obstacles JSON file')
+        except FileNotFoundError:
+            self.get_logger().fatal(f'Obstacles file not found at: {json_path}')
+            raise SystemExit(1)
+        except json.JSONDecodeError:
+            self.get_logger().fatal('Failed to decode JSON from obstacles file')
+            raise SystemExit(1)
+        
+        # Process each obstacle using the helper function
+        for obs_id, obs_data in obstacles.items():
+            obstacles[obs_id] = self.parse_object_data(obs_id, obs_data)
+        
+        self.get_logger().info(f'Processed {len(obstacles)} obstacles')
+        return obstacles
+    
+    def normalize_shape(self, obj, obj_id="unknown"):
+        shape = obj.get("shape", {})
+        stype = shape.get("type", "BOX").upper()
+        
+        shape_info = { 
+        "BOX": {"count": 3, "default": [0.05, 0.05, 0.05]},
+        "SPHERE": {"count": 1, "default": [0.05]},
+        "CYLINDER": {"count": 2, "default": [0.05, 0.02]},
+        "CONE": {"count": 2, "default": [0.05, 0.02]}
+        }
+        
+        if stype not in shape_info: #default to BOX if unknown shape type
+            self.get_logger().warn(f"Object '{obj_id}': unknown shape type '{stype}', defaulting to BOX")
+            stype = "BOX"
+
+        info = shape_info[stype]
+        dims = shape.get("dimensions", [])
+        
+        if len(dims) != info["count"]:
+            self.get_logger().warn(
+                f"Object '{obj_id}': expected {info['count']} dimensions for '{stype}', recieved {len(dims)}. "
+                f"Using defaults: {info['default']}"
+            )
+            dims = info["default"].copy()
+        
+        # Store shape
+        obj['shape'] = {
+            'type': stype,
+            'dimensions': dims
+        }
+        return obj
+
+    def euler_to_quaternion(self, roll, pitch, yaw):
+        cy = math.cos(yaw * 0.5); sy = math.sin(yaw * 0.5)
+        cp = math.cos(pitch * 0.5); sp = math.sin(pitch * 0.5)
+        cr = math.cos(roll * 0.5); sr = math.sin(roll * 0.5)
+        qw = cr*cp*cy + sr*sp*sy
+        qx = sr*cp*cy - cr*sp*sy
+        qy = cr*sp*cy + sr*cp*sy
+        qz = cr*cp*sy - sr*sp*cy
+        return {'x': qx, 'y': qy, 'z': qz, 'w': qw}
+    
+    def parse_object_data(self, obj_id, obj_data):
+        # Parse POSE (position & orientation)
+        pose = obj_data.get('pose', {})
+        orientation = pose.get('orientation', {})
+        
+        if not orientation:
+            pose['orientation'] = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}
+        elif any(k in orientation for k in ('roll', 'pitch', 'yaw')):
+            roll = orientation.get('roll', 0.0)
+            pitch = orientation.get('pitch', 0.0)
+            yaw = orientation.get('yaw', 0.0)
+            quat = self.euler_to_quaternion(roll, pitch, yaw)
+            obj_data['pose']['orientation'] = quat
+        else:
+            # Already in quaternion format or invalid
+            if not all(k in orientation for k in ('x', 'y', 'z', 'w')):
+                self.get_logger().warn(f"Object '{obj_id}': invalid orientation format, defaulting to quaternion")
+                pose['orientation'] = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}
+        
+        # Parse SHAPE (type & dimensions)
+        obj_data = self.normalize_shape(obj_data, obj_id)
+        
+        return obj_data
+
 
     def load_relative_movements(self):
         json_path = Path(self.config_dir) / 'relative_movement.json'
@@ -83,29 +178,16 @@ class EnvironmentMappingNode(Node):
             self.get_logger().fatal('Failed to decode JSON from Relative Movement File')
             raise SystemExit(1)
 
-    def load_obstacles(self):
-        pkg_share = get_package_share_directory('kinova_interface')
-        json_path = os.path.join(pkg_share, 'data', 'configs', 'env','obstacles.json')
-        try:
-            with open(json_path, 'r') as file:
-                obstacles = json.load(file)
-                self.get_logger().info('Loaded obstacles')
-            return obstacles
-        except FileNotFoundError:
-            self.get_logger().fatal(f'Obstacles file not found at: {json_path}')
-            raise SystemExit(1)
-        except json.JSONDecodeError:
-            self.get_logger().fatal('Failed to decode JSON from obstacles file')
-            raise SystemExit(1)
 
     def get_coordinates_callback(self, request, response):
         #request is the obj_id, the response will be coordinates of obj
         obj_id = request.object_id
         if obj_id in self.static_objects:
-            coords = self.static_objects[obj_id]
-            response.x = coords['x']
-            response.y = coords['y']
-            response.z = coords['z']
+            obj_data = self.static_objects[obj_id]
+            pos = obj_data['pose']['position']
+            response.x = pos['x']
+            response.y = pos['y']
+            response.z = pos['z']
             response.success = True
             response.message = "Object Found"
             self.command_success = True
@@ -146,26 +228,47 @@ class EnvironmentMappingNode(Node):
         self.publish_status()
         return response
 
-    def build_collision_object(self, obstacle):
-        obj = CollisionObject()
-        obj.header.frame_id = "base_link"
-        obj.id = obstacle["id"]
+    def build_collision_object(self, obj_id, obj_data):
+        
+        collision_obj = CollisionObject()
+        collision_obj.header.frame_id = "base_link"
+        collision_obj.id = obj_id
 
+        #Shape
         shape = SolidPrimitive()
-        shape.type = obstacle["shape"]
-        shape.dimensions = obstacle["dimensions"]
+        shape_type_map = {
+            "BOX": SolidPrimitive.BOX,
+            "SPHERE": SolidPrimitive.SPHERE,
+            "CYLINDER": SolidPrimitive.CYLINDER,
+            "CONE": SolidPrimitive.CONE
+        }
+        stype = obj_data['shape']['type']
+        if stype not in shape_type_map:
+            self.get_logger().error(f"Object '{obj_id}': unknown shape type '{stype}'")
+            return None
+        shape.type = shape_type_map[stype]
+        shape.dimensions = obj_data['shape']['dimensions']
 
+        # Pose
         pose = Pose()
-        pose.position.x = obstacle["position"]["x"]
-        pose.position.y = obstacle["position"]["y"]
-        pose.position.z = obstacle["position"]["z"]
-        pose.orientation.w = 1.0
+        # Position
+        pos = obj_data['pose']['position']
+        pose.position.x = pos['x']
+        pose.position.y = pos['y']
+        pose.position.z = pos['z']
+        # Orientation
+        orient = obj_data['pose']['orientation']
+        pose.orientation.x = orient['x']
+        pose.orientation.y = orient['y']
+        pose.orientation.z = orient['z']
+        pose.orientation.w = orient['w']
 
-        obj.primitives.append(shape)
-        obj.primitive_poses.append(pose)
-        obj.operation = CollisionObject.ADD
+        # Build collision object
+        collision_obj.primitives.append(shape)
+        collision_obj.primitive_poses.append(pose)
+        collision_obj.operation = CollisionObject.ADD
 
-        return obj
+        return collision_obj
 
     def publish_planning_scene(self):
         self.get_logger().info('Waiting for /apply_planning_scene service...')
@@ -179,23 +282,38 @@ class EnvironmentMappingNode(Node):
         scene = PlanningScene()
         scene.is_diff = True
 
-        for obstacle in self.obstacles:
-            obj = self.build_collision_object(obstacle)
-            scene.world.collision_objects.append(obj)
-            self.get_logger().info(f"Adding obstacle: '{obstacle['id']}' - {obstacle['description']}")
+        # Add obstacles from obstacles dictionary
+        for obs_id, obs_data in self.obstacles.items(): 
+            obj = self.build_collision_object(obs_id, obs_data)
+            if obj is not None:
+                scene.world.collision_objects.append(obj)
+                self.get_logger().info(f"Adding obstacle: '{obs_id}'")
+        
+        # Add objects from object dictionary
+        for obj_id, obj_data in self.static_objects.items():
+            obj = self.build_collision_object(obj_id, obj_data)
+            if obj is not None:
+                scene.world.collision_objects.append(obj)
+                self.get_logger().info(f"Adding object: '{obj_id}'")
 
         request = ApplyPlanningScene.Request()
         request.scene = scene
 
         future = self.scene_client.call_async(request)
-
         while rclpy.ok() and not future.done():
             time.sleep(0.1)
 
         if future.result() is not None and future.result().success:
+            total = len(self.obstacles) + len(self.static_objects)
+            self.get_logger().info(f'Planning scene updated with {total} collision objects.')
+            for obs_id, obs_data in self.obstacles.items():
+                pos = obs_data['pose']['position']
+                self.get_logger().info(f"  Obstacle '{obs_id}' at x={pos['x']}, y={pos['y']}, z={pos['z']}")
+            for obj_id, obj_data in self.static_objects.items():
+                pos = obj_data['pose']['position']
+                self.get_logger().info(f"  Object '{obj_id}' at x={pos['x']}, y={pos['y']}, z={pos['z']}")
+            
             self.get_logger().info(f'Planning scene updated with {len(self.obstacles)} obstacle(s).')
-            for obstacle in self.obstacles:
-                self.get_logger().info(f"  '{obstacle['id']}' at x={obstacle['position']['x']}, y={obstacle['position']['y']}, z={obstacle['position']['z']}")
         else:
             self.get_logger().error('Failed to apply planning scene.')
 
