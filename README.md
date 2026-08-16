@@ -175,11 +175,19 @@ ros2-middleware/
 │   	│					└── recipe_l6_invalid.json               # Negative test case for validation failure handling
 │   	│
 │   	│
-│   	└── resource/                                    # Package metadata and internal documentation
+│   	├── resource/                                    # Package metadata and internal documentation
+│   	│		│
+│   	│		├── PROJECT-OVERVIEW.md                  # High-level system design and middleware architecture notes
+│   	│		└── kinova_interface                     # ROS2 marker file for package registration
+│   	│
+│   	│
+│   	└── test/                                        # Unit test suite for the middleware nodes
 │   			│
-│   			├── PROJECT-OVERVIEW.md                  # High-level system design and middleware architecture notes
-│   			└── kinova_interface                     # ROS2 marker file for package registration
-│
+│   			├── conftest.py                          # Shared pytest fixtures (guarded rclpy init/shutdown)
+│   			├── test_environment_mapping_node.py      # Unit tests for environment_mapping_node.py
+│   			├── test_hardware_interface_client.py     # Unit tests for hardware_interface_client.py
+│   			├── test_json_parser_node.py              # Unit tests for json_parser_node.py
+│   			└── test_telemetry_node.py                # Unit tests for telemetry_node.py
 │
 └── kinova_interfaces/
     │
@@ -205,6 +213,36 @@ Ensure your ROS 2 workspace is built and sourced before running. Execute the fol
 cd ~/workspace/ros2_kortex_ws
 colcon build --packages-select kinova_interface kinova_interfaces
 source install/setup.bash
+```
+
+---
+
+## Unit Tests
+
+This package comes with a full unit test suite covering all four middleware nodes. Tests are built on `pytest` and `rclpy`, with ROS 2 dependencies (services, action clients, timers) mocked so the suite runs deterministically without a live robot, simulator, or MoveIt stack.
+These tests can be used to validate the behaviour of each of the four middleware nodes and verify if any code changes/modifications have broken any functionalities. 
+
+### Test coverage 
+
+The four unit test files are: 
+- test_environment_mapping_node.py
+- test_hardware_interface_client.py
+- test_json_parser_node.py
+- test_telemetry_node.py
+
+### Running the Test Suite
+
+From the root of your ROS 2 workspace, after building and sourcing:
+
+```bash
+# Run the full unit test suite
+pytest src/ROS2-middleware/kinova_interface/test/ -v
+
+# Run a single test file (Replace with desired file)
+pytest src/ROS2-middleware/kinova_interface/test/test_telemetry_node.py -v
+
+# Run a single test case (Replace with desired test file and case)
+pytest src/ROS2-middleware/kinova_interface/test/test_telemetry_node.py::test_aggregate_fault -v
 ```
 
 ---
