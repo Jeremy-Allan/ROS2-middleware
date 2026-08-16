@@ -245,6 +245,7 @@ pytest src/ROS2-middleware/kinova_interface/test/test_telemetry_node.py -v
 pytest src/ROS2-middleware/kinova_interface/test/test_telemetry_node.py::test_aggregate_fault -v
 ```
 
+---
 
 ## Running the Automated System
 
