@@ -16,7 +16,7 @@
     },
     "shape": {
       "type": "BOX",
-      "dimensions": [0.082, 0.276, 0.205]
+      "dimensions": [0.03, 0.3, 0.2]
     }
   }
 }

@@ -1,0 +1,6 @@
+string object_id
+---
+geometry_msgs/Pose pose
+shape_msgs/SolidPrimitive shape
+bool success
+string message

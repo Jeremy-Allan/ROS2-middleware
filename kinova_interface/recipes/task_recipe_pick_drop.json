@@ -1,0 +1,53 @@
+{
+  "recipe_name": "Pick and Drop Routine (Blue then Red, No Intermediate Home)",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Start at home"
+    },
+    {
+      "step_id": 2,
+      "action": "pickup",
+      "parameters": {
+        "target": "blue_cube",
+        "pre_offset": 0.1
+      },
+      "description": "Pick up the blue cube"
+    },
+    {
+      "step_id": 3,
+      "action": "dropoff",
+      "parameters": {
+        "target": "blue_cube",
+        "destination": "delivery_tray",
+        "place_offset": 0.1
+      },
+      "description": "Place blue cube on delivery tray"
+    },
+    {
+      "step_id": 4,
+      "action": "pickup",
+      "parameters": {
+        "target": "red_cube",
+        "pre_offset": 0.1
+      },
+      "description": "Pick up the red cube"
+    },
+    {
+      "step_id": 5,
+      "action": "dropoff",
+      "parameters": {
+        "target": "red_cube",
+        "destination": "delivery_tray",
+        "place_offset": 0.1
+      },
+      "description": "Place red cube on delivery tray"
+    },
+    {
+      "step_id": 6,
+      "action": "home",
+      "description": "Return to home"
+    }
+  ]
+}
