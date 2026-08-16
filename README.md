@@ -1,5 +1,10 @@
 # Kinova Gen3 Lite ROS 2 Middleware
 
+![Ubuntu 22.04](https://img.shields.io/badge/Ubuntu-22.04-E95420?style=flat-square&logo=ubuntu&logoColor=white)
+![ROS 2 Humble](https://img.shields.io/badge/ROS%202-Humble-22314E?style=flat-square&logo=ros&logoColor=white)
+![Python 3.10+](https://img.shields.io/badge/Python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white)
+![License](https://img.shields.io/badge/License-Apache%202.0-blue?style=flat-square)
+
 A modular ROS 2 middleware that lets a large language model control a Kinova Gen3 Lite robot arm. This repository is the execution layer: it takes a structured JSON recipe, resolves named objects into real coordinates, and drives the arm through MoveIt 2, step by step. It's paired with a separate LLM proxy ([`embodied-ai-proxy`](https://github.com/paul-isit/embodied-ai-proxy)) that turns natural language into that recipe.
 
 Built for Swinburne University's Cyber Lab, researching how LLMs respond to robotic instructions, including malicious ones.
@@ -50,11 +55,21 @@ That launches the full stack in simulation and waits for a recipe. See [docs/run
 ## Repository layout
 
 ```
-kinova_interface/      the runtime nodes, launch file, recipes, config
-kinova_interfaces/     custom ROS 2 service and message definitions
-docs/                  full documentation, start at docs/README.md
+kinova_interface/
+  data/configs/env/    coordinate_dictionary.json, relative_movement.json, obstacles.json
+  kinova_interface/    the four ROS 2 node source files
+  launch/              robot.launch.py
+  recipes/             task_recipe.json, test_suite/
+  resource/            PROJECT-OVERVIEW.md
+kinova_interfaces/
+  srv/, msg/           custom ROS 2 service and message definitions
+docs/
+  README.md            documentation home, start here
+  overview.md, installation.md, running.md, configuration.md
+  testing.md, troubleshooting.md, architecture.md
+  safety-and-contracts.md, demos.md
 ```
 
 ## Contributing
 
-Core-Middleware sub-team owns this repo. Open a PR against a feature branch; flag documentation gaps directly, they're cheap to fix.
+See [CONTRIBUTING.md](CONTRIBUTING.md).

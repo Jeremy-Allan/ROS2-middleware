@@ -6,7 +6,7 @@ Testing is split the same way the system is: the middleware has its own recipe-b
 
 ## The middleware's test recipes
 
-There is no separate automated test runner for the middleware (an earlier `test_script_interface.py` validation node existed and was deliberately removed, see git history commit `8d1be02`). What remains is a set of hand-crafted recipe files under `kinova_interface/recipes/test_suite/`, run manually against a live launch while you watch the console output and RViz.
+Alongside the automated unit tests, there's a set of hand-crafted recipe files under `kinova_interface/recipes/test_suite/`, run manually against a live launch while you watch the console output and RViz.
 
 Test in simulation first, always.
 

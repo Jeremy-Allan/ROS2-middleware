@@ -9,19 +9,13 @@ If you read nothing else, read these two pages:
 
 ## Pick your path
 
-**I'm brand new to this project.** Start with [Overview](overview.md), then [Installation](installation.md). You do not need prior ROS 2 experience, both pages explain concepts as they come up.
-
-**I just want to get it running.** [Installation](installation.md), then [Running the System](running.md) walks through the three terminals you need.
-
-**I need to add a new object, movement, or recipe.** [Configuration](configuration.md) covers the coordinate dictionary, relative movements, obstacles, recipes, and the LLM provider/prompt setup.
-
-**I'm writing or running tests.** [Testing](testing.md) covers the middleware's recipe-based test suite and the proxy's LLM-output test suite, and is honest about what neither one currently catches.
-
-**Something's broken.** [Troubleshooting](troubleshooting.md) is organized by symptom, with the likely cause and the fix, split by which half of the pipeline it's in.
-
-**I want to understand how it actually works.** [Architecture](architecture.md) is the deep dive, per-node internals, the full pipeline diagram, every custom service and message type, and the package layout.
-
-**I want the formal guarantees and safety model.** [Safety and Contracts](safety-and-contracts.md) covers the execution contract, failure modes, and safety layers this middleware is designed against.
+- **I'm brand new to this project:** Start with [Overview](overview.md), then [Installation](installation.md). You do not need prior ROS 2 experience, both pages explain concepts as they come up.
+- **I just want to get it running:** [Installation](installation.md), then [Running the System](running.md) walks through the three terminals you need.
+- **I need to add a new object, movement, or recipe:** [Configuration](configuration.md) covers the coordinate dictionary, relative movements, obstacles, recipes, and the LLM provider/prompt setup.
+- **I'm writing or running tests:** [Testing](testing.md) covers the middleware's test suites and the proxy's LLM-output test suite, and is honest about what neither one currently catches.
+- **Something's broken:** [Troubleshooting](troubleshooting.md) is organized by symptom, with the likely cause and the fix, split by which half of the pipeline it's in.
+- **I want to understand how it actually works:** [Architecture](architecture.md) is the deep dive, per-node internals, the full pipeline diagram, every custom service and message type, and the package layout.
+- **I want the formal guarantees and safety model:** [Safety and Contracts](safety-and-contracts.md) covers the execution contract, failure modes, and safety layers this middleware is designed against.
 
 ## The whole map
 
@@ -55,6 +49,6 @@ If you read nothing else, read these two pages:
 | [Video Demos](demos.md) | Short recordings of each feature in action |
 | [PROJECT-OVERVIEW](../kinova_interface/resource/PROJECT-OVERVIEW.md) | Original Sprint 1/2 design notes and history, kept where it already lived |
 
-## Where else to get help
+## Support
 
-Found something in these docs that's wrong, stale, or confusing? Flag it to the Core-Middleware sub-team or open a PR, documentation fixes are cheap and worth making immediately.
+Found something in these docs that's wrong, stale, or confusing? Flag it to the team or open a PR, documentation fixes are cheap and worth making immediately.

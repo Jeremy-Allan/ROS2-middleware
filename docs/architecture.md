@@ -4,32 +4,22 @@
 
 ## Full pipeline
 
-```
-  You (typed command)
-        |
-        v
-  +----------------------------+       +------------------------------------+
-  |   embodied-ai-proxy          |       |   ROS2-middleware                    |
-  |   inference domain (src/)    |       |                                      |
-  |                              |       |   json_parser_node.py "The Brain"   |
-  |   llm_proxy.py               |       |         |                          |
-  |     builds prompt      ------+------>|         v                          |
-  |     calls LLM adapter        |       |   environment_mapping_node.py       |
-  |     validates JSON schema    |       |   "The Database"                    |
-  |     (Ollama / OpenAI /       |       |         |                          |
-  |      Anthropic / Gemini)     |       |         v                          |
-  |                              |       |   hardware_interface_client.py      |
-  |   Terminal UI (Textual)      |<------+------   "The Muscle"                |
-  |                              | ws:9090 |         |                          |
-  +----------------------------+       |         v  (MoveIt 2, then robot)   |
-        ^                              |                                      |
-        |                              |   telemetry_node.py "The Monitor"    |
-        |     ros2_bridge_ws/           |         ^                          |
-        +-----rosbridge_server----------+---------+                          |
-              (websocket <-> ROS 2)     +------------------------------------+
+```mermaid
+flowchart LR
+    U["You"] --> P["embodied-ai-proxy"]
+    P --> L(("LLM"))
+    L --> P
+    P -->|"/execute_recipe via websocket"| B["rosbridge_server"]
+    B --> M["ROS2-middleware<br/>four nodes"]
+    M --> R["robot arm"]
+    M -.->|"/system/status"| B -.-> P
 ```
 
-The proxy never calls a ROS 2 service directly. Every request goes out over the websocket to `rosbridge_server`, which translates it into a real service call against this middleware. Telemetry flows back the same way, `rosbridge` subscribes to `/system/status` on the proxy's behalf and forwards messages back over the websocket.
+This is the quick-glance version. For the full detailed diagram, node by node with every service call labeled:
+
+![Full architecture diagram, node by node with every service call labeled](diagrams/architecture.png)
+
+The proxy never calls a ROS 2 service directly. Every request goes out over the websocket to `rosbridge_server`, which translates it into a real service call against this middleware. Telemetry flows back the same way (the dashed path above), `rosbridge` subscribes to `/system/status` on the proxy's behalf and forwards messages back over the websocket.
 
 ## Middleware node deep dive
 
@@ -54,15 +44,9 @@ The proxy never calls a ROS 2 service directly. Every request goes out over the 
 - Hosts `/system/reset_fault`, forwarding to the real Kortex driver's own reset service.
 - Automatically reconfigures and reactivates the hardware fault controller in the background if it detects the known driver startup race condition (the physical driver takes several seconds to establish its connection, which otherwise leaves `fault_controller` stuck unconfigured).
 
-## Proxy component deep dive
+## Proxy internals
 
-**`llm_proxy.py`, the orchestrator:** loads `llm_config.json`, `json_schema.json`, and `system_prompt.md` at startup, maintains a persistent websocket connection to the bridge, and exposes the main `process_user_request()` method the TUI calls per command: fetch known objects, build the prompt, call the LLM, validate the response, forward it to `/execute_recipe`.
-
-**`llm_adapters/`, one file per provider:** `ollama.py`, `openai.py`, `anthropic.py`, `gemini.py`, all implementing the same `generate(prompt) -> str` interface against a shared `base.py` that handles the HTTP request and common error cases. Adding a new provider means writing a new adapter here and registering it in `__init__.py`'s `LLM_REGISTRY`.
-
-**`ros2_bridge_ws/`, the proxy's own tiny ROS 2 workspace:** contains a single package, `custom_bridge_pkg`, whose only job is launching `rosbridge_server` on port 9090. It has no custom nodes or logic of its own.
-
-**`src/frontend/`, the terminal interface:** built with Textual. `tui_app.py` is the main application; `components/` holds the input bar, log panel, sidebar (which renders the live telemetry from `/system/status`), and status panel (bridge connection indicator).
+The proxy's own components (`llm_proxy.py`, the LLM adapters, `ros2_bridge_ws`, the Textual terminal interface) are documented in the embodied-ai-proxy repository itself: [github.com/paul-isit/embodied-ai-proxy](https://github.com/paul-isit/embodied-ai-proxy). This page covers this middleware's own internals in depth; the pipeline diagram above is the shared context between the two.
 
 ## Custom interface types (middleware)
 
@@ -83,6 +67,27 @@ The proxy never calls a ROS 2 service directly. Every request goes out over the 
 
 - `ExtendedStatus`: one node's heartbeat: `node_name`, `state` (0 = IDLE, 1 = BUSY, 2 = FAULT), `status_message`, `last_command_valid`.
 - `SystemSummary`: the aggregated view: `summary_state` plus `individual_states[]`.
+
+## Where everything lives on disk
+
+The middleware doesn't stand alone, it builds inside a workspace alongside Kinova's own driver stack, while the proxy lives entirely separately:
+
+```mermaid
+flowchart TD
+    WS["~/workspace/"] --> RKW["ros2_kortex_ws/"]
+    WS --> PROXY["embodied-ai-proxy/"]
+
+    RKW --> SRC["src/"]
+    RKW --> BUILD["install/, build/, log/<br/>created by colcon build"]
+
+    SRC --> RK["ros2_kortex/<br/>Kinova's official driver + MoveIt config"]
+    SRC --> MID["ROS2-middleware/<br/>this repo"]
+
+    PROXY --> BRIDGE["ros2_bridge_ws/<br/>src/custom_bridge_pkg/"]
+    PROXY --> PSRC["src/, configs/, tests/"]
+```
+
+See [Installation](installation.md) for how this layout gets built up step by step.
 
 ## Package layout reference
 

@@ -34,7 +34,7 @@ If a step fails, execution halts immediately rather than continuing partway thro
 
 ## Known gap relevant to safety
 
-There is currently no layer that evaluates whether a schema-valid, collision-free recipe is semantically dangerous. MoveIt's collision checking only prevents the arm physically hitting something; it says nothing about whether a command should have been issued in the first place. See the note in [Configuration](configuration.md) about the proxy's undefined `safety_violation` handling, this matters more than usual given the project's research focus on how LLMs respond to malicious instructions.
+There is currently no layer that evaluates whether a schema-valid, collision-free recipe is semantically dangerous. MoveIt's collision checking only prevents the arm physically hitting something; it says nothing about whether a command should have been issued in the first place. This matters more than usual given the project's research focus on how LLMs respond to malicious instructions.
 
 ## Failure mode summary
 
