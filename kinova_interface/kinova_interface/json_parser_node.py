@@ -4,9 +4,10 @@ from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallb
 import time
 import os
 import json
+from geometry_msgs.msg import Quaternion
 from ament_index_python.packages import get_package_share_directory
 #Services
-from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, GetObjectInfo, ExecuteRecipe, HomeArm, MoveArm, MoveGripper, RelativeMove, AttachObject, DetachObject
+from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, GetObjectInfo, ExecuteRecipe, HomeArm, MoveArm, MoveGripper, RelativeMove, AttachObject, DetachObject, UpdateObjectPose
 from kinova_interfaces.msg import ExtendedStatus
 
 class JsonParser:
@@ -104,7 +105,9 @@ class JsonParserNode(Node):
         # Service clients for attach/detach provided by environment mapping node
         self.attach_client = self.create_client(AttachObject, '/attach_object', callback_group=self.cb_group)
         self.detach_client = self.create_client(DetachObject, '/detach_object', callback_group=self.cb_group)
-
+        #update pose service client for environment mapping node
+        self.update_pose_client = self.create_client(UpdateObjectPose, '/update_object_pose', callback_group=self.cb_group)
+   
     def wait_for_future(self, future, service_name, timeout_sec=10.0):
         """Safely wait for an async service call future to complete without deadlocking the executor."""
         start = time.time()
@@ -321,7 +324,39 @@ class JsonParserNode(Node):
         else:
             self.get_logger().error(f"Failed to detach '{obj_id}'")
             return False
+    
+    def update_object_pose(self, obj_id, x, y, z, orientation=None):
+        if not self.update_pose_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Update Object Pose service not available")
+            return False
 
+        req = UpdateObjectPose.Request()
+        req.object_id = obj_id
+        req.pose.position.x = x
+        req.pose.position.y = y
+        req.pose.position.z = z
+
+        if orientation:
+            # Convert dict to Quaternion message
+            q = Quaternion()
+            q.x = orientation['x']
+            q.y = orientation['y']
+            q.z = orientation['z']
+            q.w = orientation['w']
+            req.pose.orientation = q
+        else:
+            req.pose.orientation.x = 0.0
+            req.pose.orientation.y = 0.0
+            req.pose.orientation.z = 0.0
+            req.pose.orientation.w = 1.0
+
+        future = self.update_pose_client.call_async(req)
+        response = self.wait_for_future(future, '/update_object_pose')
+        if response and response.success:
+            return True
+        else:
+            self.get_logger().error(f"Failed to update pose for {obj_id}: {response.message if response else 'no response'}")
+            return False
 
     def execute_recipe(self):
         """Core execution logic."""
@@ -433,9 +468,19 @@ class JsonParserNode(Node):
                     break
 
                 if target_name:
+                    obj_info = self.get_object_info(target_name)
+                    if obj_info:
+                        orient = obj_info['pose']['orientation']
+                    else:
+                        orient = None
+                    # Update pose to the actual destination (not the offset)
+                    if not self.update_object_pose(target_name, dest_coords['x'], dest_coords['y'], dest_coords['z'], orient):
+                        self.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
+                    
                     # 3. Add object back to planning scene (detach)
                     self.detach_object(target_name)
                     self.get_logger().info(f"Placed '{target_name}' at '{destination_name}'")
+                    success = True
 
 
             if success:
