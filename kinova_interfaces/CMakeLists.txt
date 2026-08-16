@@ -19,6 +19,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/MoveGripper.srv"
   "srv/RelativeMove.srv"
   "srv/HomeArm.srv"
+  "srv/UpdateObjectPose.srv"
   "msg/ExtendedStatus.msg"
   "msg/SystemSummary.msg"
   DEPENDENCIES geometry_msgs shape_msgs

@@ -7,11 +7,11 @@ import math
 from pathlib import Path
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
-from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetObjectInfo, AttachObject, DetachObject
+from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose
 from moveit_msgs.msg import PlanningScene, CollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
 from shape_msgs.msg import SolidPrimitive
-from geometry_msgs.msg import Pose
+from geometry_msgs.msg import Pose, Quaternion
 from kinova_interfaces.msg import ExtendedStatus
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -44,7 +44,7 @@ class EnvironmentMappingNode(Node):
         self.srv_move = self.create_service(GetRelativeMovement, '/get_relative_movement', self.get_relative_movement_callback)
         self.srv_list = self.create_service(GetRobotParameters, '/get_robot_parameters', self.get_robot_parameters_callback)
         self.srv_info = self.create_service(GetObjectInfo, '/get_object_info', self.get_object_info_callback)
-
+        self.update_pose_srv = self.create_service(UpdateObjectPose, '/update_object_pose', self.update_object_pose_callback)
         self.scene_cb_group = ReentrantCallbackGroup()
         self.scene_client = self.create_client(ApplyPlanningScene, '/apply_planning_scene', callback_group=self.scene_cb_group)
         self.attach_srv = self.create_service(AttachObject, '/attach_object', self.attach_object_callback, callback_group=self.scene_cb_group)
@@ -319,7 +319,30 @@ class EnvironmentMappingNode(Node):
             response.success = False
             response.message = f"Failed to detach '{obj_id}'"
         return response
-   
+    
+    def update_object_pose_callback(self, request, response):
+        obj_id = request.object_id
+        if obj_id not in self.static_objects:
+            response.success = False
+            response.message = f"Object '{obj_id}' not found"
+            return response
+
+        # Update position
+        self.static_objects[obj_id]['pose']['position']['x'] = request.pose.position.x
+        self.static_objects[obj_id]['pose']['position']['y'] = request.pose.position.y
+        self.static_objects[obj_id]['pose']['position']['z'] = request.pose.position.z
+
+        # Update orientation (if provided, else keep existing)
+        if request.pose.orientation.x != 0.0 or request.pose.orientation.y != 0.0 or \
+        request.pose.orientation.z != 0.0 or request.pose.orientation.w != 0.0:
+            self.static_objects[obj_id]['pose']['orientation']['x'] = request.pose.orientation.x
+            self.static_objects[obj_id]['pose']['orientation']['y'] = request.pose.orientation.y
+            self.static_objects[obj_id]['pose']['orientation']['z'] = request.pose.orientation.z
+            self.static_objects[obj_id]['pose']['orientation']['w'] = request.pose.orientation.w
+
+        response.success = True
+        response.message = f"Updated pose for '{obj_id}'"
+        return response
     def update_planning_scene_for_object(self, obj_id, operation):
         """Apply a REMOVE or ADD diff to the planning scene for a single object."""
         if not self.scene_client.wait_for_service(timeout_sec=5.0):
