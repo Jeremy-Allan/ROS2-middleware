@@ -1,6 +1,5 @@
 import json
 import pytest
-import rclpy
 
 from unittest.mock import MagicMock, patch
 
@@ -23,13 +22,6 @@ pytest src/ROS2-middleware/kinova_interface/test/test_json_parser_node.py -v
 """
 
 # Fixtures
-
-@pytest.fixture(scope="session")
-def ros_context():
-    rclpy.init()
-    yield
-    rclpy.shutdown()
-
 
 @pytest.fixture
 def node(ros_context):

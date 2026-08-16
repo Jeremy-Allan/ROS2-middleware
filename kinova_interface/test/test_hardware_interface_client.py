@@ -1,5 +1,4 @@
 import pytest
-import rclpy
 
 from unittest.mock import MagicMock, patch
 
@@ -21,11 +20,6 @@ pytest src/ROS2-middleware/kinova_interface/test/test_hardware_interface_client.
 """
 
 
-@pytest.fixture(scope="module")
-def ros_context():
-    rclpy.init()
-    yield
-    rclpy.shutdown()
 
 
 @pytest.fixture

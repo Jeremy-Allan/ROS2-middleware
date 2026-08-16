@@ -16,12 +16,6 @@ pytest src/ROS2-middleware/kinova_interface/test/test_telemetry_node.py -v
 """
 
 # Fixtures
-@pytest.fixture(scope="session")
-def ros_context():
-    rclpy.init()
-    yield
-    rclpy.shutdown()
-
 
 @pytest.fixture
 def node(ros_context):
