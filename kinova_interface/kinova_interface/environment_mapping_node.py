@@ -7,12 +7,14 @@ import math
 from pathlib import Path
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
-from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement
+from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetObjectInfo, AttachObject, DetachObject
 from moveit_msgs.msg import PlanningScene, CollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
 from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose
 from kinova_interfaces.msg import ExtendedStatus
+from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 
 
 class EnvironmentMappingNode(Node):
@@ -33,7 +35,7 @@ class EnvironmentMappingNode(Node):
         self.current_state = ExtendedStatus.STATE_IDLE
         self.status_text = "Environment Mapper Active"
         self.command_success = True
-
+        
         self.static_objects = self.load_object_dictionary()
         self.relative_movements = self.load_relative_movements()
         self.obstacles = self.load_obstacles_dictionary()
@@ -41,8 +43,15 @@ class EnvironmentMappingNode(Node):
         self.srv_coords = self.create_service(GetObjectCoordinates, '/get_coordinates', self.get_coordinates_callback)
         self.srv_move = self.create_service(GetRelativeMovement, '/get_relative_movement', self.get_relative_movement_callback)
         self.srv_list = self.create_service(GetRobotParameters, '/get_robot_parameters', self.get_robot_parameters_callback)
+        self.srv_info = self.create_service(GetObjectInfo, '/get_object_info', self.get_object_info_callback)
 
-        self.scene_client = self.create_client(ApplyPlanningScene, '/apply_planning_scene')
+        self.scene_cb_group = ReentrantCallbackGroup()
+        self.scene_client = self.create_client(ApplyPlanningScene, '/apply_planning_scene', callback_group=self.scene_cb_group)
+        self.attach_srv = self.create_service(AttachObject, '/attach_object', self.attach_object_callback, callback_group=self.scene_cb_group)
+        self.detach_srv = self.create_service(DetachObject, '/detach_object', self.detach_object_callback, callback_group=self.scene_cb_group)
+        
+        self.attached_objects = set() 
+
 
         self.scene_thread = threading.Thread(target=self.publish_planning_scene, daemon=True)
         self.scene_thread.start()
@@ -228,6 +237,133 @@ class EnvironmentMappingNode(Node):
         self.publish_status()
         return response
 
+    def get_object_info_callback(self, request, response):
+        obj_id = request.object_id
+        if obj_id in self.static_objects:
+            obj_data = self.static_objects[obj_id]
+            pos = obj_data['pose']['position']
+            orient = obj_data['pose']['orientation']
+
+            response.pose.position.x = pos['x']
+            response.pose.position.y = pos['y']
+            response.pose.position.z = pos['z']
+            response.pose.orientation.x = orient['x']
+            response.pose.orientation.y = orient['y']
+            response.pose.orientation.z = orient['z']
+            response.pose.orientation.w = orient['w']
+
+            # Map stored shape type (string) to SolidPrimitive enum
+            shape_type_map = {
+                "BOX": SolidPrimitive.BOX,
+                "SPHERE": SolidPrimitive.SPHERE,
+                "CYLINDER": SolidPrimitive.CYLINDER,
+                "CONE": SolidPrimitive.CONE
+            }
+            stype = obj_data['shape'].get('type', 'BOX')
+            response.shape.type = shape_type_map.get(stype, SolidPrimitive.BOX)
+            response.shape.dimensions = obj_data['shape'].get('dimensions', [])
+
+            response.success = True
+            response.message = "Object Info Found"
+            self.command_success = True
+            self.status_text = f"Resolved object info: {obj_id}"
+        else:
+            response.success = False
+            response.message = f"Object {obj_id} NOT Found"
+            self.command_success = False
+            self.status_text = f"Failed to resolve object info: {obj_id}"
+
+        self.publish_status()
+        return response
+
+    def attach_object_callback(self, request, response):
+        obj_id = request.object_id
+        if obj_id in self.attached_objects:
+            self.get_logger().warn(f"Object '{obj_id}' is already attached.")
+            response.success = True
+            response.message = "Object already attached"
+            return response
+
+        if obj_id not in self.static_objects and obj_id not in self.obstacles:
+            response.success = False
+            response.message = f"Object '{obj_id}' not found in environment"
+            self.get_logger().error(response.message)
+            return response
+
+        # Remove from planning scene
+        success = self.update_planning_scene_for_object(obj_id, CollisionObject.REMOVE)
+        if success:
+            self.attached_objects.add(obj_id)
+            response.success = True
+            response.message = f"Object '{obj_id}' attached (removed from scene)"
+        else:
+            response.success = False
+            response.message = f"Failed to attach '{obj_id}'"
+        return response
+
+    def detach_object_callback(self, request, response):
+        obj_id = request.object_id
+        if obj_id not in self.attached_objects:
+            self.get_logger().warn(f"Object '{obj_id}' is not currently attached.")
+            response.success = False
+            response.message = f"Object '{obj_id}' not attached"
+            return response
+
+        # Add back to planning scene
+        success = self.update_planning_scene_for_object(obj_id, CollisionObject.ADD)
+        if success:
+            self.attached_objects.remove(obj_id)
+            response.success = True
+            response.message = f"Object '{obj_id}' detached (added back to scene)"
+        else:
+            response.success = False
+            response.message = f"Failed to detach '{obj_id}'"
+        return response
+   
+    def update_planning_scene_for_object(self, obj_id, operation):
+        """Apply a REMOVE or ADD diff to the planning scene for a single object."""
+        if not self.scene_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('/apply_planning_scene not available')
+            return False
+
+        collision_obj = CollisionObject()
+        collision_obj.header.frame_id = "base_link"
+        collision_obj.id = obj_id
+        collision_obj.operation = operation  # REMOVE / ADD
+
+        if operation == CollisionObject.ADD:
+            # Need to re-supply the full geometry when adding back
+            obj_data = self.static_objects.get(obj_id) or self.obstacles.get(obj_id)
+            if obj_data is None:
+                self.get_logger().error(f"No stored data for '{obj_id}' to re-add to scene")
+                return False
+            full_obj = self.build_collision_object(obj_id, obj_data)
+            if full_obj is None:
+                return False
+            collision_obj = full_obj
+            collision_obj.operation = CollisionObject.ADD
+
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.world.collision_objects.append(collision_obj)
+
+        request = ApplyPlanningScene.Request()
+        request.scene = scene
+        
+        future = self.scene_client.call_async(request)
+        start = time.time()
+        while rclpy.ok() and not future.done():
+            if time.time() - start > 5.0:
+                self.get_logger().error(f"Timed out waiting for apply_planning_scene ({obj_id})")
+                return False
+            time.sleep(0.01)
+
+        if future.result() is not None and future.result().success:
+            return True
+        else:
+            self.get_logger().error(f"apply_planning_scene failed for '{obj_id}' (op={operation})")
+            return False
+
     def build_collision_object(self, obj_id, obj_data):
         
         collision_obj = CollisionObject()
@@ -321,7 +457,9 @@ class EnvironmentMappingNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = EnvironmentMappingNode()
-    rclpy.spin(node)
+    executor = rclpy.executors.MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+    executor.spin()
     node.destroy_node()
     rclpy.shutdown()
 

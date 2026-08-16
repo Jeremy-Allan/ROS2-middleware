@@ -40,9 +40,9 @@
     },
     {
       "step_id": 6,
-      "action": "move_arm",
+      "action": "relative_move",
       "parameters": {
-        "target": "delivery_tray"
+        "vector": "move_upwards"
       },
       "description": "Move to the drop-off zone"
     },
