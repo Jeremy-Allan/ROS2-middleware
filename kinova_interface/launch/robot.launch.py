@@ -8,6 +8,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
+from launch.conditions import IfCondition
 import launch.logging
 
 def check_hardware_args(context, *args, **kwargs):
@@ -30,6 +31,7 @@ def launch_setup(context, *args, **kwargs):
     debug_mode = LaunchConfiguration('debug_mode').perform(context).lower() == 'true'
     core_debug = LaunchConfiguration('core_debug').perform(context).lower() == 'true'
     enable_individual_logs = LaunchConfiguration('enable_individual_logs').perform(context).lower() == 'true'
+    use_vision = LaunchConfiguration('use_vision')
 
     base_ros_args = []
     if not enable_individual_logs:
@@ -80,7 +82,34 @@ def launch_setup(context, *args, **kwargs):
         ros_arguments=get_ros_args('telemetry_node')
     )
 
-    return [environment_mapping_node, hardware_interface_client, json_parser_node, telemetry_node]
+    # Vision Integration
+    cv_detection_node = Node(
+        package='kinova_interface',
+        executable='cv_detection_node',
+        name='cv_detection_node',
+        output='screen',
+        condition=IfCondition(use_vision),
+        ros_arguments=get_ros_args('cv_detection_node')
+    )
+
+    # Placeholder Camera Transform: 50cm above base, looking straight down
+    # Format: x y z yaw pitch roll frame_id child_frame_id
+    camera_transform = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='camera_static_transform',
+        arguments=['0', '0', '0.5', '0', '1.57', '0', 'base_link', 'camera_link'],
+        condition=IfCondition(use_vision)
+    )
+
+    return [
+        environment_mapping_node, 
+        hardware_interface_client, 
+        json_parser_node, 
+        telemetry_node,
+        cv_detection_node,
+        camera_transform
+    ]
 
 def generate_launch_description():
     debug_mode_arg = DeclareLaunchArgument(
@@ -117,6 +146,12 @@ def generate_launch_description():
         'use_fake_hardware',
         default_value='true',
         description='Whether to use fake hardware (simulation) or physical hardware. Default value is true'
+    )
+
+    use_vision_arg = DeclareLaunchArgument(
+        'use_vision',
+        default_value='false',
+        description='Enable computer vision based object detection'
     )
 
     robot_ip = LaunchConfiguration('robot_ip')
@@ -165,6 +200,7 @@ def generate_launch_description():
         recipe_arg,
         robot_ip_arg,
         use_fake_hardware_arg,
+        use_vision_arg,
         OpaqueFunction(function=check_hardware_args),
         kortex_control_launch,
         move_group_launch,

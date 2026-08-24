@@ -30,6 +30,7 @@ setup(
             'environment_mapping_node = kinova_interface.environment_mapping_node:main',
             'json_parser_node = kinova_interface.json_parser_node:main',
             'telemetry_node = kinova_interface.telemetry_node:main',
+            'cv_detection_node = kinova_interface.cv_detection_node:main',
         ],
     },
 )

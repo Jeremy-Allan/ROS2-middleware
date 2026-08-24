@@ -327,21 +327,51 @@ class EnvironmentMappingNode(Node):
             response.message = f"Object '{obj_id}' not found"
             return response
 
+        # Get existing pose for comparison
+        old_pos = self.static_objects[obj_id]['pose']['position']
+        old_orient = self.static_objects[obj_id]['pose']['orientation']
+
+        # Check if change is significant (Threshold: 5mm or ~2 degrees)
+        dist = math.sqrt(
+            (request.pose.position.x - old_pos['x'])**2 +
+            (request.pose.position.y - old_pos['y'])**2 +
+            (request.pose.position.z - old_pos['z'])**2
+        )
+        
+        # Simple quat check (dot product)
+        dot = abs(request.pose.orientation.x * old_orient['x'] +
+                  request.pose.orientation.y * old_orient['y'] +
+                  request.pose.orientation.z * old_orient['z'] +
+                  request.pose.orientation.w * old_orient['w'])
+
+        if dist < 0.005 and dot > 0.999:
+            response.success = True
+            response.message = "Pose change below threshold, skipping update"
+            return response
+
         # Update position
         self.static_objects[obj_id]['pose']['position']['x'] = request.pose.position.x
         self.static_objects[obj_id]['pose']['position']['y'] = request.pose.position.y
         self.static_objects[obj_id]['pose']['position']['z'] = request.pose.position.z
 
-        # Update orientation (if provided, else keep existing)
-        if request.pose.orientation.x != 0.0 or request.pose.orientation.y != 0.0 or \
-        request.pose.orientation.z != 0.0 or request.pose.orientation.w != 0.0:
-            self.static_objects[obj_id]['pose']['orientation']['x'] = request.pose.orientation.x
-            self.static_objects[obj_id]['pose']['orientation']['y'] = request.pose.orientation.y
-            self.static_objects[obj_id]['pose']['orientation']['z'] = request.pose.orientation.z
-            self.static_objects[obj_id]['pose']['orientation']['w'] = request.pose.orientation.w
+        # Update orientation
+        self.static_objects[obj_id]['pose']['orientation']['x'] = request.pose.orientation.x
+        self.static_objects[obj_id]['pose']['orientation']['y'] = request.pose.orientation.y
+        self.static_objects[obj_id]['pose']['orientation']['z'] = request.pose.orientation.z
+        self.static_objects[obj_id]['pose']['orientation']['w'] = request.pose.orientation.w
 
-        response.success = True
-        response.message = f"Updated pose for '{obj_id}'"
+        # Trigger MoveIt Update
+        success = self.update_planning_scene_for_object(obj_id, CollisionObject.ADD)
+        
+        if success:
+            response.success = True
+            response.message = f"Updated pose and MoveIt scene for '{obj_id}'"
+            self.get_logger().info(response.message)
+        else:
+            response.success = False
+            response.message = f"Failed to update MoveIt scene for '{obj_id}'"
+            self.get_logger().error(response.message)
+
         return response
     def update_planning_scene_for_object(self, obj_id, operation):
         """Apply a REMOVE or ADD diff to the planning scene for a single object."""
