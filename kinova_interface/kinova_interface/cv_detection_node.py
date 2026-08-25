@@ -36,7 +36,8 @@ class CVDetectionNode(Node):
         except ValueError:
             # If it's a string (like a URL), treat it as a stream source
             self.get_logger().info(f"Opening IP camera stream: {source}...")
-            self.cap = cv2.VideoCapture(source)
+            # Use CAP_FFMPEG for better network stream support
+            self.cap = cv2.VideoCapture(source, cv2.CAP_FFMPEG)
         
         if not self.cap.isOpened():
             self.get_logger().error(f"Could not open camera source: {source}")
