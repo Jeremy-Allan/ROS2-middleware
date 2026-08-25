@@ -22,16 +22,24 @@ class CVDetectionNode(Node):
         super().__init__('cv_detection_node')
         
         # Parameters
-        self.declare_parameter('camera_index', 0)
+        self.declare_parameter('camera_source', '0')
         self.declare_parameter('use_markers', True)
         
-        camera_index = self.get_parameter('camera_index').value
-        self.get_logger().info(f"Opening camera index {camera_index}...")
+        source = self.get_parameter('camera_source').value
         
-        self.cap = cv2.VideoCapture(camera_index)
+        # Determine if source is an index or a URL
+        try:
+            # If it's a digit (like "0"), treat it as a camera index
+            camera_index = int(source)
+            self.get_logger().info(f"Opening local camera index {camera_index}...")
+            self.cap = cv2.VideoCapture(camera_index)
+        except ValueError:
+            # If it's a string (like a URL), treat it as a stream source
+            self.get_logger().info(f"Opening IP camera stream: {source}...")
+            self.cap = cv2.VideoCapture(source)
+        
         if not self.cap.isOpened():
-            self.get_logger().error(f"Could not open camera on index {camera_index}")
-            # We don't exit here to allow the node to stay alive, but it won't do much
+            self.get_logger().error(f"Could not open camera source: {source}")
         
         # Camera resolution
         self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
