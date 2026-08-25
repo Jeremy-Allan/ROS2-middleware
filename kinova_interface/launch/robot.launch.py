@@ -46,6 +46,7 @@ def launch_setup(context, *args, **kwargs):
         return args
 
     recipe = LaunchConfiguration('recipe')
+    camera_source = LaunchConfiguration('camera_source')
     env_dir = PathJoinSubstitution([FindPackageShare('kinova_interface'), 'data', 'configs', 'env'])
 
     environment_mapping_node = Node(
@@ -89,6 +90,7 @@ def launch_setup(context, *args, **kwargs):
         name='cv_detection_node',
         output='screen',
         condition=IfCondition(use_vision),
+        parameters=[{'camera_source': camera_source}],
         ros_arguments=get_ros_args('cv_detection_node')
     )
 
@@ -154,6 +156,12 @@ def generate_launch_description():
         description='Enable computer vision based object detection'
     )
 
+    camera_source_arg = DeclareLaunchArgument(
+        'camera_source',
+        default_value='0',
+        description='Camera index or IP stream URL'
+    )
+
     robot_ip = LaunchConfiguration('robot_ip')
     use_fake_hardware = LaunchConfiguration('use_fake_hardware')
 
@@ -201,8 +209,9 @@ def generate_launch_description():
         robot_ip_arg,
         use_fake_hardware_arg,
         use_vision_arg,
+        camera_source_arg,
         OpaqueFunction(function=check_hardware_args),
         kortex_control_launch,
         move_group_launch,
         OpaqueFunction(function=launch_setup)
-    ])
+        ])
