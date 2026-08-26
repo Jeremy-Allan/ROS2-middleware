@@ -1,12 +1,12 @@
 {
   "red_cube": {
     "pose": {
-      "position": { "x": -0.3255, "y": -0.1235, "z": 0.01 },
-      "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
+      "position": { "x": -0.3255, "y": -0.1235, "z": 0.04 },
+      "orientation": { "roll": 1.57, "pitch": 1.57, "yaw": 0.0 }
     },
     "shape": {
       "type": "BOX",
-      "dimensions": [0.05, 0.05, 0.05]
+      "dimensions": [0.107, 0.075, 0.043]
     }
   },
   "blue_cube": {
@@ -16,7 +16,7 @@
     },
     "shape": {
       "type": "BOX",
-      "dimensions": [0.05, 0.05, 0.05]
+      "dimensions": [0.140, 0.045, 0.030]
     }
   },
   "delivery_tray": {
