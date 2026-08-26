@@ -92,10 +92,12 @@ class CVDetectionNode(Node):
 
     def detection_callback(self):
         if not self.cap.isOpened():
+            self.get_logger().warn("Camera source not opened", throttle_duration_sec=10.0)
             return
 
         ret, frame = self.cap.read()
         if not ret:
+            self.get_logger().warn("Failed to read frame from camera", throttle_duration_sec=10.0)
             return
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
@@ -112,6 +114,7 @@ class CVDetectionNode(Node):
                     continue
                 
                 obj_name = TARGET_NAMES[marker_id]
+                self.get_logger().info(f"Detected target object: {obj_name} (ID: {marker_id})")
                 marker_corners = corners[idx][0]
                 
                 success, rvec, tvec = cv2.solvePnP(
@@ -140,6 +143,8 @@ class CVDetectionNode(Node):
                     
                     # 2. Transform to Robot Frame (base_link)
                     self.transform_and_update(obj_name, pose_camera)
+                else:
+                    self.get_logger().warn(f"solvePnP failed for {obj_name}")
 
     def transform_and_update(self, obj_name, pose_camera):
         try:
@@ -159,8 +164,10 @@ class CVDetectionNode(Node):
 
     def call_update_service(self, obj_name, pose):
         if not self.update_client.wait_for_service(timeout_sec=1.0):
+            self.get_logger().warn(f"Service /update_object_pose not available", throttle_duration_sec=5.0)
             return
         
+        self.get_logger().info(f"Sending pose update for {obj_name}")
         req = UpdateObjectPose.Request()
         req.object_id = obj_name
         req.pose = pose
