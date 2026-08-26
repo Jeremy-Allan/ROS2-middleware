@@ -4,9 +4,10 @@ from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallb
 import time
 import os
 import json
+from geometry_msgs.msg import Quaternion
 from ament_index_python.packages import get_package_share_directory
 #Services
-from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, ExecuteRecipe, HomeArm, MoveArm, MoveGripper, RelativeMove
+from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, GetObjectInfo, ExecuteRecipe, HomeArm, MoveArm, MoveGripper, RelativeMove, AttachObject, DetachObject, UpdateObjectPose
 from kinova_interfaces.msg import ExtendedStatus
 
 class JsonParser:
@@ -57,6 +58,7 @@ class JsonParserNode(Node):
         # Service clients for coordinate fetching
         self.coord_client = self.create_client(GetObjectCoordinates, '/get_coordinates', callback_group=self.cb_group)
         self.relative_client = self.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=self.cb_group)
+        self.info_client = self.create_client(GetObjectInfo, '/get_object_info', callback_group=self.cb_group)
 
         # 3. Initialize the Parser
         self.parser = JsonParser(self)
@@ -100,16 +102,21 @@ class JsonParserNode(Node):
             else:
                 self.get_logger().error(f"Failed to load recipe from {recipe_path}")
 
-    def wait_for_future(self, future, service_name):
+        # Service clients for attach/detach provided by environment mapping node
+        self.attach_client = self.create_client(AttachObject, '/attach_object', callback_group=self.cb_group)
+        self.detach_client = self.create_client(DetachObject, '/detach_object', callback_group=self.cb_group)
+        #update pose service client for environment mapping node
+        self.update_pose_client = self.create_client(UpdateObjectPose, '/update_object_pose', callback_group=self.cb_group)
+   
+    def wait_for_future(self, future, service_name, timeout_sec=10.0):
         """Safely wait for an async service call future to complete without deadlocking the executor."""
+        start = time.time()
         while rclpy.ok() and not future.done():
-            time.sleep(0.01) # Yields thread control temporarily to the executor mechanics
-
-        if future.done():
-            return future.result()
-        else:
-            self.get_logger().error(f"Future for {service_name} was cleared or canceled.")
-            return None
+            if time.time() - start > timeout_sec:
+                self.get_logger().error(f"Timed out waiting for {service_name}")
+                return None
+            time.sleep(0.01)
+        return future.result() if future.done() else None
 
     def publish_status(self):
         msg = ExtendedStatus()
@@ -159,21 +166,45 @@ class JsonParserNode(Node):
         return response
 
     def get_static_object_coords(self, target_name):
-        if not self.coord_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Get Coordinate service not available")
+        """Return a dict with x,y,z for the object, or None on failure."""
+        info = self.get_object_info(target_name)
+        if info is None:
             return None
-        req = GetObjectCoordinates.Request()
+        pos = info['pose']['position']
+        return {'x': pos['x'], 'y': pos['y'], 'z': pos['z']}
+
+    def get_object_info(self, target_name):
+        """Query the environment mapping node for full object info (pose + shape)."""
+        if not self.info_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Get Object Info service not available")
+            return None
+        req = GetObjectInfo.Request()
         req.object_id = target_name
-        
-        # Async call + safe wait loop
-        future = self.coord_client.call_async(req)
-        response = self.wait_for_future(future, '/get_coordinates')
+
+        future = self.info_client.call_async(req)
+        response = self.wait_for_future(future, '/get_object_info')
 
         if response and response.success:
-            return {'x': response.x, 'y': response.y, 'z': response.z}
+            pos = response.pose.position
+            orient = response.pose.orientation
+            shape = response.shape
+            return {
+                'pose': {
+                    'position': {'x': pos.x, 'y': pos.y, 'z': pos.z},
+                    'orientation': {'x': orient.x, 'y': orient.y, 'z': orient.z, 'w': orient.w}
+                },
+                'shape': {
+                    'type': shape.type,
+                    'dimensions': list(shape.dimensions)
+                }
+            }
         else:
-            self.get_logger().error(f"Failed to get coordinates for {target_name}: {response.message if response else 'no response'}")
+            self.get_logger().error(f"Failed to get object info for {target_name}: {response.message if response else 'no response'}")
             return None
+
+
+    def getObjectInfo(self, target_name):
+        return self.get_object_info(target_name)
 
     def get_relative_movement_vector(self, movement_name):
         if not self.relative_client.wait_for_service(timeout_sec=5.0):
@@ -262,6 +293,71 @@ class JsonParserNode(Node):
             self.get_logger().error(f"Failed to Move Gripper to: {position}: {response.message if response else 'no response'}")
             return None
 
+    def attach_object(self, obj_id):
+        """Remove object from planning scene (allow collision) via the environment mapping node."""
+        if not self.attach_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Attach service not available")
+            return False
+        req = AttachObject.Request()
+        req.object_id = obj_id
+        future = self.attach_client.call_async(req)
+        response = self.wait_for_future(future, '/attach_object')
+        if response and response.success:
+            self.get_logger().info(f"Attached object '{obj_id}' (removed from scene)")
+            return True
+        else:
+            self.get_logger().error(f"Failed to attach '{obj_id}'")
+            return False
+
+    def detach_object(self, obj_id):
+        """Add object back to planning scene via the environment mapping node."""
+        if not self.detach_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Detach service not available")
+            return False
+        req = DetachObject.Request()
+        req.object_id = obj_id
+        future = self.detach_client.call_async(req)
+        response = self.wait_for_future(future, '/detach_object')
+        if response and response.success:
+            self.get_logger().info(f"Detached object '{obj_id}' (added back to scene)")
+            return True
+        else:
+            self.get_logger().error(f"Failed to detach '{obj_id}'")
+            return False
+    
+    def update_object_pose(self, obj_id, x, y, z, orientation=None):
+        if not self.update_pose_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Update Object Pose service not available")
+            return False
+
+        req = UpdateObjectPose.Request()
+        req.object_id = obj_id
+        req.pose.position.x = x
+        req.pose.position.y = y
+        req.pose.position.z = z
+
+        if orientation:
+            # Convert dict to Quaternion message
+            q = Quaternion()
+            q.x = orientation['x']
+            q.y = orientation['y']
+            q.z = orientation['z']
+            q.w = orientation['w']
+            req.pose.orientation = q
+        else:
+            req.pose.orientation.x = 0.0
+            req.pose.orientation.y = 0.0
+            req.pose.orientation.z = 0.0
+            req.pose.orientation.w = 1.0
+
+        future = self.update_pose_client.call_async(req)
+        response = self.wait_for_future(future, '/update_object_pose')
+        if response and response.success:
+            return True
+        else:
+            self.get_logger().error(f"Failed to update pose for {obj_id}: {response.message if response else 'no response'}")
+            return False
+
     def execute_recipe(self):
         """Core execution logic."""
         steps = self.parser.get_recipe_steps()
@@ -305,6 +401,87 @@ class JsonParserNode(Node):
                 gripper = float(params['position'])
                 result = self.call_move_gripper_service(gripper)
                 success = result is not None and result['success']
+            elif action == 'pickup':
+                target_name = params['target']
+                open_pos = float(params.get('open_position', 0.0))
+                close_pos = float(params.get('close_position', 0.8))
+                coords = self.get_static_object_coords(target_name)
+                if coords:
+                    # 1. Open gripper before moving
+                    rg = self.call_move_gripper_service(open_pos)
+                    success = rg is not None and rg['success']
+                    if not success:
+                        self.get_logger().error('Failed to open gripper for pickup')
+                        break
+
+                    # 3. Descend to the actual object position
+                    r = self.call_move_service(coords['x'], coords['y'], coords['z'])
+                    success = r is not None and r['success']
+                    if not success:
+                        self.get_logger().error('Failed to move to object position')
+                        break
+
+                    # 4. Close gripper
+                    rg = self.call_move_gripper_service(close_pos)
+                    success = rg is not None and rg['success']
+                    if success:
+                        # 5. Remove object from planning scene (attach)
+                        if not self.attach_object(target_name):
+                            self.get_logger().error("Failed to attach object after pickup")
+                            success = False
+                        else:
+                            self.get_logger().info(f"Picked up '{target_name}'")
+
+            elif action == 'dropoff':
+                target_name = params.get('target')
+                destination_name = params.get('destination')
+                open_pos = float(params.get('open_position', 0.0))
+                place_offset = float(params.get('place_offset', 0.1))
+
+                if not destination_name:
+                    self.get_logger().error("dropoff action requires 'destination' object name")
+                    success = False
+                    break
+
+                dest_coords = self.get_static_object_coords(destination_name)
+                if not dest_coords:
+                    self.get_logger().error(f"Could not resolve destination '{destination_name}'")
+                    success = False
+                    break
+
+                px = dest_coords['x']
+                py = dest_coords['y']
+                pz = dest_coords['z'] + place_offset
+
+                # 1. Move to a position offset above the destination
+                r = self.call_move_service(px, py, pz)
+                success = r is not None and r['success']
+                if not success:
+                    self.get_logger().error('Failed to move to place position')
+                    break
+
+                # 2. Open gripper to release
+                rg = self.call_move_gripper_service(open_pos)
+                success = rg is not None and rg['success']
+                if not success:
+                    self.get_logger().error('Failed to open gripper during place')
+                    break
+
+                if target_name:
+                    obj_info = self.get_object_info(target_name)
+                    if obj_info:
+                        orient = obj_info['pose']['orientation']
+                    else:
+                        orient = None
+                    # Update pose to the actual destination (not the offset)
+                    if not self.update_object_pose(target_name, dest_coords['x'], dest_coords['y'], dest_coords['z'], orient):
+                        self.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
+                    
+                    # 3. Add object back to planning scene (detach)
+                    self.detach_object(target_name)
+                    self.get_logger().info(f"Placed '{target_name}' at '{destination_name}'")
+                    success = True
+
 
             if success:
                 self.get_logger().info(f"Step {i+1} completed successfully.")
