@@ -32,7 +32,7 @@ def launch_setup(context, *args, **kwargs):
     core_debug = LaunchConfiguration('core_debug').perform(context).lower() == 'true'
     enable_individual_logs = LaunchConfiguration('enable_individual_logs').perform(context).lower() == 'true'
     use_vision = LaunchConfiguration('use_vision')
-    dynamic_camera = LaunchConfiguration('dynamic_camera').perform(context).lower() == 'true'
+    dynamic_camera = LaunchConfiguration('dynamic_camera')
 
     base_ros_args = []
     if not enable_individual_logs:
