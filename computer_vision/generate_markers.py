@@ -8,7 +8,8 @@ def generate_aruco_markers():
 
     # Specify which IDs you want to generate:
     # ID 0 -> "apple", ID 1 -> "banana", ID 2 -> "tray"
-    marker_ids = [0, 1, 2]
+    # ID 10-13 -> Table Anchors
+    marker_ids = [0, 1, 2, 10, 11, 12, 13]
 
     # Set the size of the output images in pixels (high resolution for clean printing)
     marker_size_px = 400

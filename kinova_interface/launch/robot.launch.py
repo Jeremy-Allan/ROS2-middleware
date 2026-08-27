@@ -6,7 +6,7 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
-from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
+from launch.substitutions import PathJoinSubstitution, LaunchConfiguration, PythonExpression
 from launch_ros.substitutions import FindPackageShare
 from launch.conditions import IfCondition
 import launch.logging
@@ -32,6 +32,7 @@ def launch_setup(context, *args, **kwargs):
     core_debug = LaunchConfiguration('core_debug').perform(context).lower() == 'true'
     enable_individual_logs = LaunchConfiguration('enable_individual_logs').perform(context).lower() == 'true'
     use_vision = LaunchConfiguration('use_vision')
+    dynamic_camera = LaunchConfiguration('dynamic_camera').perform(context).lower() == 'true'
 
     base_ros_args = []
     if not enable_individual_logs:
@@ -90,18 +91,20 @@ def launch_setup(context, *args, **kwargs):
         name='cv_detection_node',
         output='screen',
         condition=IfCondition(use_vision),
-        parameters=[{'camera_source': camera_source}],
+        parameters=[{
+            'camera_source': camera_source,
+            'dynamic_camera': dynamic_camera
+        }],
         ros_arguments=get_ros_args('cv_detection_node')
     )
 
-    # Placeholder Camera Transform: 50cm above base, looking straight down
-    # Format: x y z yaw pitch roll frame_id child_frame_id
+    # Placeholder Camera Transform (Only used if NOT dynamic)
     camera_transform = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='camera_static_transform',
         arguments=['0', '0', '0.5', '0', '1.57', '0', 'base_link', 'camera_link'],
-        condition=IfCondition(use_vision)
+        condition=IfCondition(PythonExpression(["'", use_vision, "' == 'true' and not '", dynamic_camera, "' == 'true'"]))
     )
 
     return [
@@ -160,6 +163,12 @@ def generate_launch_description():
         'camera_source',
         default_value='0',
         description='Camera index or IP stream URL'
+    )
+
+    dynamic_camera_arg = DeclareLaunchArgument(
+        'dynamic_camera',
+        default_value='true',
+        description='Enable dynamic camera localization using anchor tags'
     )
 
     robot_ip = LaunchConfiguration('robot_ip')
