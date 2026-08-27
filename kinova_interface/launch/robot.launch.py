@@ -219,6 +219,7 @@ def generate_launch_description():
         use_fake_hardware_arg,
         use_vision_arg,
         camera_source_arg,
+        dynamic_camera_arg,
         OpaqueFunction(function=check_hardware_args),
         kortex_control_launch,
         move_group_launch,

@@ -17,16 +17,16 @@ TARGET_NAMES = {
 }
 
 # Anchor Tag Definitions (IDs and their fixed coordinates in base_link)
-# Assuming a 1.2m x 0.8m table with robot base at the center (0,0)
-# Adjust these coordinates to match your physical setup!
+# Table: 95cm (across front = Y) x 90cm (along side = X)
+# Assuming robot base is at the geometric center (0,0)
 ANCHOR_CONFIG = {
-    10: {'x': 0.6,  'y': 0.4,  'z': 0.0, 'name': 'anchor_fl'},
-    11: {'x': 0.6,  'y': -0.4, 'z': 0.0, 'name': 'anchor_fr'},
-    12: {'x': -0.6, 'y': -0.4, 'z': 0.0, 'name': 'anchor_br'},
-    13: {'x': -0.6, 'y': 0.4,  'z': 0.0, 'name': 'anchor_bl'}
+    10: {'x': 0.45,  'y': 0.475,  'z': 0.0, 'name': 'anchor_fl'},
+    11: {'x': 0.45,  'y': -0.475, 'z': 0.0, 'name': 'anchor_fr'},
+    12: {'x': -0.45, 'y': -0.475, 'z': 0.0, 'name': 'anchor_br'},
+    13: {'x': -0.45, 'y': 0.475,  'z': 0.0, 'name': 'anchor_bl'}
 }
 
-MARKER_SIZE = 0.07  # meters
+MARKER_SIZE = 0.05  # meters
 
 class CVDetectionNode(Node):
     def __init__(self):
