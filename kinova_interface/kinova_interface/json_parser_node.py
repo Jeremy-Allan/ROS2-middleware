@@ -389,12 +389,26 @@ class JsonParserNode(Node):
         self.get_logger().error(f"Failed to update pose for {obj_id}: {response.message}")
         return False, response.message or f"Failed to update pose for '{obj_id}'"
 
+    STEP_SETTLE_DELAY_SEC = 0.5
+
     # Action Handlers (Dispatch Table)
     
     def _handle_home(self, params: dict) -> tuple[bool, str]:
+        """
+        Execute the 'home' action to move the robot arm to its predefined home pose.
+
+        JSON parameters:
+            None required.
+        """
         return self.call_home_service()
 
     def _handle_move_arm(self, params: dict) -> tuple[bool, str]:
+        """
+        Execute the 'move_arm' action to move the end-effector to the coordinates of a named target.
+
+        JSON parameters:
+            target (str, required): Name of the target object/landmark in the environment.
+        """
         target_name = params.get('target')
         if not target_name:
             return False, "Missing 'target' parameter for move_arm"
@@ -407,6 +421,12 @@ class JsonParserNode(Node):
         return True, f"Moved arm to '{target_name}'"
 
     def _handle_relative_move(self, params: dict) -> tuple[bool, str]:
+        """
+        Execute the 'relative_move' action using a named 3D translation vector.
+
+        JSON parameters:
+            vector (str, required): Name of the relative vector registered in the environment.
+        """
         vector_name = params.get('vector')
         if not vector_name:
             return False, "Missing 'vector' parameter for relative_move"
@@ -419,6 +439,12 @@ class JsonParserNode(Node):
         return True, f"Executed relative move '{vector_name}'"
 
     def _handle_gripper(self, params: dict) -> tuple[bool, str]:
+        """
+        Execute the 'gripper' action to move the gripper to a specified position.
+
+        JSON parameters:
+            position (float, required): Target gripper position (0.0 = fully open, ~0.8-1.0 = fully closed).
+        """
         if 'position' not in params:
             return False, "Missing 'position' parameter for gripper"
         try:
@@ -431,6 +457,20 @@ class JsonParserNode(Node):
         return True, f"Moved gripper to {position}"
 
     def _handle_pickup(self, params: dict) -> tuple[bool, str]:
+        """
+        Execute the composite 'pickup' action sequence:
+          1. Open gripper to `open_position`.
+          2. (Optional) Hover at `pre_offset` above target.
+          3. Descend to target coordinates.
+          4. Close gripper to `close_position`.
+          5. Attach object in planning scene (allow collision).
+
+        JSON parameters:
+            target (str, required): Name of the target object to pick up.
+            open_position (float, optional, default=0.0): Gripper open position.
+            close_position (float, optional, default=0.8): Gripper grasp position.
+            pre_offset (float, optional, default=0.0): Z-axis hover offset before descending.
+        """
         target_name = params.get('target')
         if not target_name:
             return False, "Missing 'target' parameter for pickup"
@@ -475,6 +515,18 @@ class JsonParserNode(Node):
         return True, f"Picked up '{target_name}' successfully"
 
     def _handle_dropoff(self, params: dict) -> tuple[bool, str]:
+        """
+        Execute the composite 'dropoff' action sequence:
+          1. Move end-effector to destination coordinates + `place_offset` in Z.
+          2. Open gripper to `open_position`.
+          3. If `target` specified: update object pose in environment and detach in planning scene.
+
+        JSON parameters:
+            destination (str, required): Name of destination location/surface.
+            target (str, optional): Name of object being placed to update pose and restore in planning scene.
+            open_position (float, optional, default=0.0): Gripper open position to release object.
+            place_offset (float, optional, default=0.1): Z-axis hover offset above destination.
+        """
         target_name = params.get('target')
         destination_name = params.get('destination')
         if not destination_name:
@@ -510,13 +562,15 @@ class JsonParserNode(Node):
             orient = obj_info['pose']['orientation'] if obj_info else None
             ok, msg = self.update_object_pose(target_name, dest_coords['x'], dest_coords['y'], dest_coords['z'], orient)
             if not ok:
-                self.get_logger().warning(f"Failed to update pose for '{target_name}': {msg}, continuing with detach...")
+                return False, f"Failed to update pose for '{target_name}' at '{destination_name}': {msg}. Detach aborted to prevent planning scene corruption."
 
             ok, msg = self.detach_object(target_name)
             if not ok:
                 return False, f"Failed to detach '{target_name}' in planning scene: {msg}"
 
-        return True, f"Placed '{target_name or 'object'}' at '{destination_name}' successfully"
+            return True, f"Placed '{target_name}' at '{destination_name}' successfully"
+
+        return True, f"Executed dropoff move and opened gripper at '{destination_name}' successfully"
 
     def execute_recipe(self) -> bool:
         """Entry point for recipe execution with guaranteed exception safety and IDLE cleanup."""
@@ -530,7 +584,8 @@ class JsonParserNode(Node):
             return self._run_steps(steps)
         except Exception as e:
             self.get_logger().error(f"Unhandled exception during recipe execution: {e}", exc_info=True)
-            self._update_node_status(status_text=f"Recipe aborted due to exception: {e}", success=False)
+            self.status_text = f"Recipe aborted due to exception: {e}"
+            self.command_success = False
             return False
         finally:
             self.current_state = ExtendedStatus.STATE_IDLE
@@ -566,7 +621,8 @@ class JsonParserNode(Node):
                 return False
 
             self.get_logger().info(f"Step {i} completed successfully: {msg}")
-            time.sleep(0.5)
+            if i < len(steps):
+                time.sleep(self.STEP_SETTLE_DELAY_SEC)
 
         self.status_text = "Recipe execution complete (Success)"
         self.command_success = True
