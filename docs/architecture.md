@@ -30,8 +30,8 @@ The proxy never calls a ROS 2 service directly. Every request goes out over the 
 - Subscribes to `/fault_controller/is_faulted` to know instantly if the arm enters a hardware fault state.
 
 **`environment_mapping_node.py`, the read-mostly knowledge base:**
-- Loads `coordinate_dictionary.json`, `relative_movement.json`, and `obstacles.json` once at startup. No live file-watching; a config change needs a restart.
-- Exposes `/get_coordinates`, `/get_relative_movement`, `/get_robot_parameters`, all pure lookups against the in-memory data.
+- Loads `object_dictionary.json`, `relative_movement.json`, `orientation_presets.json`, and `obstacles.json` once at startup. No live file-watching; a config change needs a restart.
+- Exposes `/get_coordinates`, `/get_object_info`, `/get_relative_movement`, `/get_orientation_preset`, `/get_robot_parameters`, all pure lookups against the in-memory data.
 - Separately pushes every entry in `obstacles.json` into MoveIt's planning scene once `/apply_planning_scene` becomes available.
 
 **`json_parser_node.py`, orchestration only:**
@@ -54,19 +54,24 @@ The proxy's own components (`llm_proxy.py`, the LLM adapters, `ros2_bridge_ws`, 
 
 | Service | Request | Response |
 |---|---|---|
-| `HomeArm` | (none) | `success`, `message` |
-| `MoveArm` | `x`, `y`, `z` (float64) | `success`, `message` |
+| `HomeArm` | `motion_params` (`MotionParams`) | `success`, `message` |
+| `MoveArm` | `target_position` (`Point`), `has_orientation` (bool), `roll`, `pitch`, `yaw` (float64), `motion_params` (`MotionParams`) | `success`, `message` |
 | `MoveGripper` | `position` (float64) | `success`, `message` |
-| `RelativeMove` | `vx`, `vy`, `vz` (float64) | `success`, `message` |
+| `RelativeMove` | `vx`, `vy`, `vz` (float64), `has_orientation` (bool), `roll_delta`, `pitch_delta`, `yaw_delta` (float64), `motion_params` (`MotionParams`) | `success`, `message` |
 | `GetObjectCoordinates` | `object_id` (string) | `x`, `y`, `z`, `success`, `message` |
+| `GetObjectInfo` | `object_id` (string) | `pose` (`Pose`), `shape` (`SolidPrimitive`), `success`, `message` |
 | `GetRelativeMovement` | `move_id` (string) | `x`, `y`, `z`, `success`, `message` |
-| `GetRobotParameters` | (none) | `object_list[]`, `movement_names[]` |
+| `GetOrientationPreset` | `preset_name` (string) | `roll`, `pitch`, `yaw`, `success`, `message` |
+| `GetRobotParameters` | (none) | `object_list[]`, `movement_names[]`, `orientation_names[]` |
 | `ExecuteRecipe` | `recipe_json` (string) | `success`, `message` |
+
+`has_orientation` defaults to `false`, so existing callers that never set it get identical behavior to before this field existed, no orientation constraint applied, MoveIt picks whatever orientation it wants. `MoveArm`'s request fields changed shape (`x`/`y`/`z` became `target_position`), a breaking change to the wire format, not additive.
 
 **Messages** (published continuously, not request/response):
 
 - `ExtendedStatus`: one node's heartbeat: `node_name`, `state` (0 = IDLE, 1 = BUSY, 2 = FAULT), `status_message`, `last_command_valid`.
 - `SystemSummary`: the aggregated view: `summary_state` plus `individual_states[]`.
+- `MotionParams`: not published on its own, a shared field type embedded in `HomeArm`, `MoveArm`, and `RelativeMove` requests: `velocity_scale`, `acceleration_scale` (float64), each `0.0` to `1.0`. `0.0` (the default) means "use the arm's configured default," values are clamped into range on the receiving end.
 
 ## Where everything lives on disk
 
@@ -96,7 +101,7 @@ ROS2-middleware/
   README.md
   docs/                          this documentation
   kinova_interface/
-    data/configs/env/            coordinate_dictionary.json, relative_movement.json, obstacles.json
+    data/configs/env/            object_dictionary.json, relative_movement.json, orientation_presets.json, obstacles.json
     kinova_interface/             the four node source files
     launch/robot.launch.py
     recipes/                      task_recipe.json, test_suite/

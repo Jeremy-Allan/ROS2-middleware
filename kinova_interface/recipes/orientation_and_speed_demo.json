@@ -1,0 +1,29 @@
+{
+  "recipe_name": "Orientation and Speed Demo",
+  "description": "Demonstrates the optional orientation preset and speed parameters on move_arm and home",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Start at home"
+    },
+    {
+      "step_id": 2,
+      "action": "move_arm",
+      "parameters": {
+        "target": "red_cube",
+        "orientation": "tilted_for_pour",
+        "speed": 0.3
+      },
+      "description": "Move above the red cube tilted for pouring, at 30 percent speed"
+    },
+    {
+      "step_id": 3,
+      "action": "home",
+      "parameters": {
+        "speed": 0.5
+      },
+      "description": "Return home at 50 percent speed"
+    }
+  ]
+}

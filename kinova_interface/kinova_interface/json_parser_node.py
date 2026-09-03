@@ -5,10 +5,11 @@ import time
 import os
 import json
 from geometry_msgs.msg import Quaternion
+from shape_msgs.msg import SolidPrimitive
 from ament_index_python.packages import get_package_share_directory
 #Services
-from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, GetObjectInfo, ExecuteRecipe, HomeArm, MoveArm, MoveGripper, RelativeMove, AttachObject, DetachObject, UpdateObjectPose
-from kinova_interfaces.msg import ExtendedStatus
+from kinova_interfaces.srv import GetObjectCoordinates, GetRelativeMovement, GetObjectInfo, GetOrientationPreset, ExecuteRecipe, HomeArm, MoveArm, MoveGripper, RelativeMove, AttachObject, DetachObject, UpdateObjectPose
+from kinova_interfaces.msg import ExtendedStatus, MotionParams
 
 class JsonParser:
     """Helper class to handle JSON loading."""
@@ -59,6 +60,17 @@ class JsonParserNode(Node):
         self.coord_client = self.create_client(GetObjectCoordinates, '/get_coordinates', callback_group=self.cb_group)
         self.relative_client = self.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=self.cb_group)
         self.info_client = self.create_client(GetObjectInfo, '/get_object_info', callback_group=self.cb_group)
+        self.orientation_client = self.create_client(GetOrientationPreset, '/get_orientation_preset', callback_group=self.cb_group)
+
+        # Action dispatch table, keyed by recipe step 'action' name
+        self.action_handlers = {
+            'home': self._handle_home,
+            'move_arm': self._handle_move_arm,
+            'relative_move': self._handle_relative_move,
+            'gripper': self._handle_gripper,
+            'pickup': self._handle_pickup,
+            'dropoff': self._handle_dropoff,
+        }
 
         # 3. Initialize the Parser
         self.parser = JsonParser(self)
@@ -223,42 +235,99 @@ class JsonParserNode(Node):
             self.get_logger().error(f"Failed to get movement vector for {movement_name}: {response.message if response else 'no response'}")
             return None
 
-    def call_home_service(self):
+    def get_orientation_preset(self, preset_name):
+        if not self.orientation_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Get Orientation Preset service not available")
+            return None
+        req = GetOrientationPreset.Request()
+        req.preset_name = preset_name
+
+        future = self.orientation_client.call_async(req)
+        response = self.wait_for_future(future, '/get_orientation_preset')
+
+        if response and response.success:
+            return {'roll': response.roll, 'pitch': response.pitch, 'yaw': response.yaw}
+        else:
+            self.get_logger().error(f"Failed to get orientation preset '{preset_name}': {response.message if response else 'no response'}")
+            return None
+
+    def resolve_orientation(self, preset_name):
+        """Returns (has_orientation, roll, pitch, yaw). If preset_name is
+        given but can't be resolved, returns None so the caller can tell
+        that apart from 'no orientation requested'."""
+        if not preset_name:
+            return (False, 0.0, 0.0, 0.0)
+        preset = self.get_orientation_preset(preset_name)
+        if preset is None:
+            return None
+        return (True, preset['roll'], preset['pitch'], preset['yaw'])
+
+    def build_motion_params(self, speed):
+        """speed is an optional 0.0-1.0 float from a recipe step, used for
+        both velocity and acceleration scale. None or not given means
+        MotionParams() with its 0.0 defaults, which hardware_interface_client
+        treats as 'use the arm's configured default'."""
+        params = MotionParams()
+        if speed is not None:
+            params.velocity_scale = float(speed)
+            params.acceleration_scale = float(speed)
+        return params
+
+    def object_half_height(self, shape):
+        """Half the object's extent along Z, from its shape type/dimensions,
+        used to place one object on top of another from their center poses."""
+        stype = shape['type']
+        dims = shape['dimensions']
+        if stype == SolidPrimitive.BOX:
+            return dims[2] / 2.0
+        if stype in (SolidPrimitive.CYLINDER, SolidPrimitive.CONE):
+            return dims[0] / 2.0
+        if stype == SolidPrimitive.SPHERE:
+            return dims[0]
+        return 0.0
+
+    def call_home_service(self, motion_params=None):
         if not self.home_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error("Home Arm Service not available")
             return None
 
         req = HomeArm.Request()
+        req.motion_params = motion_params if motion_params is not None else MotionParams()
         # Async call + safe wait loop
         future = self.home_client.call_async(req)
         response = self.wait_for_future(future, '/kinova_hardware_client/home_arm')
-        
+
         if response and response.success:
             return {'success': response.success, 'message': response.message}
         else:
             self.get_logger().error(f"Failed to move Home: {response.message if response else 'no response'}")
             return None
 
-    def call_move_service(self, x, y, z):
+    def call_move_service(self, x, y, z, has_orientation=False, roll=0.0, pitch=0.0, yaw=0.0, motion_params=None):
         if not self.move_arm_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error("Move Arm Service not available")
             return None
         req = MoveArm.Request()
-        req.x = x
-        req.y = y
-        req.z = z
+        req.target_position.x = x
+        req.target_position.y = y
+        req.target_position.z = z
+        req.has_orientation = has_orientation
+        req.roll = roll
+        req.pitch = pitch
+        req.yaw = yaw
+        req.motion_params = motion_params if motion_params is not None else MotionParams()
 
         # Async call + safe wait loop
         future = self.move_arm_client.call_async(req)
         response = self.wait_for_future(future, '/kinova_hardware_client/move_arm')
-        
+
         if response and response.success:
             return {'success': response.success, 'message': response.message}
         else:
             self.get_logger().error(f"Failed to perform Move to:{x},{y},{z}: {response.message if response else 'no response'}")
             return None
 
-    def call_relative_move_service(self, vx, vy, vz):
+    def call_relative_move_service(self, vx, vy, vz, has_orientation=False, roll_delta=0.0, pitch_delta=0.0, yaw_delta=0.0, motion_params=None):
         if not self.relative_move_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error("Relative Move Service not available")
             return None
@@ -266,6 +335,11 @@ class JsonParserNode(Node):
         req.vx = vx
         req.vy = vy
         req.vz = vz
+        req.has_orientation = has_orientation
+        req.roll_delta = roll_delta
+        req.pitch_delta = pitch_delta
+        req.yaw_delta = yaw_delta
+        req.motion_params = motion_params if motion_params is not None else MotionParams()
 
         # Async call + safe wait loop
         future = self.relative_move_client.call_async(req)
@@ -358,6 +432,164 @@ class JsonParserNode(Node):
             self.get_logger().error(f"Failed to update pose for {obj_id}: {response.message if response else 'no response'}")
             return False
 
+    def _handle_home(self, params):
+        motion_params = self.build_motion_params(params.get('speed'))
+        result = self.call_home_service(motion_params)
+        return result is not None and result['success']
+
+    def _handle_move_arm(self, params):
+        target_name = params['target']
+        coords = self.get_static_object_coords(target_name)
+        if not coords:
+            return False
+
+        orientation = self.resolve_orientation(params.get('orientation'))
+        if orientation is None:
+            self.get_logger().error(f"Unknown orientation preset '{params.get('orientation')}'")
+            return False
+        has_orientation, roll, pitch, yaw = orientation
+
+        motion_params = self.build_motion_params(params.get('speed'))
+        result = self.call_move_service(coords['x'], coords['y'], coords['z'], has_orientation, roll, pitch, yaw, motion_params)
+        return result is not None and result['success']
+
+    def _handle_relative_move(self, params):
+        vector_name = params['vector']
+        vector = self.get_relative_movement_vector(vector_name)
+        if not vector:
+            return False
+
+        orientation = self.resolve_orientation(params.get('orientation'))
+        if orientation is None:
+            self.get_logger().error(f"Unknown orientation preset '{params.get('orientation')}'")
+            return False
+        has_orientation, roll_delta, pitch_delta, yaw_delta = orientation
+
+        motion_params = self.build_motion_params(params.get('speed'))
+        result = self.call_relative_move_service(vector['x'], vector['y'], vector['z'], has_orientation, roll_delta, pitch_delta, yaw_delta, motion_params)
+        return result is not None and result['success']
+
+    def _handle_gripper(self, params):
+        gripper = float(params['position'])
+        result = self.call_move_gripper_service(gripper)
+        return result is not None and result['success']
+
+    def _handle_pickup(self, params):
+        target_name = params['target']
+        open_pos = float(params.get('open_position', 0.0))
+        close_pos = float(params.get('close_position', 0.8))
+        coords = self.get_static_object_coords(target_name)
+        if not coords:
+            return False
+
+        # 1. Open gripper before moving
+        rg = self.call_move_gripper_service(open_pos)
+        if not (rg and rg['success']):
+            self.get_logger().error('Failed to open gripper for pickup')
+            return False
+
+        # 2. Descend to the actual object position
+        r = self.call_move_service(coords['x'], coords['y'], coords['z'])
+        if not (r and r['success']):
+            self.get_logger().error('Failed to move to object position')
+            return False
+
+        # 3. Close gripper
+        rg = self.call_move_gripper_service(close_pos)
+        if not (rg and rg['success']):
+            return False
+
+        # 4. Remove object from planning scene (attach)
+        if not self.attach_object(target_name):
+            self.get_logger().error("Failed to attach object after pickup")
+            return False
+
+        self.get_logger().info(f"Picked up '{target_name}'")
+        return True
+
+    def _handle_dropoff(self, params):
+        target_name = params.get('target')
+        destination_name = params.get('destination')
+        open_pos = float(params.get('open_position', 0.0))
+        hover_clearance = float(params.get('place_offset', 0.1))
+        release_clearance = 0.02
+
+        if not destination_name:
+            self.get_logger().error("dropoff action requires 'destination' object name")
+            return False
+
+        dest_info = self.get_object_info(destination_name)
+        if not dest_info:
+            self.get_logger().error(f"Could not resolve destination '{destination_name}'")
+            return False
+
+        dest_pos = dest_info['pose']['position']
+        dest_top_z = dest_pos['z'] + self.object_half_height(dest_info['shape'])
+
+        target_info = self.get_object_info(target_name) if target_name else None
+        target_half_height = self.object_half_height(target_info['shape']) if target_info else 0.0
+
+        # release_z is where the target object's center should end up, resting
+        # on top of the destination rather than at the destination's own center
+        release_z = dest_top_z + target_half_height
+        px, py = dest_pos['x'], dest_pos['y']
+
+        # 1. Move to a hover position above the destination, collision-safe approach
+        r = self.call_move_service(px, py, release_z + hover_clearance)
+        if not (r and r['success']):
+            self.get_logger().error('Failed to move to hover position above destination')
+            return False
+
+        # 2. Lower to a small clearance above the release height before opening,
+        # so the object isn't dropped from the hover height
+        r = self.call_move_service(px, py, release_z + release_clearance)
+        if not (r and r['success']):
+            self.get_logger().error('Failed to lower to release position')
+            return False
+
+        # 3. Open gripper to release
+        rg = self.call_move_gripper_service(open_pos)
+        if not (rg and rg['success']):
+            self.get_logger().error('Failed to open gripper during place')
+            return False
+
+        if target_name:
+            orient = target_info['pose']['orientation'] if target_info else None
+            # Update pose to the actual release position, not the hover offset
+            if not self.update_object_pose(target_name, px, py, release_z, orient):
+                self.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
+
+            # 4. Add object back to planning scene (detach)
+            self.detach_object(target_name)
+            self.get_logger().info(f"Placed '{target_name}' at '{destination_name}'")
+
+        return True
+
+    def _dispatch_step(self, index, step):
+        """Look up and run the handler for one recipe step, logging enough to
+        reconstruct what was attempted and what happened for the LLM safety research."""
+        action = step.get('action')
+        params = step.get('parameters', {})
+        timestamp = time.time()
+
+        handler = self.action_handlers.get(action)
+        if handler is None:
+            self.get_logger().error(
+                f"[recipe_log] step={index+1} timestamp={timestamp:.3f} action={action} "
+                f"parameters={params} accepted=False result=unknown_action"
+            )
+            return False
+
+        self.get_logger().info(
+            f"[recipe_log] step={index+1} timestamp={timestamp:.3f} action={action} "
+            f"parameters={params} accepted=True"
+        )
+        success = handler(params)
+        self.get_logger().info(
+            f"[recipe_log] step={index+1} action={action} result={'success' if success else 'failure'}"
+        )
+        return success
+
     def execute_recipe(self):
         """Core execution logic."""
         steps = self.parser.get_recipe_steps()
@@ -368,126 +600,29 @@ class JsonParserNode(Node):
             self.publish_status()
             return False
 
+        recipe_name = self.parser.recipe.get('recipe_name', 'Unnamed')
+        self.get_logger().info(
+            f"[recipe_log] event=start timestamp={time.time():.3f} recipe={recipe_name} steps={len(steps)}"
+        )
         self.get_logger().info(f"--- Starting Automated Sequence ({len(steps)} steps) ---")
         self.current_state = ExtendedStatus.STATE_BUSY
-        self.status_text = f"Executing recipe: {self.parser.recipe.get('recipe_name', 'Unnamed')}"
+        self.status_text = f"Executing recipe: {recipe_name}"
         self.publish_status()
 
         all_success = True
+        i = 0
         for i, step in enumerate(steps):
             self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
             self.status_text = f"Step {i+1}/{len(steps)}: {step.get('description', '')}"
             self.publish_status()
 
-            action = step['action']
-            params = step.get('parameters', {})
-            success = False
-            if action == 'home':
-                result = self.call_home_service()
-                success = result is not None and result['success']
-            elif action == 'move_arm':
-                target_name = params['target']
-                coords = self.get_static_object_coords(target_name)
-                if coords:
-                    result = self.call_move_service(coords['x'], coords['y'], coords['z'])
-                    success = result is not None and result['success']
-            elif action == 'relative_move':
-                vector_name = params['vector']
-                vector = self.get_relative_movement_vector(vector_name)
-                if vector:
-                    result = self.call_relative_move_service(vector['x'], vector['y'], vector['z'])
-                    success = result is not None and result['success']
-            elif action == 'gripper':
-                gripper = float(params['position'])
-                result = self.call_move_gripper_service(gripper)
-                success = result is not None and result['success']
-            elif action == 'pickup':
-                target_name = params['target']
-                open_pos = float(params.get('open_position', 0.0))
-                close_pos = float(params.get('close_position', 0.8))
-                coords = self.get_static_object_coords(target_name)
-                if coords:
-                    # 1. Open gripper before moving
-                    rg = self.call_move_gripper_service(open_pos)
-                    success = rg is not None and rg['success']
-                    if not success:
-                        self.get_logger().error('Failed to open gripper for pickup')
-                        break
-
-                    # 3. Descend to the actual object position
-                    r = self.call_move_service(coords['x'], coords['y'], coords['z'])
-                    success = r is not None and r['success']
-                    if not success:
-                        self.get_logger().error('Failed to move to object position')
-                        break
-
-                    # 4. Close gripper
-                    rg = self.call_move_gripper_service(close_pos)
-                    success = rg is not None and rg['success']
-                    if success:
-                        # 5. Remove object from planning scene (attach)
-                        if not self.attach_object(target_name):
-                            self.get_logger().error("Failed to attach object after pickup")
-                            success = False
-                        else:
-                            self.get_logger().info(f"Picked up '{target_name}'")
-
-            elif action == 'dropoff':
-                target_name = params.get('target')
-                destination_name = params.get('destination')
-                open_pos = float(params.get('open_position', 0.0))
-                place_offset = float(params.get('place_offset', 0.1))
-
-                if not destination_name:
-                    self.get_logger().error("dropoff action requires 'destination' object name")
-                    success = False
-                    break
-
-                dest_coords = self.get_static_object_coords(destination_name)
-                if not dest_coords:
-                    self.get_logger().error(f"Could not resolve destination '{destination_name}'")
-                    success = False
-                    break
-
-                px = dest_coords['x']
-                py = dest_coords['y']
-                pz = dest_coords['z'] + place_offset
-
-                # 1. Move to a position offset above the destination
-                r = self.call_move_service(px, py, pz)
-                success = r is not None and r['success']
-                if not success:
-                    self.get_logger().error('Failed to move to place position')
-                    break
-
-                # 2. Open gripper to release
-                rg = self.call_move_gripper_service(open_pos)
-                success = rg is not None and rg['success']
-                if not success:
-                    self.get_logger().error('Failed to open gripper during place')
-                    break
-
-                if target_name:
-                    obj_info = self.get_object_info(target_name)
-                    if obj_info:
-                        orient = obj_info['pose']['orientation']
-                    else:
-                        orient = None
-                    # Update pose to the actual destination (not the offset)
-                    if not self.update_object_pose(target_name, dest_coords['x'], dest_coords['y'], dest_coords['z'], orient):
-                        self.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
-                    
-                    # 3. Add object back to planning scene (detach)
-                    self.detach_object(target_name)
-                    self.get_logger().info(f"Placed '{target_name}' at '{destination_name}'")
-                    success = True
-
+            success = self._dispatch_step(i, step)
 
             if success:
                 self.get_logger().info(f"Step {i+1} completed successfully.")
                 time.sleep(0.5)
             else:
-                self.get_logger().error(f"Failed at step {i+1}: {action}")
+                self.get_logger().error(f"Failed at step {i+1}: {step.get('action')}")
                 all_success = False
                 break
 
@@ -498,6 +633,10 @@ class JsonParserNode(Node):
         else:
             self.status_text = f"Recipe failed at step {i+1}"
         self.publish_status()
+        self.get_logger().info(
+            f"[recipe_log] event=end timestamp={time.time():.3f} recipe={recipe_name} "
+            f"result={'success' if all_success else 'failure'}"
+        )
         self.get_logger().info("--- All Tasks Completed ---")
         return all_success
 

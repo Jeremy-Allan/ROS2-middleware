@@ -1,0 +1,5 @@
+{
+  "facing_forward": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 },
+  "tilted_for_pour": { "roll": 0.0, "pitch": 1.57, "yaw": 0.0 },
+  "facing_audience": { "roll": 0.0, "pitch": 0.0, "yaw": 3.14 }
+}

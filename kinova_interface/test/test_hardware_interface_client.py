@@ -252,7 +252,7 @@ def test_handle_home_arm_success(node):
     """Test successful home arm service."""
 
     node.send_home_goal = MagicMock(return_value=True)
-    node.movement_finished = MagicMock()
+    node.arm_movement_finished = MagicMock()
     node.last_action_successful = True
 
     request = HomeArm.Request()
@@ -283,13 +283,13 @@ def test_handle_move_arm_success(node):
     """Test successful arm movement service."""
 
     node.send_goal = MagicMock(return_value=True)
-    node.movement_finished = MagicMock()
+    node.arm_movement_finished = MagicMock()
     node.last_action_successful = True
 
     request = MoveArm.Request()
-    request.x = 0.5
-    request.y = 0.2
-    request.z = 0.3
+    request.target_position.x = 0.5
+    request.target_position.y = 0.2
+    request.target_position.z = 0.3
 
     response = MoveArm.Response()
 
@@ -301,7 +301,46 @@ def test_handle_move_arm_success(node):
     node.send_goal.assert_called_once_with(
         0.5,
         0.2,
-        0.3
+        0.3,
+        has_orientation=False,
+        roll=0.0,
+        pitch=0.0,
+        yaw=0.0,
+        motion_params=request.motion_params,
+    )
+
+
+def test_handle_move_arm_with_orientation_and_speed(node):
+    """Test arm movement carries orientation and speed through to send_goal."""
+
+    node.send_goal = MagicMock(return_value=True)
+    node.arm_movement_finished = MagicMock()
+    node.last_action_successful = True
+
+    request = MoveArm.Request()
+    request.target_position.x = 0.5
+    request.target_position.y = 0.2
+    request.target_position.z = 0.3
+    request.has_orientation = True
+    request.roll = 0.1
+    request.pitch = 1.57
+    request.yaw = 0.0
+    request.motion_params.velocity_scale = 0.5
+    request.motion_params.acceleration_scale = 0.3
+
+    response = MoveArm.Response()
+
+    node.handle_move_arm(request, response)
+
+    node.send_goal.assert_called_once_with(
+        0.5,
+        0.2,
+        0.3,
+        has_orientation=True,
+        roll=0.1,
+        pitch=1.57,
+        yaw=0.0,
+        motion_params=request.motion_params,
     )
 
 
@@ -311,9 +350,9 @@ def test_handle_move_arm_failure_to_start(node):
     node.send_goal = MagicMock(return_value=False)
 
     request = MoveArm.Request()
-    request.x = 0.5
-    request.y = 0.2
-    request.z = 0.3
+    request.target_position.x = 0.5
+    request.target_position.y = 0.2
+    request.target_position.z = 0.3
 
     response = MoveArm.Response()
 
@@ -353,8 +392,53 @@ def test_handle_relative_move_success(node):
     node.send_goal.assert_called_once_with(
         1.5,
         2.5,
-        3.5
+        3.5,
+        has_orientation=False,
+        roll=0.0,
+        pitch=0.0,
+        yaw=0.0,
+        motion_params=request.motion_params,
     )
+
+
+def test_handle_relative_move_with_rotation_delta(node):
+    """Test relative_move composes a rotation delta onto the arm's current orientation."""
+
+    import math
+
+    transform = MagicMock()
+    transform.transform.translation.x = 1.0
+    transform.transform.translation.y = 2.0
+    transform.transform.translation.z = 3.0
+    # Identity orientation (no current rotation)
+    transform.transform.rotation.x = 0.0
+    transform.transform.rotation.y = 0.0
+    transform.transform.rotation.z = 0.0
+    transform.transform.rotation.w = 1.0
+
+    node.tf_buffer.lookup_transform = MagicMock(return_value=transform)
+    node.send_goal = MagicMock(return_value=True)
+    node.last_action_successful = True
+
+    request = RelativeMove.Request()
+    request.vx = 0.0
+    request.vy = 0.0
+    request.vz = 0.0
+    request.has_orientation = True
+    request.pitch_delta = 1.5708  # 90 degrees, starting from identity
+
+    response = RelativeMove.Response()
+
+    node.handle_relative_move(request, response)
+
+    node.send_goal.assert_called_once()
+    call_kwargs = node.send_goal.call_args.kwargs
+    assert call_kwargs["has_orientation"] is True
+    # Starting orientation is identity (roll=pitch=yaw=0), delta is
+    # applied on top, so target pitch should be ~ the delta itself.
+    assert math.isclose(call_kwargs["pitch"], 1.5708, abs_tol=1e-4)
+    assert math.isclose(call_kwargs["roll"], 0.0, abs_tol=1e-4)
+    assert math.isclose(call_kwargs["yaw"], 0.0, abs_tol=1e-4)
 
 
 def test_handle_relative_move_tf_failure(node):
@@ -381,7 +465,7 @@ def test_handle_move_gripper_success(node):
     """Test successful gripper movement."""
 
     node.move_gripper = MagicMock(return_value=True)
-    node.movement_finished = MagicMock()
+    node.gripper_movement_finished = MagicMock()
     node.last_action_successful = True
 
     request = MoveGripper.Request()
@@ -456,6 +540,85 @@ def test_send_goal(node):
     assert pose.position.x == 1.0
     assert pose.position.y == 2.0
     assert pose.position.z == 3.0
+
+
+def test_send_goal_no_orientation_by_default(node):
+    """Backward compatibility: default call adds no orientation constraint."""
+
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    node.send_goal(1.0, 2.0, 3.0)
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    constraint = goal.request.goal_constraints[0]
+
+    assert len(constraint.orientation_constraints) == 0
+    # No motion_params passed, no scaling fields should be touched (stay at default 0.0)
+    assert goal.request.max_velocity_scaling_factor == 0.0
+
+
+def test_send_goal_with_orientation(node):
+    """has_orientation=True should add a real OrientationConstraint on tool_frame."""
+
+    import math
+
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    node.send_goal(1.0, 2.0, 3.0, has_orientation=True, roll=0.0, pitch=math.pi / 2, yaw=0.0)
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    constraint = goal.request.goal_constraints[0]
+
+    assert len(constraint.orientation_constraints) == 1
+    orient = constraint.orientation_constraints[0]
+    assert orient.link_name == "tool_frame"
+    # 90 degree pitch, verified against the known reference value from
+    # the standalone math check: (0, 0, 0.7071, 0.7071) for 90deg yaw is
+    # the analogous known case, this checks pitch instead.
+    assert math.isclose(orient.orientation.y, math.sin(math.pi / 4), abs_tol=1e-4)
+    assert math.isclose(orient.orientation.w, math.cos(math.pi / 4), abs_tol=1e-4)
+
+
+def test_send_goal_applies_speed_scaling(node):
+    """A valid motion_params should set MoveIt's scaling factors."""
+
+    from kinova_interfaces.msg import MotionParams
+
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    params = MotionParams()
+    params.velocity_scale = 0.5
+    params.acceleration_scale = 0.3
+
+    node.send_goal(1.0, 2.0, 3.0, motion_params=params)
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    assert goal.request.max_velocity_scaling_factor == 0.5
+    assert goal.request.max_acceleration_scaling_factor == 0.3
+
+
+def test_send_goal_clamps_out_of_range_speed(node):
+    """Values outside [0.0, 1.0] must be clamped, not passed through raw."""
+
+    from kinova_interfaces.msg import MotionParams
+
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    params = MotionParams()
+    params.velocity_scale = 5.0
+    params.acceleration_scale = -1.0
+
+    node.send_goal(1.0, 2.0, 3.0, motion_params=params)
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    assert goal.request.max_velocity_scaling_factor == 1.0
+    # -1.0 clamps to 0.0, which per the "0.0 means use default" contract
+    # means the field is left untouched (never set), not set to 0.0 explicitly.
+    assert goal.request.max_acceleration_scaling_factor == 0.0
 
 
 def test_send_home_goal_server_unavailable(node):
@@ -542,7 +705,7 @@ def test_goal_response_callback_rejected(node):
     node.goal_response_callback(future)
 
     assert node.last_action_successful is False
-    assert node.movement_finished.is_set()
+    assert node.arm_movement_finished.is_set()
 
 
 def test_goal_response_callback_accepted(node):
@@ -588,7 +751,7 @@ def test_result_callback_success(node):
     node.result_callback(future)
 
     assert node.last_action_successful is True
-    assert node.movement_finished.is_set()
+    assert node.arm_movement_finished.is_set()
 
 
 def test_result_callback_failure(node):
@@ -606,7 +769,7 @@ def test_result_callback_failure(node):
     node.result_callback(future)
 
     assert node.last_action_successful is False
-    assert node.movement_finished.is_set()
+    assert node.arm_movement_finished.is_set()
 
     node.handle_moveit_failure.assert_called_once()
 
@@ -623,7 +786,7 @@ def test_gripper_response_callback_rejected(node):
     node.gripper_response_callback(future)
 
     assert node.last_action_successful is False
-    assert node.movement_finished.is_set()
+    assert node.gripper_movement_finished.is_set()
 
 
 def test_gripper_response_callback_accepted(node):
@@ -659,9 +822,16 @@ def test_gripper_feedback_callback(node):
 def test_gripper_result_callback(node):
     """Test successful gripper result."""
 
+    result = MagicMock()
+    result.position = 0.5
+    result.effort = 1.0
+    result.stalled = False
+    result.reached_goal = True
+
     future = MagicMock()
+    future.result.return_value.result = result
 
     node.gripper_result_callback(future)
 
     assert node.last_action_successful is True
-    assert node.movement_finished.is_set()
+    assert node.gripper_movement_finished.is_set()
