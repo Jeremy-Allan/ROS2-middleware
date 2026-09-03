@@ -7,7 +7,7 @@ import math
 from pathlib import Path
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
-from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose
+from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose
 from moveit_msgs.msg import PlanningScene, CollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
 from shape_msgs.msg import SolidPrimitive
@@ -38,10 +38,12 @@ class EnvironmentMappingNode(Node):
         
         self.static_objects = self.load_object_dictionary()
         self.relative_movements = self.load_relative_movements()
+        self.orientation_presets = self.load_orientation_presets()
         self.obstacles = self.load_obstacles_dictionary()
 
         self.srv_coords = self.create_service(GetObjectCoordinates, '/get_coordinates', self.get_coordinates_callback)
         self.srv_move = self.create_service(GetRelativeMovement, '/get_relative_movement', self.get_relative_movement_callback)
+        self.srv_orientation = self.create_service(GetOrientationPreset, '/get_orientation_preset', self.get_orientation_preset_callback)
         self.srv_list = self.create_service(GetRobotParameters, '/get_robot_parameters', self.get_robot_parameters_callback)
         self.srv_info = self.create_service(GetObjectInfo, '/get_object_info', self.get_object_info_callback)
         self.update_pose_srv = self.create_service(UpdateObjectPose, '/update_object_pose', self.update_object_pose_callback)
@@ -188,6 +190,20 @@ class EnvironmentMappingNode(Node):
             raise SystemExit(1)
 
 
+    def load_orientation_presets(self):
+        json_path = Path(self.config_dir) / 'orientation_presets.json'
+        try:
+            with open(json_path, 'r') as file:
+                presets = json.load(file)
+                self.get_logger().info('Loaded Orientation Presets File')
+            return presets
+        except FileNotFoundError:
+            self.get_logger().fatal(f'Orientation Presets file not found at: {json_path}')
+            raise SystemExit(1)
+        except json.JSONDecodeError:
+            self.get_logger().fatal('Failed to decode JSON from Orientation Presets File')
+            raise SystemExit(1)
+
     def get_coordinates_callback(self, request, response):
         #request is the obj_id, the response will be coordinates of obj
         obj_id = request.object_id
@@ -228,10 +244,30 @@ class EnvironmentMappingNode(Node):
         self.publish_status()
         return response
 
+    def get_orientation_preset_callback(self, request, response):
+        preset_name = request.preset_name
+        if preset_name in self.orientation_presets:
+            preset = self.orientation_presets[preset_name]
+            response.roll = preset['roll']
+            response.pitch = preset['pitch']
+            response.yaw = preset['yaw']
+            response.success = True
+            response.message = "Orientation preset found"
+            self.command_success = True
+            self.status_text = f"Resolved orientation preset: {preset_name}"
+        else:
+            response.success = False
+            response.message = f"Orientation preset {preset_name} NOT Found"
+            self.command_success = False
+            self.status_text = f"Failed to resolve orientation preset: {preset_name}"
+        self.publish_status()
+        return response
+
     def get_robot_parameters_callback(self, request, response):
-        # Service for the LLM Proxy || send list of objects + relative movements
+        # Service for the LLM Proxy || send list of objects + relative movements + orientation presets
         response.object_list = list(self.static_objects.keys())
         response.movement_names = list(self.relative_movements.keys())
+        response.orientation_names = list(self.orientation_presets.keys())
         self.command_success = True
         self.status_text = f"Robot Parameters queried"
         self.publish_status()
