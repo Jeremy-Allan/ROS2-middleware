@@ -14,6 +14,7 @@
 | Ollama | Latest, only if running a local LLM | Not needed if you're only using a cloud provider (OpenAI, Anthropic, Gemini) |
 
 If you're on Windows or macOS, you'll need a Ubuntu 22.04 VM or WSL2 with Ubuntu 22.04. ROS 2 Humble is not natively supported elsewhere.
+Non-Ubuntu Linux users will require Distrobox (or suitable alternative) for configuration
 
 ## ROS 2 concepts you need before you start
 
@@ -23,6 +24,57 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 - **Topic**: a one-way broadcast channel. Publishers shout messages onto a topic; subscribers listen. Nobody waits for a reply. (Used here for the heartbeat/telemetry messages.)
 - **Service**: a request/response call, like a function call over the network. You call it, it does something, it replies. (Used here for almost everything: "give me coordinates for X," "move the arm," "execute this recipe.")
 - **Action**: like a service, but for things that take a while and report progress along the way. For example, "move the arm": MoveIt reports planning and monitoring progress before finally succeeding or failing. Only `hardware_interface_client.py` uses actions directly; everything else in the system only ever sees simple services.
+
+## (Optional) Installation via Distrobox (Ubuntu Container)
+
+Distrobox can be used to run this project in an Ubuntu 22.04 environment on supported Linux hosts. This is useful when host distribution does not match required Ubuntu version. 
+
+### 1. Install Distrobox
+
+Install Distrobox via hosts package manager. For example, on Fedora
+
+```bash
+sudo dnf install distrobox
+```
+
+### 2. Create Ubuntu 22.04 Container
+
+Create a Distrobox container using Ubuntu 22.04
+
+```bash
+distrobox create --name ubuntu-22-04 --image ubuntu:22.04
+```
+
+Enter the container
+
+```bash
+distrobox enter ubuntu-22-04
+```
+
+Verify the Ubuntu version from within the container
+
+```bash
+lsb_release -a
+```
+
+This should return Ubuntu 22.04
+
+### 3. Continue with Standard Linux Installation
+
+Once inside the Ubuntu 22.04 container, proceed with the installation instructions below starting from Install ROS2 Humble
+
+No separate Distrobox-specific installation requirements exist for the Kinova driver, proxy, middleware and other dependencies. These are installed and build within the Ubuntu 22.04 environemtn using the same commands as the standard Ubuntu installations.
+
+### 4. Running the System
+
+After installation has completed, enter the container by
+
+```bash
+distrobox enter ubuntu-22-04
+```
+
+Then proceed to follow the normal Running the System instructions
+  **Note:** Distrobox containers integrate with the host sytem, but hardware access may depend on the device and container configuration. If using physical camera or alternative USB hardware, additional device                         configuration may be required
 
 ## 1. Install ROS 2 Humble
 
