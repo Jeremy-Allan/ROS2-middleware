@@ -25,7 +25,7 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 - **Service**: a request/response call, like a function call over the network. You call it, it does something, it replies. (Used here for almost everything: "give me coordinates for X," "move the arm," "execute this recipe.")
 - **Action**: like a service, but for things that take a while and report progress along the way. For example, "move the arm": MoveIt reports planning and monitoring progress before finally succeeding or failing. Only `hardware_interface_client.py` uses actions directly; everything else in the system only ever sees simple services.
 
-## (Optional) Installation via Distrobox (for non-Ubuntu users)
+## (Optional) Installation via Distrobox (Ubuntu Container)
 
 Distrobox can be used to run this project in an Ubuntu 22.04 environment on supported Linux hosts. This is useful when host distribution does not match required Ubuntu version. 
 
