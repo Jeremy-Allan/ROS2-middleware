@@ -8,13 +8,23 @@ from pathlib import Path
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
 from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose
-from moveit_msgs.msg import PlanningScene, CollisionObject
+from moveit_msgs.msg import PlanningScene, CollisionObject, AttachedCollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
 from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose, Quaternion
 from kinova_interfaces.msg import ExtendedStatus
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
+from rclpy.duration import Duration
+from tf2_ros import Buffer, TransformListener
+
+# Links allowed to touch an object once it's attached to the gripper, so the
+# fingers actually closing around it doesn't register as a collision.
+GRIPPER_TOUCH_LINKS = [
+    "tool_frame", "gripper_base_link",
+    "left_finger_dist_link", "left_finger_prox_link",
+    "right_finger_dist_link", "right_finger_prox_link",
+]
 
 
 class EnvironmentMappingNode(Node):
@@ -28,6 +38,11 @@ class EnvironmentMappingNode(Node):
             raise SystemExit(1)
 
         self.get_logger().info('Environment Mapping Node started')
+
+        # TF Buffer and Listener, needed to attach objects at the gripper's
+        # actual current pose rather than a guessed offset
+        self.tf_buffer = Buffer()
+        self.tf_listener = TransformListener(self.tf_buffer, self)
 
         # Telemetry Setup
         self.status_pub = self.create_publisher(ExtendedStatus, '/status/node_report', 10)
@@ -326,12 +341,23 @@ class EnvironmentMappingNode(Node):
             self.get_logger().error(response.message)
             return response
 
-        # Remove from planning scene
-        success = self.update_planning_scene_for_object(obj_id, CollisionObject.REMOVE)
+        obj_data = self.static_objects.get(obj_id) or self.obstacles.get(obj_id)
+
+        try:
+            transform = self.tf_buffer.lookup_transform(
+                'tool_frame', 'base_link', rclpy.time.Time(), timeout=Duration(seconds=2.0))
+        except Exception as e:
+            self.get_logger().error(f"Could not look up tool_frame to attach '{obj_id}': {e}")
+            response.success = False
+            response.message = f"Failed to attach '{obj_id}': tool_frame transform unavailable"
+            return response
+
+        relative_pose = self.pose_in_new_frame(obj_data['pose'], transform)
+        success = self.apply_attach_diff(obj_id, obj_data, relative_pose)
         if success:
             self.attached_objects.add(obj_id)
             response.success = True
-            response.message = f"Object '{obj_id}' attached (removed from scene)"
+            response.message = f"Object '{obj_id}' attached to gripper"
         else:
             response.success = False
             response.message = f"Failed to attach '{obj_id}'"
@@ -345,8 +371,7 @@ class EnvironmentMappingNode(Node):
             response.message = f"Object '{obj_id}' not attached"
             return response
 
-        # Add back to planning scene
-        success = self.update_planning_scene_for_object(obj_id, CollisionObject.ADD)
+        success = self.apply_detach_diff(obj_id)
         if success:
             self.attached_objects.remove(obj_id)
             response.success = True
@@ -355,6 +380,118 @@ class EnvironmentMappingNode(Node):
             response.success = False
             response.message = f"Failed to detach '{obj_id}'"
         return response
+
+    # --- Quaternion helpers for re-expressing a pose in another frame ---
+    # Same small-local-helper style as the euler/quaternion methods already
+    # duplicated in hardware_interface_client.py, not shared into a util module.
+    @staticmethod
+    def quat_multiply(q1, q2):
+        x1, y1, z1, w1 = q1
+        x2, y2, z2, w2 = q2
+        w = w1*w2 - x1*x2 - y1*y2 - z1*z2
+        x = w1*x2 + x1*w2 + y1*z2 - z1*y2
+        y = w1*y2 - x1*z2 + y1*w2 + z1*x2
+        z = w1*z2 + x1*y2 - y1*x2 + z1*w2
+        return (x, y, z, w)
+
+    @staticmethod
+    def quat_rotate_vector(q, v):
+        qv = (q[0], q[1], q[2])
+        qw = q[3]
+
+        def cross(a, b):
+            return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
+
+        t = tuple(2*c for c in cross(qv, v))
+        ct = cross(qv, t)
+        return (v[0]+qw*t[0]+ct[0], v[1]+qw*t[1]+ct[1], v[2]+qw*t[2]+ct[2])
+
+    def pose_in_new_frame(self, pose_dict, transform):
+        """Re-express a pose (dict with position x/y/z and orientation x/y/z/w)
+        in the frame that `transform` (a TransformStamped converting into that
+        frame) targets."""
+        pos = pose_dict['position']
+        orient = pose_dict['orientation']
+        t = transform.transform.translation
+        r = transform.transform.rotation
+        tq = (r.x, r.y, r.z, r.w)
+
+        rotated = self.quat_rotate_vector(tq, (pos['x'], pos['y'], pos['z']))
+        new_pos = (rotated[0] + t.x, rotated[1] + t.y, rotated[2] + t.z)
+        new_orient = self.quat_multiply(tq, (orient['x'], orient['y'], orient['z'], orient['w']))
+        return {
+            'position': {'x': new_pos[0], 'y': new_pos[1], 'z': new_pos[2]},
+            'orientation': {'x': new_orient[0], 'y': new_orient[1], 'z': new_orient[2], 'w': new_orient[3]}
+        }
+
+    def apply_attach_diff(self, obj_id, obj_data, relative_pose):
+        """Remove the object from the world and add it as a real
+        AttachedCollisionObject rigidly attached to tool_frame, in one diff,
+        so it actually moves with the gripper instead of just disappearing."""
+        if not self.scene_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('/apply_planning_scene not available')
+            return False
+
+        attached_obj_data = {'shape': obj_data['shape'], 'pose': relative_pose}
+        collision_obj = self.build_collision_object(obj_id, attached_obj_data)
+        if collision_obj is None:
+            return False
+        collision_obj.header.frame_id = "tool_frame"
+
+        attached = AttachedCollisionObject()
+        attached.link_name = "tool_frame"
+        attached.object = collision_obj
+        attached.touch_links = GRIPPER_TOUCH_LINKS
+
+        # MoveIt moves a same-ID object from world to attached automatically
+        # when it sees an AttachedCollisionObject with operation=ADD, no
+        # separate world REMOVE needed, that was fighting this and getting
+        # rejected as "object does not exist" (attach already removed it).
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.robot_state.is_diff = True
+        scene.robot_state.attached_collision_objects.append(attached)
+
+        return self.send_apply_planning_scene(scene, obj_id, "attach")
+
+    def apply_detach_diff(self, obj_id):
+        """Remove the AttachedCollisionObject. MoveIt moves it back into the
+        world scene automatically, at the pose implied by its attached
+        relative pose and the link's current position, no separate world ADD
+        needed (same reasoning as the attach side)."""
+        if not self.scene_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error('/apply_planning_scene not available')
+            return False
+
+        detach_marker = AttachedCollisionObject()
+        detach_marker.link_name = "tool_frame"
+        detach_marker.object.id = obj_id
+        detach_marker.object.operation = CollisionObject.REMOVE
+
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.robot_state.is_diff = True
+        scene.robot_state.attached_collision_objects.append(detach_marker)
+
+        return self.send_apply_planning_scene(scene, obj_id, "detach")
+
+    def send_apply_planning_scene(self, scene, obj_id, label):
+        request = ApplyPlanningScene.Request()
+        request.scene = scene
+
+        future = self.scene_client.call_async(request)
+        start = time.time()
+        while rclpy.ok() and not future.done():
+            if time.time() - start > 5.0:
+                self.get_logger().error(f"Timed out waiting for apply_planning_scene ({label} {obj_id})")
+                return False
+            time.sleep(0.01)
+
+        if future.result() is not None and future.result().success:
+            return True
+        else:
+            self.get_logger().error(f"apply_planning_scene failed for '{obj_id}' ({label})")
+            return False
     
     def update_object_pose_callback(self, request, response):
         obj_id = request.object_id
@@ -379,49 +516,6 @@ class EnvironmentMappingNode(Node):
         response.success = True
         response.message = f"Updated pose for '{obj_id}'"
         return response
-    def update_planning_scene_for_object(self, obj_id, operation):
-        """Apply a REMOVE or ADD diff to the planning scene for a single object."""
-        if not self.scene_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error('/apply_planning_scene not available')
-            return False
-
-        collision_obj = CollisionObject()
-        collision_obj.header.frame_id = "base_link"
-        collision_obj.id = obj_id
-        collision_obj.operation = operation  # REMOVE / ADD
-
-        if operation == CollisionObject.ADD:
-            # Need to re-supply the full geometry when adding back
-            obj_data = self.static_objects.get(obj_id) or self.obstacles.get(obj_id)
-            if obj_data is None:
-                self.get_logger().error(f"No stored data for '{obj_id}' to re-add to scene")
-                return False
-            full_obj = self.build_collision_object(obj_id, obj_data)
-            if full_obj is None:
-                return False
-            collision_obj = full_obj
-            collision_obj.operation = CollisionObject.ADD
-
-        scene = PlanningScene()
-        scene.is_diff = True
-        scene.world.collision_objects.append(collision_obj)
-
-        request = ApplyPlanningScene.Request()
-        request.scene = scene
-        
-        future = self.scene_client.call_async(request)
-        start = time.time()
-        while rclpy.ok() and not future.done():
-            if time.time() - start > 5.0:
-                self.get_logger().error(f"Timed out waiting for apply_planning_scene ({obj_id})")
-                return False
-            time.sleep(0.01)
-
-        if future.result() is not None and future.result().success:
-            return True
-        else:
-            self.get_logger().error(f"apply_planning_scene failed for '{obj_id}' (op={operation})")
-            return False
 
     def build_collision_object(self, obj_id, obj_data):
         
