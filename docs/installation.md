@@ -16,15 +16,6 @@
 If you're on Windows or macOS, you'll need a Ubuntu 22.04 VM or WSL2 with Ubuntu 22.04. ROS 2 Humble is not natively supported elsewhere.
 Non-Ubuntu Linux users will require Distrobox (or suitable alternative) for configuration
 
-## ROS 2 concepts you need before you start
-
-You don't need to be a ROS 2 expert, but these four words will come up constantly, so here's what they mean in plain English:
-
-- **Node**: a single running program. The middleware ships four of them, see [Overview](overview.md).
-- **Topic**: a one-way broadcast channel. Publishers shout messages onto a topic; subscribers listen. Nobody waits for a reply. (Used here for the heartbeat/telemetry messages.)
-- **Service**: a request/response call, like a function call over the network. You call it, it does something, it replies. (Used here for almost everything: "give me coordinates for X," "move the arm," "execute this recipe.")
-- **Action**: like a service, but for things that take a while and report progress along the way. For example, "move the arm": MoveIt reports planning and monitoring progress before finally succeeding or failing. Only `hardware_interface_client.py` uses actions directly; everything else in the system only ever sees simple services.
-
 ## (Optional) Installation via Distrobox (Ubuntu Container)
 
 Distrobox can be used to run this project in an Ubuntu 22.04 environment on supported Linux hosts. This is useful when host distribution does not match required Ubuntu version. 
