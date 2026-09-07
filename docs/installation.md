@@ -59,7 +59,7 @@ distrobox enter ubuntu-22-04
 ```
 
 Then proceed to follow the normal Running the System instructions
-  **Note:** Distrobox containers integrate with the host sytem, but hardware access may depend on the device and container configuration. If using physical camera or alternative USB hardware, additional device configuration may be required
+  **Note:** Distrobox containers integrate with the host system, but hardware access may depend on the device and container configuration. If using physical camera or alternative USB hardware, additional device configuration may be required
 
 ## 1. Install ROS 2 Humble
 
