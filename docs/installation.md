@@ -50,13 +50,7 @@ lsb_release -a
 
 This should return Ubuntu 22.04
 
-### 3. Continue with Standard Linux Installation
-
-Once inside the Ubuntu 22.04 container, proceed with the installation instructions below starting from Install ROS2 Humble
-
-No separate Distrobox-specific installation requirements exist for the Kinova driver, proxy, middleware and other dependencies. These are installed and build within the Ubuntu 22.04 environemtn using the same commands as the standard Ubuntu installations.
-
-### 4. Running the System
+### 3. Running the System
 
 After installation has completed, enter the container by
 
@@ -65,7 +59,7 @@ distrobox enter ubuntu-22-04
 ```
 
 Then proceed to follow the normal Running the System instructions
-  **Note:** Distrobox containers integrate with the host sytem, but hardware access may depend on the device and container configuration. If using physical camera or alternative USB hardware, additional device                         configuration may be required
+  **Note:** Distrobox containers integrate with the host sytem, but hardware access may depend on the device and container configuration. If using physical camera or alternative USB hardware, additional device configuration may be required
 
 ## 1. Install ROS 2 Humble
 
