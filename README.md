@@ -24,6 +24,14 @@ Four ROS 2 nodes do the work here:
 
 Full explanation, with the request path spelled out end to end: [docs/overview.md](docs/overview.md).
 
+
+
+
+
+<video src="https://github.com/user-attachments/assets/9ad3d129-2060-4627-a5c3-de03633666fe" autoplay loop muted playsinline></video>
+  <figcaption><em> Middleware Demo (in progress) </em></figcaption>
+
+  
 ## Quick start
 
 Requires Ubuntu 22.04 LTS, ROS 2 Humble, Python 3.10+. Full setup, including the Kinova driver stack this repo depends on: [docs/installation.md](docs/installation.md).
