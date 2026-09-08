@@ -761,5 +761,3 @@ The overall setup process is:
           ▼
 6. Run and Test the Project
 ```
-
-**If you are using native Ubuntu 22.04, skip directly to [`installation.md`](./installation.md).**
