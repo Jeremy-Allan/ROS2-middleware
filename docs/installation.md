@@ -17,7 +17,7 @@ If you're on Windows or macOS, you'll need a Ubuntu 22.04 VM or WSL2 with Ubuntu
 
 ## 1. Install ROS 2 Humble
 
-If you don't already have ROS 2 Humble installed, follow the official installation guide for your platform (search "ROS 2 Humble installation Ubuntu"; the official docs at `docs.ros.org` are the canonical source and change format occasionally, so it's safer to follow those directly than to copy-paste commands that might drift out of date).
+If you don't already have ROS 2 Humble installed, follow the official installation guide for your [Ubuntu Setup](https://docs.ros.org/en/humble/Installation/Alternatives/Ubuntu-Development-Setup.html)
 
 After installing, every new terminal you use for this project needs the ROS 2 environment loaded:
 
