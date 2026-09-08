@@ -13,52 +13,7 @@
 | RAM | 8GB minimum, 32GB recommended | Higher end needed if you're running a larger local LLM through Ollama |
 | Ollama | Latest, only if running a local LLM | Not needed if you're only using a cloud provider (OpenAI, Anthropic, Gemini) |
 
-If you're on Windows or macOS, you'll need a Ubuntu 22.04 VM or WSL2 with Ubuntu 22.04. ROS 2 Humble is not natively supported elsewhere. See here for [Environment Setup](./environment-setup.md)
-
-## (Optional) Installation via Distrobox (Ubuntu Container)
-
-[Distrobox](https://distrobox.it/) can be used to run this project in an Ubuntu 22.04 environment on supported Linux hosts. This is useful when host distribution does not match required Ubuntu version. 
-
-### 1. Install Distrobox
-
-Install Distrobox via hosts package manager. For example, on Fedora
-
-```bash
-sudo dnf install distrobox
-```
-
-### 2. Create Ubuntu 22.04 Container
-
-Create a Distrobox container using Ubuntu 22.04
-
-```bash
-distrobox create --name ubuntu-22-04 --image ubuntu:22.04
-```
-
-Enter the container
-
-```bash
-distrobox enter ubuntu-22-04
-```
-
-Verify the Ubuntu version from within the container
-
-```bash
-lsb_release -a
-```
-
-This should return Ubuntu 22.04
-
-### 3. Running the System
-
-After installation has completed, enter the container by
-
-```bash
-distrobox enter ubuntu-22-04
-```
-
-Then proceed to follow the normal Running the System instructions
-  **Note:** Distrobox containers integrate with the host system, but hardware access may depend on the device and container configuration. If using physical camera or alternative USB hardware, additional device configuration may be required
+If you're on Windows or macOS, you'll need a Ubuntu 22.04 VM or WSL2 with Ubuntu 22.04. ROS 2 Humble is not natively supported elsewhere. Instructions to configure workspace is found in [Environment Setup](./environment-setup.md)
 
 ## 1. Install ROS 2 Humble
 
