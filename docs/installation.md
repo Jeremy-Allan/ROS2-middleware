@@ -31,9 +31,13 @@ Verify that ROS Humble has been installed:
 echo $ROS_DISTRO
 # it should say `humble`
 ```
-
+![ROS 2 Humble Verification](diagrams/ros_humble_verify.png)
 
 Tip: add this line to your `~/.bashrc` so you don't have to type it in every terminal.
+
+```bash
+echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
+```
 
 ## 2. Set up your ROS 2 workspace and clone this repo
 
