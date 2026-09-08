@@ -113,42 +113,14 @@ Verify the Ubuntu version from within the container
 lsb_release -a
 ```
 
+![Environment Verification](diagrams/verify_environment)
+
 This should return Ubuntu 22.04
 A version number should be displayed.
 
 If the command is not found, Distrobox has not been installed correctly.
 
-### 3.2 Create the Ubuntu 22.04 Container
-
-Create an Ubuntu 22.04 container:
-
-```bash
-distrobox create --name ubuntu-22-04 --image ubuntu:22.04
-```
-
-Enter the container:
-
-```bash
-distrobox enter ubuntu-22-04
-```
-
-Verify the operating system:
-
-```bash
-cat /etc/os-release
-```
-
-The output should identify Ubuntu 22.04.
-
-You can also run:
-
-```bash
-lsb_release -a
-```
-
-if `lsb_release` is installed.
-
-### 3.3 Initial Container Setup
+### 3.2 Initial Container Setup
 
 Inside the container, update the package lists:
 
@@ -164,7 +136,7 @@ sudo apt install -y git curl wget build-essential python3 python3-pip
 
 Do not install the project's ROS 2 dependencies here unless instructed by [`installation.md`](./installation.md).
 
-### 3.4 Project Workspace
+### 3.3 Project Workspace
 
 Distrobox normally provides access to the host user's home directory.
 
@@ -199,29 +171,7 @@ Verify that the expected files are present:
 ls
 ```
 
-### 3.5 GUI and RViz
-
-The project uses RViz for visualisation and simulation.
-
-Distrobox normally integrates with the host graphical environment. Before troubleshooting RViz itself, verify that graphical applications can access the host display.
-
-Check:
-
-```
-echo $DISPLAY
-```
-
-For Wayland-based systems, also check:
-
-```
-echo $WAYLAND_DISPLAY
-```
-
-A valid display environment should be available before attempting to run RViz.
-
-If RViz fails with a display or OpenGL error, the issue may be related to the host's graphical configuration rather than ROS 2.
-
-### 3.6 USB and Camera Access
+### 3.4 USB and Camera Access
 
 Distrobox can provide access to host hardware, but availability depends on the host configuration.
 
@@ -248,7 +198,7 @@ lsusb
 
 If the device is visible on the host but not inside the Distrobox container, additional device configuration may be required.
 
-### 3.7 Re-entering the Environment
+### 3.5 Re-entering the Environment
 
 Once the container has been created, it does not need to be recreated each time.
 
