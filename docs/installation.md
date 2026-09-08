@@ -25,6 +25,14 @@ After installing, every new terminal you use for this project needs the ROS 2 en
 source /opt/ros/humble/setup.bash
 ```
 
+Verify that ROS Humble has been installed:
+
+```bash
+echo $ROS_DISTRO
+# it should say `humble`
+```
+
+
 Tip: add this line to your `~/.bashrc` so you don't have to type it in every terminal.
 
 ## 2. Set up your ROS 2 workspace and clone this repo
