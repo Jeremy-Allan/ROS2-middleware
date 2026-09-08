@@ -73,21 +73,7 @@ source /opt/ros/humble/setup.bash
 
 Tip: add this line to your `~/.bashrc` so you don't have to type it in every terminal.
 
-## 2. Install the Kinova driver stack (external dependency)
-
-This is the part that's easy to miss. This repository is only the middleware layer. It does not contain:
-- The low-level Kinova hardware driver
-- The simulated ("fake hardware") arm
-- The MoveIt 2 configuration for the Gen3 Lite (joint limits, kinematics, planning groups, etc.)
-
-The launch file (`kinova_interface/launch/robot.launch.py`) directly includes launch files from two packages it expects to already exist in your workspace:
-
-- `kortex_bringup`: starts the robot controller (real or simulated) and RViz
-- `kinova_gen3_lite_moveit_config`: starts the MoveIt 2 planning pipeline for this specific arm
-
-Both come from Kinova's official ROS 2 driver repository: [Kinovarobotics/ros2_kortex](https://github.com/Kinovarobotics/ros2_kortex) (branch matching ROS 2 Humble). Clone that into the `src/` folder of the same workspace you'll build this middleware in, see below.
-
-## 3. Set up your ROS 2 workspace and clone this repo
+## 2. Set up your ROS 2 workspace and clone this repo
 
 A ROS 2 "workspace" is just a folder with a specific structure that `colcon` knows how to build. Create one and put all the required source packages inside `src/`:
 
@@ -102,11 +88,22 @@ git clone -b humble https://github.com/Kinovarobotics/ros2_kortex.git
 git clone https://github.com/Jeremy-Allan/ROS2-middleware.git
 ```
 
+After completing these steps, the expected project structure is as follows:
+
+```bash
+├── /workspace
+├── /ros2_kortex_ws
+└── /src
+       ├── /ROS-Middleware
+       ├── /embodied-ai-proxy
+       └── /ros2_kortex
+```
+
 Your `src/` folder should now contain (at least) the `ros2_kortex` packages alongside this repo's two packages: `kinova_interface` (the Python nodes, launch file, recipes, config) and `kinova_interfaces` (the custom service/message type definitions).
 
 > Note the naming: `kinova_interface` (singular, the nodes) and `kinova_interfaces` (plural, the custom `.srv`/`.msg` type definitions) are two separate ROS 2 packages that live side by side in this one Git repository. Don't confuse them: the launch file, entry points, and every `import` in the Python code depend on getting the singular/plural right.
 
-## 4. Install ROS 2 dependencies with rosdep
+## 3. Install ROS 2 dependencies with rosdep
 
 From the root of your workspace, let ROS 2's dependency resolver install anything missing (MoveIt 2, `ros2_control`, `tf2_ros`, etc.):
 
@@ -117,7 +114,7 @@ rosdep update
 rosdep install --from-paths src --ignore-src -r -y
 ```
 
-## 5. Build the workspace
+## 4. Build the workspace
 
 ```bash
 cd ~/workspace/ros2_kortex_ws
@@ -128,7 +125,7 @@ If this is the very first build of the whole workspace, drop `--packages-select 
 
 `kinova_interfaces` must build successfully before `kinova_interface`, because the Python nodes import the custom service/message types it generates (`HomeArm`, `MoveArm`, `ExtendedStatus`, etc.). Colcon handles this ordering automatically as long as both packages are in `src/`.
 
-## 6. Source the workspace
+## 5. Source the workspace
 
 Every terminal you use to run or interact with the middleware needs:
 
@@ -139,7 +136,7 @@ source ~/workspace/ros2_kortex_ws/install/setup.bash
 
 "Sourcing" loads environment variables that tell your shell where to find the compiled packages, message types, and executables. If you skip this, you'll get "package not found" or "unknown message type" errors.
 
-## 7. Clone and set up the proxy
+## 6. Clone and set up the proxy
 
 The proxy is a separate project with its own small internal ROS 2 workspace for the bridge. It does not live inside `ros2_kortex_ws`, clone it wherever you keep your projects:
 
@@ -166,7 +163,9 @@ Build the proxy's internal ROS 2 bridge workspace:
 
 ```bash
 cd ros2_bridge_ws
+# if this is the very first build of the whole workspace run just colcon build
 colcon build
+# otherwise to save build time, only build the packages which has code changes by using the `packages-select` flag
 cd ..
 ```
 
@@ -179,7 +178,7 @@ source ~/.bashrc
 
 > Important: that `PYTHONPATH=.` only works correctly if you run the proxy's Python commands (`main.py`, `evaluate_proxy.py`) from the repository root. Running them from any other directory will cause import errors.
 
-## 8. Set up an LLM provider
+## 7. Set up an LLM provider
 
 The proxy needs a large language model to talk to. The default configuration expects a local Ollama model, which is free and needs no API key, but you can point it at OpenAI, Anthropic, or Gemini instead. Full provider configuration is covered in [Configuration](configuration.md); the short version for the free local path:
 
@@ -200,5 +199,7 @@ curl http://localhost:11434
 ```
 
 It should respond `Ollama is running`.
+
+
 
 Next: [Running the System](running.md)
