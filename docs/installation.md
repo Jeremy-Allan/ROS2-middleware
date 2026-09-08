@@ -87,8 +87,7 @@ git clone -b humble https://github.com/Kinovarobotics/ros2_kortex.git
 # This middleware repository
 git clone https://github.com/Jeremy-Allan/ROS2-middleware.git
 ```
-
-After completing these steps, the expected project structure is as follows:
+You can access the official [ROS 2 Kortex Repository](https://github.com/Kinovarobotics/ros2_kortex) here. After completing these steps, the expected project structure is as follows:
 
 ```bash
 ├── /workspace
