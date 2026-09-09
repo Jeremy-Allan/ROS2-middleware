@@ -113,7 +113,7 @@ Verify the Ubuntu version from within the container
 lsb_release -a
 ```
 
-![Environment Verification](diagrams/verify_environment)
+![Verify Environment](diagrams/verify_environment.png)
 
 This should return Ubuntu 22.04
 A version number should be displayed.
