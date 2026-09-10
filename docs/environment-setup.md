@@ -6,8 +6,8 @@ The project environment is based on **Ubuntu 22.04 (Jammy)** and **ROS 2 Humble*
 
 This document covers the setup required for:
 
-* [macOS](#4-virtual-machine)
-* [Windows](#3-windows-wsl-2)
+* [macOS](#4-virtual-machine-windows--macos)
+* [Windows](#3-wsl-2-windows)
 * [Other Linux distributions](#2-linux-distrobox)
 
 ---
