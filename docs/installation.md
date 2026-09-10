@@ -56,8 +56,8 @@ git clone https://github.com/Jeremy-Allan/ROS2-middleware.git
 You can access the official [ROS 2 Kortex Repository](https://github.com/Kinovarobotics/ros2_kortex) here. After completing these steps, the expected project structure is as follows:
 
 ```bash
-└── /workspace
-    └── /ros2_kortex_ws
+├── /workspace
+    ├── /ros2_kortex_ws
         └── /src
            ├── /ROS2-Middleware
            ├── /embodied-ai-proxy
