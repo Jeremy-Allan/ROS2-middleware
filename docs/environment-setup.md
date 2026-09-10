@@ -128,7 +128,7 @@ distrobox enter ubuntu-22-04
 
 ---
 
-## 3. Windows: WSL 2
+## 3. WSL 2 (Windows)
 
 Windows users can use **WSL 2 (Windows Subsystem for Linux 2)** to provide the Ubuntu environment.
 
@@ -272,7 +272,7 @@ If the project is being tested using recorded camera data rather than a physical
 
 ---
 
-## 4. Virtual Machine
+## 4. Virtual Machine (Windows / macOS)
 
 A virtual machine can be used when Distrobox or WSL is unsuitable.
 
