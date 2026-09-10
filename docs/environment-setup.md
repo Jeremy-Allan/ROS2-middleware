@@ -6,9 +6,9 @@ The project environment is based on **Ubuntu 22.04 (Jammy)** and **ROS 2 Humble*
 
 This document covers the setup required for:
 
-* macOS
-* Windows
-* Other Linux distributions
+* [macOS](#4-virtual-machine)
+* [Windows](#3-windows-wsl-2)
+* [Other Linux distributions](#2-linux-distrobox)
 
 ---
 
@@ -19,7 +19,7 @@ Choose the setup appropriate for your host operating system.
 | Host OS                   | Recommended approach |
 | ------------------------- | -------------------- |
 | Other Linux distributions | Distrobox            |
-| Windows 10                | WSL 2/Virtual Machine|
+| Windows 10                | WSL 2 / Virtual Machine|
 | macOS                     | Virtual Machine      |
 
 ---
