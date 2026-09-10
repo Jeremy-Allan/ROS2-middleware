@@ -56,12 +56,12 @@ git clone https://github.com/Jeremy-Allan/ROS2-middleware.git
 You can access the official [ROS 2 Kortex Repository](https://github.com/Kinovarobotics/ros2_kortex) here. After completing these steps, the expected project structure is as follows:
 
 ```bash
-├── /workspace
-├── /ros2_kortex_ws
-└── /src
-       ├── /ROS-Middleware
-       ├── /embodied-ai-proxy
-       └── /ros2_kortex
+└── /workspace
+    └── /ros2_kortex_ws
+        └── /src
+           ├── /ROS2-Middleware
+           ├── /embodied-ai-proxy
+           └── /ros2_kortex
 ```
 
 Your `src/` folder should now contain (at least) the `ros2_kortex` packages alongside this repo's two packages: `kinova_interface` (the Python nodes, launch file, recipes, config) and `kinova_interfaces` (the custom service/message type definitions).
@@ -83,6 +83,9 @@ rosdep install --from-paths src --ignore-src -r -y
 
 ```bash
 cd ~/workspace/ros2_kortex_ws
+# if this is the very first build of the whole workspace run just colcon build
+colcon build
+# otherwise to save build time, only build the packages which has code changes by using the `packages-select` flag
 colcon build --packages-select kinova_interface kinova_interfaces
 ```
 
@@ -128,9 +131,7 @@ Build the proxy's internal ROS 2 bridge workspace:
 
 ```bash
 cd ros2_bridge_ws
-# if this is the very first build of the whole workspace run just colcon build
 colcon build
-# otherwise to save build time, only build the packages which has code changes by using the `packages-select` flag
 cd ..
 ```
 
