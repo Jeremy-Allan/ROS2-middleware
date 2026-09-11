@@ -1,0 +1,11 @@
+# Resolves a named orientation preset (see orientation_presets.json) into
+# real roll/pitch/yaw values. Mirrors GetRelativeMovement.srv's shape
+# exactly, same pattern, same node (environment_mapping_node.py) serves
+# both.
+string preset_name
+---
+float64 roll
+float64 pitch
+float64 yaw
+bool success
+string message

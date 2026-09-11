@@ -1,4 +1,4 @@
-# empty request
+kinova_interfaces/MotionParams motion_params
 ---
 bool success
 string message

@@ -2,3 +2,4 @@
 ---
 string[] object_list
 string[] movement_names
+string[] orientation_names

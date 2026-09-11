@@ -1,0 +1,34 @@
+{
+  "recipe_name": "Stacking Demo",
+  "description": "Picks up the red cube and stacks it on the blue cube, exercising dropoff's two-stage descent and computed stacking height instead of dropping onto a flat destination like the tray",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Start at home"
+    },
+    {
+      "step_id": 2,
+      "action": "pickup",
+      "parameters": {
+        "target": "red_cube"
+      },
+      "description": "Pick up the red cube"
+    },
+    {
+      "step_id": 3,
+      "action": "dropoff",
+      "parameters": {
+        "target": "red_cube",
+        "destination": "blue_cube",
+        "place_offset": 0.1
+      },
+      "description": "Stack the red cube on top of the blue cube"
+    },
+    {
+      "step_id": 4,
+      "action": "home",
+      "description": "Return to home"
+    }
+  ]
+}

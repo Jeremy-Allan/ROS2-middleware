@@ -12,7 +12,7 @@ This page describes the execution contract, safety layers, and failure model thi
 ## Execution contract
 
 - Every task is decomposed into discrete, ordered steps.
-- Each step must map to one of the four known action types: `home`, `move_arm`, `relative_move`, `gripper`. See [Configuration](configuration.md) for the exact contract and a note on where this repo's older docs disagreed with the actual code.
+- Each step must map to one of the six known action types: `home`, `move_arm`, `relative_move`, `gripper`, `pickup`, `dropoff`. See [Configuration](configuration.md) for the exact contract and a note on where this repo's older docs disagreed with the actual code.
 - Execution is strictly sequential: `json_parser_node` runs steps one at a time and stops at the first failure. There is no parallel step execution today.
 
 ## What's actually implemented vs design intent
@@ -25,7 +25,7 @@ The system's real, currently-implemented state model is simpler than some earlie
 ## Safety layers
 
 1. **Schema validation**: malformed or incomplete recipe JSON is rejected before execution starts (`json_parser_node`'s `execute_recipe`, and independently, the proxy's Pydantic schema before a recipe is even sent).
-2. **Action whitelist**: only the four known action types are executable; anything else fails that step and aborts the recipe.
+2. **Action whitelist**: only the six known action types are executable; anything else fails that step and aborts the recipe.
 3. **Motion planning**: all Cartesian and joint moves go through MoveIt 2, which handles collision avoidance and feasibility checking. No raw joint commands are accepted from outside this layer.
 4. **Execution guard**: `json_parser_node`'s `/execute_recipe` service runs on a `MutuallyExclusiveCallbackGroup`, so only one recipe executes at a time.
 5. **Hardware protection**: joint limits and safety stops are enforced by the underlying Kortex driver and controllers, not by this middleware directly.
@@ -42,7 +42,7 @@ There is currently no layer that evaluates whether a schema-valid, collision-fre
 |---|---|---|---|---|
 | Invalid JSON recipe | JSON Parser Node | Malformed or incomplete structure | Execution rejected | Fix the JSON; validate before sending |
 | Unknown action type | JSON Parser Node | Action not in the whitelist | Step fails, recipe aborts | Use one of the four valid actions |
-| Missing object mapping | Environment Mapping Node | Object key not in the coordinate dictionary | Service returns failure | Add the object to `coordinate_dictionary.json` |
+| Missing object mapping | Environment Mapping Node | Object key not in the object dictionary | Service returns failure | Add the object to `object_dictionary.json` |
 | ROS 2 service timeout | Any node-to-node call | Node overload, planning delay, or a hung dependency | Step fails or the call hangs (see the no-timeout gap noted in Architecture) | Retry, or restart the affected node |
 | Gripper command failure | Hardware Interface Client | Actuator limit or communication loss | Step fails | Check hardware connection, reinitialize if needed |
 | Collision detected | MoveIt planning layer | Unsafe trajectory | Movement aborted | Adjust target or obstacle definitions, replan |

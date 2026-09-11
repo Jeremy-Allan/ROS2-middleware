@@ -1,6 +1,9 @@
-float64 x
-float64 y
-float64 z
+geometry_msgs/Point target_position
+bool has_orientation
+float64 roll
+float64 pitch
+float64 yaw
+kinova_interfaces/MotionParams motion_params
 ---
 bool success
 string message
