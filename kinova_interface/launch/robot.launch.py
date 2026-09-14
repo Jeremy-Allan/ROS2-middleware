@@ -44,7 +44,11 @@ def launch_setup(context, *args, **kwargs):
         return args
 
     recipe = LaunchConfiguration('recipe')
-    env_dir = PathJoinSubstitution([FindPackageShare('kinova_interface'), 'data', 'configs', 'env'])
+    config_dir_override = LaunchConfiguration('config_dir').perform(context)
+    if config_dir_override:
+        env_dir = config_dir_override
+    else:
+        env_dir = PathJoinSubstitution([FindPackageShare('kinova_interface'), 'data', 'configs', 'env'])
 
     environment_mapping_node = Node(
         package='kinova_interface',
@@ -107,6 +111,14 @@ def generate_launch_description():
         description='The JSON recipe file to execute. Default is "none", meaning it will wait for the service.'
     )
 
+    config_dir_arg = DeclareLaunchArgument(
+        'config_dir',
+        default_value='',
+        description='Override the middleware config directory (object dictionary, relative movements, obstacles). '
+                     'Defaults to the packaged data/configs/env directory when left empty; pass an absolute path '
+                     '(e.g. .../data/configs/env_test) to use a different config set, such as the QA test-object fixture.'
+    )
+
     robot_ip_arg = DeclareLaunchArgument(
         'robot_ip',
         default_value='192.168.1.10',
@@ -163,6 +175,7 @@ def generate_launch_description():
         core_debug_arg,
         enable_individual_logs_arg,
         recipe_arg,
+        config_dir_arg,
         robot_ip_arg,
         use_fake_hardware_arg,
         OpaqueFunction(function=check_hardware_args),

@@ -1,0 +1,12 @@
+{
+  "recipe_name": "QA - Gripper Open Only",
+  "description": "Sends the gripper to the open position with no arm movement (position 1.0 = open, matching the convention used in L2-L5)",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "gripper",
+      "parameters": { "position": 1.0 },
+      "description": "Open gripper"
+    }
+  ]
+}

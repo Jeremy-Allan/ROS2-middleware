@@ -1,0 +1,12 @@
+{
+  "recipe_name": "QA - Pickup Red Cube (isolated)",
+  "description": "Exercises the standalone 'pickup' action directly, in isolation from a full pick-and-place cycle. Explicitly passes open_position/close_position to match the 0=closed/1=open convention used elsewhere in this test suite (L2-L5) rather than relying on pickup()'s own internal defaults, which use the opposite convention (open_position default 0.0, close_position default 0.8) — a discovered inconsistency worth reconciling separately.",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "pickup",
+      "parameters": { "target": "red_cube", "open_position": 1.0, "close_position": 0.0 },
+      "description": "Pick up red cube using the explicit open=1.0/close=0.0 convention"
+    }
+  ]
+}

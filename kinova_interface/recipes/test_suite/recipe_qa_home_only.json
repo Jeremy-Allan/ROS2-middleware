@@ -1,0 +1,11 @@
+{
+  "recipe_name": "QA - Home Only",
+  "description": "Sends the arm to its fixed joint-space home pose with no other steps",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    }
+  ]
+}

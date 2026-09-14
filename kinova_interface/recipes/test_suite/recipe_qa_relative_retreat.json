@@ -1,0 +1,12 @@
+{
+  "recipe_name": "QA - Relative Move Retreat",
+  "description": "Isolated relative_move test using the retreat vector (relative_movement.json). Middleware-only: this bypasses the proxy/LLM vocabulary mismatch documented in docs/configuration.md, which currently only affects relative_move requests generated via natural language.",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "relative_move",
+      "parameters": { "vector": "retreat" },
+      "description": "Move backward by the retreat offset"
+    }
+  ]
+}

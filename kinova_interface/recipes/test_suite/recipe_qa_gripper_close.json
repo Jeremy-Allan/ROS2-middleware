@@ -1,0 +1,12 @@
+{
+  "recipe_name": "QA - Gripper Close Only",
+  "description": "Sends the gripper to the closed position with no arm movement (position 0.0 = closed, matching the convention used in L2-L5)",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "gripper",
+      "parameters": { "position": 0.0 },
+      "description": "Close gripper"
+    }
+  ]
+}

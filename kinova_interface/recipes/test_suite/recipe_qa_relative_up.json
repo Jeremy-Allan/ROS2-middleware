@@ -1,0 +1,12 @@
+{
+  "recipe_name": "QA - Relative Move Up",
+  "description": "Isolated relative_move test using the move_upwards vector (relative_movement.json)",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "relative_move",
+      "parameters": { "vector": "move_upwards" },
+      "description": "Move up by the move_upwards offset"
+    }
+  ]
+}

@@ -16,7 +16,7 @@
     {
       "step_id": 3,
       "action": "move_arm",
-      "parameters": { "target": "red_cube_pickup" },
+      "parameters": { "target": "red_cube" },
       "description": "Move to red cube pickup position"
     },
     {

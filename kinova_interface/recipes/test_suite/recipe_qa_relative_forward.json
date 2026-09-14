@@ -1,0 +1,12 @@
+{
+  "recipe_name": "QA - Relative Move Forward",
+  "description": "Isolated relative_move test using the thrust_forward vector (relative_movement.json). Middleware-only: this bypasses the proxy/LLM vocabulary mismatch documented in docs/configuration.md, which currently only affects relative_move requests generated via natural language.",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "relative_move",
+      "parameters": { "vector": "thrust_forward" },
+      "description": "Move forward by the thrust_forward offset"
+    }
+  ]
+}

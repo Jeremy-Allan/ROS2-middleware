@@ -14,7 +14,9 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'data', 'configs', 'env'), glob('data/configs/env/*.json')),
+        (os.path.join('share', package_name, 'data', 'configs', 'env_test'), glob('data/configs/env_test/*.json')),
         (os.path.join('share', package_name, 'recipes'), glob(os.path.join('recipes', '*.json'))),
+        (os.path.join('share', package_name, 'recipes', 'test_suite'), glob(os.path.join('recipes', 'test_suite', '*.json'))),
     ],
     
     install_requires=['setuptools'],

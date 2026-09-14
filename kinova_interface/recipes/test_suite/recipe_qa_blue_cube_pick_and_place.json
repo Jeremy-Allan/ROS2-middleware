@@ -1,6 +1,6 @@
 {
-  "recipe_name": "L4 - Full Pick and Place",
-  "description": "Complete pick and place sequence with relative move",
+  "recipe_name": "QA - Blue Cube Pick and Place",
+  "description": "Full pick-and-place sequence for blue_cube alone, mirroring L4 but with the second dictionary object for grasp-orientation/coverage variety",
   "steps": [
     {
       "step_id": 1,
@@ -16,8 +16,8 @@
     {
       "step_id": 3,
       "action": "move_arm",
-      "parameters": { "target": "red_cube" },
-      "description": "Move to red cube pickup position"
+      "parameters": { "target": "blue_cube" },
+      "description": "Move to blue cube position"
     },
     {
       "step_id": 4,

@@ -21,7 +21,7 @@
         {
           "step_id": 1,
           "action": "fly",
-          "parameters": { "target": "red_cube_pickup" },
+          "parameters": { "target": "red_cube" },
           "description": "Attempt unsupported action"
         }
       ]
