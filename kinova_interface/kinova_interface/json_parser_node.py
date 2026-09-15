@@ -43,6 +43,9 @@ class JsonParserNode(Node):
 
     STEP_SETTLE_DELAY_SEC = 0.5
     SERVER_WAIT_TIMEOUT_SEC = 5.0
+    DEFAULT_SERVICE_TIMEOUT_SEC = 10.0
+    ARM_SERVICE_TIMEOUT_SEC = 35.0
+    GRIPPER_SERVICE_TIMEOUT_SEC = 12.0
 
     DEFAULT_OPEN_POSITION = 0.0
     DEFAULT_CLOSE_POSITION = 0.8
@@ -118,8 +121,10 @@ class JsonParserNode(Node):
 
         self.get_logger().info("JSON Parser Node Online.")
 
-    def wait_for_future(self, future, service_name, timeout_sec=10.0):
+    def wait_for_future(self, future, service_name, timeout_sec=None):
         """Safely wait for an async service call future to complete without deadlocking the executor."""
+        if timeout_sec is None:
+            timeout_sec = self.DEFAULT_SERVICE_TIMEOUT_SEC
         start = time.time()
         while rclpy.ok() and not future.done():
             if time.time() - start > timeout_sec:
@@ -186,7 +191,7 @@ class JsonParserNode(Node):
 
     def get_object_info(self, target_name):
         """Query the environment mapping node for full object info (pose + shape)."""
-        if not self.info_client.wait_for_service(timeout_sec=5.0):
+        if not self.info_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error("Get Object Info service not available")
             return None
         req = GetObjectInfo.Request()
@@ -214,7 +219,7 @@ class JsonParserNode(Node):
             return None
 
     def get_relative_movement_vector(self, movement_name):
-        if not self.relative_client.wait_for_service(timeout_sec=5.0):
+        if not self.relative_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error("Get Relative Movement Service not available")
             return None
         req = GetRelativeMovement.Request()
@@ -231,14 +236,14 @@ class JsonParserNode(Node):
             return None
 
     def call_home_service(self) -> tuple[bool, str]:
-        if not self.home_client.wait_for_service(timeout_sec=5.0):
+        if not self.home_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             msg = "Home Arm service not available"
             self.get_logger().error(msg)
             return False, msg
 
         req = HomeArm.Request()
         future = self.home_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/home_arm')
+        response = self.wait_for_future(future, '/kinova_hardware_client/home_arm', timeout_sec=self.ARM_SERVICE_TIMEOUT_SEC)
 
         if response is None:
             msg = "Timed out waiting for Home Arm service response"
@@ -250,7 +255,7 @@ class JsonParserNode(Node):
         return False, response.message or "Home Arm returned failure"
 
     def call_move_service(self, x: float, y: float, z: float) -> tuple[bool, str]:
-        if not self.move_arm_client.wait_for_service(timeout_sec=5.0):
+        if not self.move_arm_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             msg = "Move Arm service not available"
             self.get_logger().error(msg)
             return False, msg
@@ -261,7 +266,7 @@ class JsonParserNode(Node):
         req.z = z
 
         future = self.move_arm_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/move_arm')
+        response = self.wait_for_future(future, '/kinova_hardware_client/move_arm', timeout_sec=self.ARM_SERVICE_TIMEOUT_SEC)
 
         if response is None:
             msg = f"Timed out waiting for Move Arm service to ({x}, {y}, {z})"
@@ -273,7 +278,7 @@ class JsonParserNode(Node):
         return False, response.message or f"Move to ({x}, {y}, {z}) failed"
 
     def call_relative_move_service(self, vx: float, vy: float, vz: float) -> tuple[bool, str]:
-        if not self.relative_move_client.wait_for_service(timeout_sec=5.0):
+        if not self.relative_move_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             msg = "Relative Move service not available"
             self.get_logger().error(msg)
             return False, msg
@@ -284,7 +289,7 @@ class JsonParserNode(Node):
         req.vz = vz
 
         future = self.relative_move_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/relative_move')
+        response = self.wait_for_future(future, '/kinova_hardware_client/relative_move', timeout_sec=self.ARM_SERVICE_TIMEOUT_SEC)
 
         if response is None:
             msg = f"Timed out waiting for Relative Move service to ({vx}, {vy}, {vz})"
@@ -296,7 +301,7 @@ class JsonParserNode(Node):
         return False, response.message or f"Relative move ({vx}, {vy}, {vz}) failed"
 
     def call_move_gripper_service(self, position: float) -> tuple[bool, str]:
-        if not self.move_gripper_client.wait_for_service(timeout_sec=5.0):
+        if not self.move_gripper_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             msg = "Move Gripper service not available"
             self.get_logger().error(msg)
             return False, msg
@@ -305,7 +310,7 @@ class JsonParserNode(Node):
         req.position = position
 
         future = self.move_gripper_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/move_gripper')
+        response = self.wait_for_future(future, '/kinova_hardware_client/move_gripper', timeout_sec=self.GRIPPER_SERVICE_TIMEOUT_SEC)
 
         if response is None:
             msg = f"Timed out waiting for Move Gripper service to {position}"
@@ -318,7 +323,7 @@ class JsonParserNode(Node):
 
     def attach_object(self, obj_id: str) -> tuple[bool, str]:
         """Remove object from planning scene (allow collision) via the environment mapping node."""
-        if not self.attach_client.wait_for_service(timeout_sec=5.0):
+        if not self.attach_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             msg = "Attach service not available"
             self.get_logger().error(msg)
             return False, msg
@@ -340,7 +345,7 @@ class JsonParserNode(Node):
 
     def detach_object(self, obj_id: str) -> tuple[bool, str]:
         """Add object back to planning scene via the environment mapping node."""
-        if not self.detach_client.wait_for_service(timeout_sec=5.0):
+        if not self.detach_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             msg = "Detach service not available"
             self.get_logger().error(msg)
             return False, msg
@@ -361,7 +366,7 @@ class JsonParserNode(Node):
         return False, response.message or f"Failed to detach '{obj_id}'"
 
     def update_object_pose(self, obj_id: str, x: float, y: float, z: float, orientation=None) -> tuple[bool, str]:
-        if not self.update_pose_client.wait_for_service(timeout_sec=5.0):
+        if not self.update_pose_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             msg = "Update Object Pose service not available"
             self.get_logger().error(msg)
             return False, msg

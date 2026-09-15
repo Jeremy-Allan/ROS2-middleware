@@ -186,7 +186,7 @@ class HardwareInterfaceClient(Node):
         else:
             self.get_logger().info("No hardware fault detected. Failure may be algorithmic (planning timeout).")
 
-    def _await_action(self, event: threading.Event, timeout_sec: float, success: bool, message: str, action_desc: str, response):
+    def _await_action(self, event: threading.Event, timeout_sec: float, success_attr: str, message_attr: str, action_desc: str, response):
         """Wait for an action event and populate the service response with status and message."""
         # TODO: create a request/response interface to do type constraints in functions
         finished = event.wait(timeout=timeout_sec)
@@ -195,8 +195,8 @@ class HardwareInterfaceClient(Node):
             response.message = f"{action_desc} timed out after {timeout_sec}s"
             self.get_logger().error(response.message)
         else:
-            response.success = success
-            response.message = message
+            response.success = getattr(self, success_attr) if isinstance(success_attr, str) else success_attr()
+            response.message = getattr(self, message_attr) if isinstance(message_attr, str) else message_attr()
         return response
 
     # --- Service Handlers ---
@@ -210,8 +210,8 @@ class HardwareInterfaceClient(Node):
             self._await_action(
                 self.arm_movement_finished,
                 self.ACTION_TIMEOUT_SEC,
-                self.arm_action_successful,
-                self.arm_action_message,
+                'arm_action_successful',
+                'arm_action_message',
                 "Arm movement to Home",
                 response
             )
@@ -234,8 +234,8 @@ class HardwareInterfaceClient(Node):
             self._await_action(
                 self.arm_movement_finished,
                 self.ACTION_TIMEOUT_SEC,
-                self.arm_action_successful,
-                self.arm_action_message,
+                'arm_action_successful',
+                'arm_action_message',
                 f"Arm movement to ({x}, {y}, {z})",
                 response
             )
@@ -273,8 +273,8 @@ class HardwareInterfaceClient(Node):
                 self._await_action(
                     self.arm_movement_finished,
                     self.ACTION_TIMEOUT_SEC,
-                    self.arm_action_successful,
-                    self.arm_action_message,
+                    'arm_action_successful',
+                    'arm_action_message',
                     f"Relative movement to ({target_x}, {target_y}, {target_z})",
                     response
                 )
@@ -300,8 +300,8 @@ class HardwareInterfaceClient(Node):
             self._await_action(
                 self.gripper_movement_finished,
                 self.GRIPPER_TIMEOUT_SEC,
-                self.gripper_action_successful,
-                self.gripper_action_message,
+                'gripper_action_successful',
+                'gripper_action_message',
                 f"Gripper movement to {pos}",
                 response
             )
