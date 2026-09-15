@@ -4,9 +4,9 @@ from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallb
 import time
 import os
 import json
+import traceback
 from geometry_msgs.msg import Quaternion
 from ament_index_python.packages import get_package_share_directory
-#Services
 from kinova_interfaces.srv import GetRelativeMovement, GetObjectInfo, ExecuteRecipe, HomeArm, MoveArm, MoveGripper, RelativeMove, AttachObject, DetachObject, UpdateObjectPose
 from kinova_interfaces.msg import ExtendedStatus
 
@@ -40,29 +40,37 @@ class JsonParser:
 
 class JsonParserNode(Node):
     """ROS 2 Node that orchestrates tasks based on a JSON recipe."""
+
+    STEP_SETTLE_DELAY_SEC = 0.5
+    SERVER_WAIT_TIMEOUT_SEC = 5.0
+
+    DEFAULT_OPEN_POSITION = 0.0
+    DEFAULT_CLOSE_POSITION = 0.8
+    DEFAULT_PRE_OFFSET = 0.0
+    DEFAULT_PLACE_OFFSET = 0.1
+
     def __init__(self):
         super().__init__('json_parser_node')
         
-        # 1. Callback Groups
         # Reentrant group for general service clients to allow multiple responses
         self.cb_group = ReentrantCallbackGroup()
         # Mutually exclusive group for the execution sequence to ensure one recipe at a time
         self.exec_cb_group = MutuallyExclusiveCallbackGroup()
 
-        # 2. Hardware Interface Service Clients
+        # Hardware Interface Service Clients
         self.home_client = self.create_client(HomeArm, '/kinova_hardware_client/home_arm', callback_group=self.cb_group)
         self.move_arm_client = self.create_client(MoveArm, '/kinova_hardware_client/move_arm', callback_group=self.cb_group)
         self.move_gripper_client = self.create_client(MoveGripper, '/kinova_hardware_client/move_gripper', callback_group=self.cb_group)
         self.relative_move_client = self.create_client(RelativeMove, '/kinova_hardware_client/relative_move', callback_group=self.cb_group)
 
-        # 3. Environment Mapping Service Clients
+        # Environment Mapping Service Clients
         self.relative_client = self.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=self.cb_group)
         self.info_client = self.create_client(GetObjectInfo, '/get_object_info', callback_group=self.cb_group)
         self.attach_client = self.create_client(AttachObject, '/attach_object', callback_group=self.cb_group)
         self.detach_client = self.create_client(DetachObject, '/detach_object', callback_group=self.cb_group)
         self.update_pose_client = self.create_client(UpdateObjectPose, '/update_object_pose', callback_group=self.cb_group)
 
-        # 4. Initialize Parser & Action Dispatch Map
+        # Initialize Json Parser & arm action maps
         self.parser = JsonParser(self)
         self._action_handlers = {
             'home': self._handle_home,
@@ -73,17 +81,17 @@ class JsonParserNode(Node):
             'dropoff': self._handle_dropoff,
         }
 
-        # 5. Telemetry Setup
+        # Telemetry Setup
         self.status_pub = self.create_publisher(ExtendedStatus, '/status/node_report', 10)
         self.status_timer = self.create_timer(0.5, self.publish_status, callback_group=self.cb_group)
         self.current_state = ExtendedStatus.STATE_IDLE
         self.status_text = "JSON Parser Online & Ready"
         self.command_success = True
 
-        # 6. Service to execute recipes dynamically
+        # Service to execute recipes dynamically
         self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
 
-        # 7. Static recipe parameter & startup timer (only after everything is fully constructed)
+        # Configure recipe parameter and startup timer only once everything is constructed
         self.declare_parameter('recipe', 'none')
         recipe_file = self.get_parameter('recipe').get_parameter_value().string_value
         
@@ -389,9 +397,7 @@ class JsonParserNode(Node):
         self.get_logger().error(f"Failed to update pose for {obj_id}: {response.message}")
         return False, response.message or f"Failed to update pose for '{obj_id}'"
 
-    STEP_SETTLE_DELAY_SEC = 0.5
-
-    # Action Handlers (Dispatch Table)
+    # Arm Action Handlers
     
     def _handle_home(self, params: dict) -> tuple[bool, str]:
         """
@@ -471,14 +477,15 @@ class JsonParserNode(Node):
             close_position (float, optional, default=0.8): Gripper grasp position.
             pre_offset (float, optional, default=0.0): Z-axis hover offset before descending.
         """
+        # TODO(pulkit): add step 6 (optional) retreat back to hover position.
         target_name = params.get('target')
         if not target_name:
             return False, "Missing 'target' parameter for pickup"
 
         try:
-            open_pos = float(params.get('open_position', 0.0))
-            close_pos = float(params.get('close_position', 0.8))
-            pre_offset = float(params.get('pre_offset', 0.0))
+            open_pos = float(params.get('open_position', self.DEFAULT_OPEN_POSITION))
+            close_pos = float(params.get('close_position', self.DEFAULT_CLOSE_POSITION))
+            pre_offset = float(params.get('pre_offset', self.DEFAULT_PRE_OFFSET))
         except (ValueError, TypeError) as e:
             return False, f"Invalid numeric parameter in pickup: {e}"
 
@@ -486,28 +493,28 @@ class JsonParserNode(Node):
         if not coords:
             return False, f"Could not resolve coordinates for '{target_name}'"
 
-        # 1. Open gripper
+        # Open gripper
         ok, msg = self.call_move_gripper_service(open_pos)
         if not ok:
             return False, f"Failed to open gripper for pickup: {msg}"
 
-        # 2. Optional pre-approach hover above target
+        # Optional pre-approach hover above target
         if pre_offset > 0.0:
             ok, msg = self.call_move_service(coords['x'], coords['y'], coords['z'] + pre_offset)
             if not ok:
                 return False, f"Failed pre-approach move for '{target_name}': {msg}"
 
-        # 3. Descend to object position
+        # Descend to object position
         ok, msg = self.call_move_service(coords['x'], coords['y'], coords['z'])
         if not ok:
             return False, f"Failed to move to '{target_name}' position: {msg}"
 
-        # 4. Close gripper
+        # Close gripper
         ok, msg = self.call_move_gripper_service(close_pos)
         if not ok:
             return False, f"Failed to close gripper on '{target_name}': {msg}"
 
-        # 5. Attach object in planning scene
+        # Attach object in planning scene
         ok, msg = self.attach_object(target_name)
         if not ok:
             return False, f"Failed to attach '{target_name}' in planning scene: {msg}"
@@ -527,14 +534,15 @@ class JsonParserNode(Node):
             open_position (float, optional, default=0.0): Gripper open position to release object.
             place_offset (float, optional, default=0.1): Z-axis hover offset above destination.
         """
+        # TODO(pulkit): make the same as _handle_pickup but in the opposite direction
         target_name = params.get('target')
         destination_name = params.get('destination')
         if not destination_name:
             return False, "dropoff action requires 'destination' parameter"
 
         try:
-            open_pos = float(params.get('open_position', 0.0))
-            place_offset = float(params.get('place_offset', 0.1))
+            open_pos = float(params.get('open_position', self.DEFAULT_OPEN_POSITION))
+            place_offset = float(params.get('place_offset', self.DEFAULT_PLACE_OFFSET))
         except (ValueError, TypeError) as e:
             return False, f"Invalid numeric parameter in dropoff: {e}"
 
@@ -546,17 +554,17 @@ class JsonParserNode(Node):
         py = dest_coords['y']
         pz = dest_coords['z'] + place_offset
 
-        # 1. Move to offset position above destination
+        # Move to offset position above destination
         ok, msg = self.call_move_service(px, py, pz)
         if not ok:
             return False, f"Failed to move above '{destination_name}': {msg}"
 
-        # 2. Open gripper to release
+        # Open gripper to release
         ok, msg = self.call_move_gripper_service(open_pos)
         if not ok:
             return False, f"Failed to open gripper at '{destination_name}': {msg}"
 
-        # 3. Update pose and detach object if target was specified
+        # Update pose and detach object if target was specified
         if target_name:
             obj_info = self.get_object_info(target_name)
             orient = obj_info['pose']['orientation'] if obj_info else None
@@ -583,7 +591,8 @@ class JsonParserNode(Node):
         try:
             return self._run_steps(steps)
         except Exception as e:
-            self.get_logger().error(f"Unhandled exception during recipe execution: {e}", exc_info=True)
+            tb = traceback.format_exc()
+            self.get_logger().error(f"Unhandled exception during recipe execution: {e}\n{tb}")
             self.status_text = f"Recipe aborted due to exception: {e}"
             self.command_success = False
             return False

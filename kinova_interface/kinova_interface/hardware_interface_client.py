@@ -5,35 +5,35 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 import threading
 
-# Arm Actions and Messages
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import Constraints, PositionConstraint, JointConstraint
 from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose
-
-# Gripper Actions and Messages
 from control_msgs.action import GripperCommand
-
-# Services and Messages
 from example_interfaces.msg import Bool
+from controller_manager_msgs.srv import ListControllers
+from tf2_ros import Buffer, TransformListener
 
-# Custom telemetry message & services
 from kinova_interfaces.msg import ExtendedStatus
 from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove
 
-# Controller Manager Messages
-from controller_manager_msgs.srv import ListControllers
-
-# TF for Relative Movements
-from tf2_ros import Buffer, TransformListener
 
 class HardwareInterfaceClient(Node):
     ACTION_TIMEOUT_SEC = 30.0
     GRIPPER_TIMEOUT_SEC = 10.0
+    SERVER_WAIT_TIMEOUT_SEC = 5.0
+
+    BASE_FRAME = 'base_link'
+    TOOL_FRAME = 'tool_frame'
+    PLANNING_GROUP = 'arm'
+    NUM_PLANNING_ATTEMPTS = 10
+    ALLOWED_PLANNING_TIME_SEC = 5.0
+    SPHERE_TOLERANCE_RADIUS = 0.01
 
     HOME_JOINT_NAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
     HOME_JOINT_POSITIONS = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
     HOME_JOINT_TOLERANCE = 0.01
+    # TODO: make these ^^ configurable
 
     def __init__(self):
         super().__init__('kinova_hardware_client')
@@ -186,6 +186,19 @@ class HardwareInterfaceClient(Node):
         else:
             self.get_logger().info("No hardware fault detected. Failure may be algorithmic (planning timeout).")
 
+    def _await_action(self, event: threading.Event, timeout_sec: float, success: bool, message: str, action_desc: str, response):
+        """Wait for an action event and populate the service response with status and message."""
+        # TODO: create a request/response interface to do type constraints in functions
+        finished = event.wait(timeout=timeout_sec)
+        if not finished:
+            response.success = False
+            response.message = f"{action_desc} timed out after {timeout_sec}s"
+            self.get_logger().error(response.message)
+        else:
+            response.success = success
+            response.message = message
+        return response
+
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
         self.get_logger().info("Service Call: Home Arm")
@@ -194,14 +207,14 @@ class HardwareInterfaceClient(Node):
         self.publish_status()
 
         if self.send_home_goal():
-            finished = self.arm_movement_finished.wait(timeout=self.ACTION_TIMEOUT_SEC)
-            if not finished:
-                response.success = False
-                response.message = f"Homing movement timed out after {self.ACTION_TIMEOUT_SEC}s"
-                self.get_logger().error(response.message)
-            else:
-                response.success = self.arm_action_successful
-                response.message = self.arm_action_message
+            self._await_action(
+                self.arm_movement_finished,
+                self.ACTION_TIMEOUT_SEC,
+                self.arm_action_successful,
+                self.arm_action_message,
+                "Arm movement to Home",
+                response
+            )
         else:
             response.success = False
             response.message = "Failed to initiate home movement (action server unavailable)"
@@ -218,14 +231,14 @@ class HardwareInterfaceClient(Node):
         self.publish_status()
 
         if self.send_goal(x, y, z):
-            finished = self.arm_movement_finished.wait(timeout=self.ACTION_TIMEOUT_SEC)
-            if not finished:
-                response.success = False
-                response.message = f"Arm movement to ({x}, {y}, {z}) timed out after {self.ACTION_TIMEOUT_SEC}s"
-                self.get_logger().error(response.message)
-            else:
-                response.success = self.arm_action_successful
-                response.message = self.arm_action_message
+            self._await_action(
+                self.arm_movement_finished,
+                self.ACTION_TIMEOUT_SEC,
+                self.arm_action_successful,
+                self.arm_action_message,
+                f"Arm movement to ({x}, {y}, {z})",
+                response
+            )
         else:
             response.success = False
             response.message = "Failed to initiate arm movement (action server unavailable)"
@@ -244,7 +257,7 @@ class HardwareInterfaceClient(Node):
         try:
             # Look up current pose of the tool frame
             now = rclpy.time.Time()
-            trans = self.tf_buffer.lookup_transform('base_link', 'tool_frame', now, timeout=rclpy.duration.Duration(seconds=1.0))
+            trans = self.tf_buffer.lookup_transform(self.BASE_FRAME, self.TOOL_FRAME, now, timeout=rclpy.duration.Duration(seconds=1.0))
             
             curr_x = trans.transform.translation.x
             curr_y = trans.transform.translation.y
@@ -257,14 +270,14 @@ class HardwareInterfaceClient(Node):
             self.get_logger().info(f"Calculated target: {target_x:.3f}, {target_y:.3f}, {target_z:.3f}")
             
             if self.send_goal(target_x, target_y, target_z):
-                finished = self.arm_movement_finished.wait(timeout=self.ACTION_TIMEOUT_SEC)
-                if not finished:
-                    response.success = False
-                    response.message = f"Relative movement timed out after {self.ACTION_TIMEOUT_SEC}s"
-                    self.get_logger().error(response.message)
-                else:
-                    response.success = self.arm_action_successful
-                    response.message = self.arm_action_message
+                self._await_action(
+                    self.arm_movement_finished,
+                    self.ACTION_TIMEOUT_SEC,
+                    self.arm_action_successful,
+                    self.arm_action_message,
+                    f"Relative movement to ({target_x}, {target_y}, {target_z})",
+                    response
+                )
             else:
                 response.success = False
                 response.message = "Failed to initiate relative movement (action server unavailable)"
@@ -284,14 +297,14 @@ class HardwareInterfaceClient(Node):
         self.publish_status()
 
         if self.move_gripper(pos):
-            finished = self.gripper_movement_finished.wait(timeout=self.GRIPPER_TIMEOUT_SEC)
-            if not finished:
-                response.success = False
-                response.message = f"Gripper movement to {pos} timed out after {self.GRIPPER_TIMEOUT_SEC}s"
-                self.get_logger().error(response.message)
-            else:
-                response.success = self.gripper_action_successful
-                response.message = self.gripper_action_message
+            self._await_action(
+                self.gripper_movement_finished,
+                self.GRIPPER_TIMEOUT_SEC,
+                self.gripper_action_successful,
+                self.gripper_action_message,
+                f"Gripper movement to {pos}",
+                response
+            )
         else:
             response.success = False
             response.message = "Failed to initiate gripper movement (action server unavailable)"
@@ -300,22 +313,22 @@ class HardwareInterfaceClient(Node):
 
     # --- Action Client Methods ---
     def send_goal(self, x, y, z):
-        if not self.arm_client.wait_for_server(timeout_sec=5.0):
+        if not self.arm_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error('Arm server not available')
             return False
 
         goal_msg = MoveGroup.Goal()
-        goal_msg.request.group_name = 'arm'
-        goal_msg.request.num_planning_attempts = 10
-        goal_msg.request.allowed_planning_time = 5.0
+        goal_msg.request.group_name = self.PLANNING_GROUP
+        goal_msg.request.num_planning_attempts = self.NUM_PLANNING_ATTEMPTS
+        goal_msg.request.allowed_planning_time = self.ALLOWED_PLANNING_TIME_SEC
 
         pos_constraint = PositionConstraint()
-        pos_constraint.header.frame_id = "base_link" 
-        pos_constraint.link_name = "tool_frame"      
+        pos_constraint.header.frame_id = self.BASE_FRAME
+        pos_constraint.link_name = self.TOOL_FRAME
         
         sphere = SolidPrimitive()
         sphere.type = SolidPrimitive.SPHERE
-        sphere.dimensions = [0.01] 
+        sphere.dimensions = [self.SPHERE_TOLERANCE_RADIUS]
 
         target_pose = Pose()
         target_pose.position.x = float(x)
@@ -339,14 +352,14 @@ class HardwareInterfaceClient(Node):
         return True
 
     def send_home_goal(self):
-        if not self.arm_client.wait_for_server(timeout_sec=5.0):
+        if not self.arm_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error('Arm server not available (Home Goal)')
             return False
 
         goal_msg = MoveGroup.Goal()
-        goal_msg.request.group_name = 'arm'
-        goal_msg.request.num_planning_attempts = 10
-        goal_msg.request.allowed_planning_time = 5.0
+        goal_msg.request.group_name = self.PLANNING_GROUP
+        goal_msg.request.num_planning_attempts = self.NUM_PLANNING_ATTEMPTS
+        goal_msg.request.allowed_planning_time = self.ALLOWED_PLANNING_TIME_SEC
 
         constraints = []
         for name, pos in zip(self.HOME_JOINT_NAMES, self.HOME_JOINT_POSITIONS):
@@ -371,7 +384,7 @@ class HardwareInterfaceClient(Node):
         return True
 
     def move_gripper(self, position):
-        if not self.gripper_client.wait_for_server(timeout_sec=5.0):
+        if not self.gripper_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error('Gripper server not available')
             return False
         
