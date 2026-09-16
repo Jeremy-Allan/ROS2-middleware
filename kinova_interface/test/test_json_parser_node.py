@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from kinova_interface.json_parser_node import JsonParser, JsonParserNode
 
 from kinova_interfaces.srv import (
-    GetObjectCoordinates,
+    GetObjectInfo,
     GetRelativeMovement,
     HomeArm,
     MoveArm,
@@ -97,8 +97,11 @@ def test_node_initialises(node):
     assert node.move_arm_client is not None
     assert node.move_gripper_client is not None
     assert node.relative_move_client is not None
-    assert node.coord_client is not None
+    assert node.info_client is not None
     assert node.relative_client is not None
+    assert node.attach_client is not None
+    assert node.detach_client is not None
+    assert node.update_pose_client is not None
     assert node.status_pub is not None
     assert node.execute_srv is not None
 
@@ -144,21 +147,21 @@ def test_publish_status(node):
 def test_get_static_object_coords(node):
     """Test getting object coordinates."""
 
-    node.coord_client.wait_for_service = MagicMock(
+    node.info_client.wait_for_service = MagicMock(
         return_value=True
     )
 
-    response = GetObjectCoordinates.Response()
+    response = GetObjectInfo.Response()
     response.success = True
-    response.x = 1.0
-    response.y = 2.0
-    response.z = 3.0
+    response.pose.position.x = 1.0
+    response.pose.position.y = 2.0
+    response.pose.position.z = 3.0
 
     future = MagicMock()
     future.done.return_value = True
     future.result.return_value = response
 
-    node.coord_client.call_async = MagicMock(
+    node.info_client.call_async = MagicMock(
         return_value=future
     )
 
@@ -170,14 +173,14 @@ def test_get_static_object_coords(node):
         "z": 3.0
     }
 
-    request = node.coord_client.call_async.call_args[0][0]
+    request = node.info_client.call_async.call_args[0][0]
     assert request.object_id == "cube"
 
 
 def test_get_static_object_coords_unavailable(node):
     """Test coordinate service unavailable."""
 
-    node.coord_client.wait_for_service = MagicMock(
+    node.info_client.wait_for_service = MagicMock(
         return_value=False
     )
 
@@ -235,10 +238,10 @@ def test_call_home_service(node):
         return_value=future
     )
 
-    result = node.call_home_service()
+    success, message = node.call_home_service()
 
-    assert result["success"] is True
-    assert result["message"] == "Homed"
+    assert success is True
+    assert message == "Homed"
 
 
 # call_move_service()
@@ -261,9 +264,10 @@ def test_call_move_service(node):
         return_value=future
     )
 
-    result = node.call_move_service(1.0, 2.0, 3.0)
+    success, message = node.call_move_service(1.0, 2.0, 3.0)
 
-    assert result["success"] is True
+    assert success is True
+    assert message == "Moved"
 
     request = node.move_arm_client.call_async.call_args[0][0]
 
@@ -292,13 +296,14 @@ def test_call_relative_move_service(node):
         return_value=future
     )
 
-    result = node.call_relative_move_service(
+    success, message = node.call_relative_move_service(
         0.1,
         0.2,
         0.3
     )
 
-    assert result["success"] is True
+    assert success is True
+    assert message == "Moved"
 
     request = node.relative_move_client.call_async.call_args[0][0]
 
@@ -327,9 +332,10 @@ def test_call_move_gripper_service(node):
         return_value=future
     )
 
-    result = node.call_move_gripper_service(0.5)
+    success, message = node.call_move_gripper_service(0.5)
 
-    assert result["success"] is True
+    assert success is True
+    assert message == "Gripper moved"
 
     request = node.move_gripper_client.call_async.call_args[0][0]
 
@@ -366,7 +372,7 @@ def test_execute_recipe(node):
     }
 
     node.call_home_service = MagicMock(
-        return_value={"success": True}
+        return_value=(True, "Success")
     )
 
     node.get_static_object_coords = MagicMock(
@@ -378,7 +384,7 @@ def test_execute_recipe(node):
     )
 
     node.call_move_service = MagicMock(
-        return_value={"success": True}
+        return_value=(True, "Success")
     )
 
     node.get_relative_movement_vector = MagicMock(
@@ -390,11 +396,11 @@ def test_execute_recipe(node):
     )
 
     node.call_relative_move_service = MagicMock(
-        return_value={"success": True}
+        return_value=(True, "Success")
     )
 
     node.call_move_gripper_service = MagicMock(
-        return_value={"success": True}
+        return_value=(True, "Success")
     )
 
     node.publish_status = MagicMock()
@@ -435,6 +441,7 @@ def test_execute_recipe_callback(node):
         ]
     })
 
+    node.status_text = "Recipe executed successfully."
     node.execute_recipe = MagicMock(
         return_value=True
     )

@@ -35,12 +35,17 @@ def node(ros_context, tmp_path):
     ), \
     patch.object(
         EnvironmentMappingNode,
-        "load_coordinate_dictionary",
+        "load_object_dictionary",
         return_value={
             "cube": {
-                "x": 1.0,
-                "y": 2.0,
-                "z": 3.0
+                "pose": {
+                    "position": {"x": 1.0, "y": 2.0, "z": 3.0},
+                    "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+                },
+                "shape": {
+                    "type": "BOX",
+                    "dimensions": [1.0, 2.0, 0.5]
+                }
             }
         }
     ), \
@@ -57,8 +62,8 @@ def node(ros_context, tmp_path):
     ), \
     patch.object(
         EnvironmentMappingNode,
-        "load_obstacles",
-        return_value=[]
+        "load_obstacles_dictionary",
+        return_value={}
     ), \
     patch.object(
         EnvironmentMappingNode,
@@ -111,36 +116,43 @@ def test_publish_status(node):
     assert msg.last_command_valid is True
 
 
-# load_coordinate_dictionary()
-def test_load_coordinate_dictionary(node, tmp_path):
+# load_object_dictionary()
+def test_load_object_dictionary(node, tmp_path):
 
     data = {
         "cube": {
-            "x": 1.0,
-            "y": 2.0,
-            "z": 3.0
+            "pose": {
+                "position": {"x": 1.0, "y": 2.0, "z": 3.0},
+                "orientation": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
+            },
+            "shape": {
+                "type": "BOX",
+                "dimensions": [0.05, 0.05, 0.05]
+            }
         }
     }
 
-    file_path = tmp_path / "coordinate_dictionary.json"
+    file_path = tmp_path / "object_dictionary.json"
     file_path.write_text(json.dumps(data))
 
     node.config_dir = str(tmp_path)
 
-    result = node.load_coordinate_dictionary()
+    result = node.load_object_dictionary()
 
-    assert result == data
+    assert "cube" in result
+    assert result["cube"]["pose"]["position"] == {"x": 1.0, "y": 2.0, "z": 3.0}
+    assert result["cube"]["shape"]["type"] == "BOX"
 
 
-def test_load_coordinate_dictionary_invalid_json(node, tmp_path):
+def test_load_object_dictionary_invalid_json(node, tmp_path):
 
-    file_path = tmp_path / "coordinate_dictionary.json"
+    file_path = tmp_path / "object_dictionary.json"
     file_path.write_text("invalid json")
 
     node.config_dir = str(tmp_path)
 
     with pytest.raises(SystemExit):
-        node.load_coordinate_dictionary()
+        node.load_object_dictionary()
 
 
 # load_relative_movements()
@@ -175,22 +187,21 @@ def test_load_relative_movements_invalid_json(node, tmp_path):
         node.load_relative_movements()
 
 
-# load_obstacles()
-def test_load_obstacles(node, tmp_path):
+# load_obstacles_dictionary()
+def test_load_obstacles_dictionary(node, tmp_path):
 
-    obstacles = [
-        {
-            "id": "table",
-            "shape": 1,
-            "dimensions": [1.0, 2.0, 0.5],
-            "position": {
-                "x": 1.0,
-                "y": 2.0,
-                "z": 0.25
+    obstacles = {
+        "table": {
+            "pose": {
+                "position": {"x": 1.0, "y": 2.0, "z": 0.25},
+                "orientation": {"roll": 0.0, "pitch": 0.0, "yaw": 0.0}
             },
-            "description": "Test table"
+            "shape": {
+                "type": "BOX",
+                "dimensions": [1.0, 2.0, 0.5]
+            }
         }
-    ]
+    }
 
     with patch(
         "kinova_interface.environment_mapping_node.get_package_share_directory",
@@ -203,12 +214,13 @@ def test_load_obstacles(node, tmp_path):
         file_path = data_dir / "obstacles.json"
         file_path.write_text(json.dumps(obstacles))
 
-        result = node.load_obstacles()
+        result = node.load_obstacles_dictionary()
 
-    assert result == obstacles
+    assert "table" in result
+    assert result["table"]["pose"]["position"] == {"x": 1.0, "y": 2.0, "z": 0.25}
 
 
-def test_load_obstacles_invalid_json(node, tmp_path):
+def test_load_obstacles_dictionary_invalid_json(node, tmp_path):
 
     with patch(
         "kinova_interface.environment_mapping_node.get_package_share_directory",
@@ -222,7 +234,7 @@ def test_load_obstacles_invalid_json(node, tmp_path):
         file_path.write_text("invalid json")
 
         with pytest.raises(SystemExit):
-            node.load_obstacles()
+            node.load_obstacles_dictionary()
 
 # get_coordinates_callback()
 def test_get_coordinates_callback_found(node):
@@ -333,18 +345,26 @@ def test_get_robot_parameters_callback(node):
 def test_build_collision_object(node):
 
     obstacle = {
-        "id": "table",
-        "shape": 1,
-        "dimensions": [1.0, 2.0, 0.5],
-        "position": {
-            "x": 1.0,
-            "y": 2.0,
-            "z": 0.25
+        "pose": {
+            "position": {
+                "x": 1.0,
+                "y": 2.0,
+                "z": 0.25
+            },
+            "orientation": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0,
+                "w": 1.0
+            }
         },
-        "description": "Test table"
+        "shape": {
+            "type": "BOX",
+            "dimensions": [1.0, 2.0, 0.5]
+        }
     }
 
-    result = node.build_collision_object(obstacle)
+    result = node.build_collision_object("table", obstacle)
 
     assert isinstance(result, CollisionObject)
 
@@ -388,18 +408,27 @@ def test_publish_planning_scene_service_unavailable(node):
 def test_publish_planning_scene_success(node):
 
     obstacle = {
-        "id": "table",
-        "shape": 1,
-        "dimensions": [1.0, 2.0, 0.5],
-        "position": {
-            "x": 1.0,
-            "y": 2.0,
-            "z": 0.25
+        "pose": {
+            "position": {
+                "x": 1.0,
+                "y": 2.0,
+                "z": 0.25
+            },
+            "orientation": {
+                "x": 0.0,
+                "y": 0.0,
+                "z": 0.0,
+                "w": 1.0
+            }
         },
-        "description": "Test table"
+        "shape": {
+            "type": "BOX",
+            "dimensions": [1.0, 2.0, 0.5]
+        }
     }
 
-    node.obstacles = [obstacle]
+    node.obstacles = {"table": obstacle}
+    node.static_objects = {}
 
     node.scene_client.wait_for_service = MagicMock(
         return_value=True

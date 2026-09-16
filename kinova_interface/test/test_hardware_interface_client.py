@@ -252,8 +252,10 @@ def test_handle_home_arm_success(node):
     """Test successful home arm service."""
 
     node.send_home_goal = MagicMock(return_value=True)
-    node.movement_finished = MagicMock()
-    node.last_action_successful = True
+    node.arm_movement_finished = MagicMock()
+    node.arm_movement_finished.wait.return_value = True
+    node.arm_action_successful = True
+    node.arm_action_message = "Arm moved home successfully"
 
     request = HomeArm.Request()
     response = HomeArm.Response()
@@ -276,15 +278,17 @@ def test_handle_home_arm_failure_to_start(node):
     result = node.handle_home_arm(request, response)
 
     assert result.success is False
-    assert result.message == "Failed to initiate home movement"
+    assert result.message == "Failed to initiate home movement (action server unavailable)"
 
 # handle_move_arm()
 def test_handle_move_arm_success(node):
     """Test successful arm movement service."""
 
     node.send_goal = MagicMock(return_value=True)
-    node.movement_finished = MagicMock()
-    node.last_action_successful = True
+    node.arm_movement_finished = MagicMock()
+    node.arm_movement_finished.wait.return_value = True
+    node.arm_action_successful = True
+    node.arm_action_message = "Arm moved to 0.5, 0.2, 0.3"
 
     request = MoveArm.Request()
     request.x = 0.5
@@ -320,7 +324,7 @@ def test_handle_move_arm_failure_to_start(node):
     result = node.handle_move_arm(request, response)
 
     assert result.success is False
-    assert result.message == "Failed to initiate arm movement"
+    assert result.message == "Failed to initiate arm movement (action server unavailable)"
 
 # handle_relative_move()
 def test_handle_relative_move_success(node):
@@ -336,7 +340,10 @@ def test_handle_relative_move_success(node):
     )
 
     node.send_goal = MagicMock(return_value=True)
-    node.last_action_successful = True
+    node.arm_movement_finished = MagicMock()
+    node.arm_movement_finished.wait.return_value = True
+    node.arm_action_successful = True
+    node.arm_action_message = "Relative movement complete"
 
     request = RelativeMove.Request()
     request.vx = 0.5
@@ -374,15 +381,17 @@ def test_handle_relative_move_tf_failure(node):
     result = node.handle_relative_move(request, response)
 
     assert result.success is False
-    assert result.message == "TF unavailable"
+    assert "Relative move TF lookup failed" in result.message
 
 # handle_move_gripper()
 def test_handle_move_gripper_success(node):
     """Test successful gripper movement."""
 
     node.move_gripper = MagicMock(return_value=True)
-    node.movement_finished = MagicMock()
-    node.last_action_successful = True
+    node.gripper_movement_finished = MagicMock()
+    node.gripper_movement_finished.wait.return_value = True
+    node.gripper_action_successful = True
+    node.gripper_action_message = "Gripper moved to 1.0"
 
     request = MoveGripper.Request()
     request.position = 1.0
@@ -410,7 +419,7 @@ def test_handle_move_gripper_failure_to_start(node):
     result = node.handle_move_gripper(request, response)
 
     assert result.success is False
-    assert result.message == "Failed to initiate gripper movement"
+    assert result.message == "Failed to initiate gripper movement (action server unavailable)"
 
 
 # send_goal()
@@ -541,8 +550,8 @@ def test_goal_response_callback_rejected(node):
 
     node.goal_response_callback(future)
 
-    assert node.last_action_successful is False
-    assert node.movement_finished.is_set()
+    assert node.arm_action_successful is False
+    assert node.arm_movement_finished.is_set()
 
 
 def test_goal_response_callback_accepted(node):
@@ -587,8 +596,8 @@ def test_result_callback_success(node):
 
     node.result_callback(future)
 
-    assert node.last_action_successful is True
-    assert node.movement_finished.is_set()
+    assert node.arm_action_successful is True
+    assert node.arm_movement_finished.is_set()
 
 
 def test_result_callback_failure(node):
@@ -605,8 +614,8 @@ def test_result_callback_failure(node):
 
     node.result_callback(future)
 
-    assert node.last_action_successful is False
-    assert node.movement_finished.is_set()
+    assert node.arm_action_successful is False
+    assert node.arm_movement_finished.is_set()
 
     node.handle_moveit_failure.assert_called_once()
 
@@ -622,8 +631,8 @@ def test_gripper_response_callback_rejected(node):
 
     node.gripper_response_callback(future)
 
-    assert node.last_action_successful is False
-    assert node.movement_finished.is_set()
+    assert node.gripper_action_successful is False
+    assert node.gripper_movement_finished.is_set()
 
 
 def test_gripper_response_callback_accepted(node):
@@ -659,9 +668,64 @@ def test_gripper_feedback_callback(node):
 def test_gripper_result_callback(node):
     """Test successful gripper result."""
 
+    result = MagicMock()
+    result.position = 1.0
+    result.effort = 0.0
+    result.stalled = False
+    result.reached_goal = True
+
     future = MagicMock()
+    future.result.return_value.result = result
 
     node.gripper_result_callback(future)
 
-    assert node.last_action_successful is True
-    assert node.movement_finished.is_set()
+    assert node.gripper_action_successful is True
+    assert node.gripper_movement_finished.is_set()
+
+
+# _await_action()
+def test_await_action_evaluates_attributes_after_wait(node):
+    """Test that _await_action reads attributes after the wait completes, not before."""
+    node.arm_action_successful = False
+    node.arm_action_message = "Initial stale message"
+
+    def simulate_action_completion(timeout):
+        # Simulate action result callback updating the node attributes while wait is blocked
+        node.arm_action_successful = True
+        node.arm_action_message = "Fresh updated message"
+        return True
+
+    mock_event = MagicMock()
+    mock_event.wait.side_effect = simulate_action_completion
+
+    response = HomeArm.Response()
+    result = node._await_action(
+        mock_event,
+        10.0,
+        'arm_action_successful',
+        'arm_action_message',
+        "Test action",
+        response
+    )
+
+    assert result.success is True
+    assert result.message == "Fresh updated message"
+
+
+def test_await_action_timeout(node):
+    """Test that _await_action properly handles timeout."""
+    mock_event = MagicMock()
+    mock_event.wait.return_value = False
+
+    response = HomeArm.Response()
+    result = node._await_action(
+        mock_event,
+        5.0,
+        'arm_action_successful',
+        'arm_action_message',
+        "Test action",
+        response
+    )
+
+    assert result.success is False
+    assert "timed out after 5.0s" in result.message
