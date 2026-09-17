@@ -138,3 +138,7 @@ Implemented in `arm_actions.py`/`hardware_interface_client.py`:
   object, hovering above the destination. Placing it down and releasing
   is left to a separate `dropoff` step in the recipe, reusing its
   existing height/release logic rather than duplicating it here.
+
+**Status**: confirmed working end-to-end on fake hardware -
+`recipe_pour.json` (`home` -> `pickup(grasp_style=side)` ->
+`pour(destination=delivery_tray)`) completes successfully.

@@ -4,7 +4,9 @@ import time
 import rclpy
 from geometry_msgs.msg import Quaternion, Pose, PoseStamped
 from shape_msgs.msg import SolidPrimitive
-from moveit_msgs.srv import GetPositionIK
+from sensor_msgs.msg import JointState
+from moveit_msgs.srv import GetPositionIK, ApplyPlanningScene, GetPositionFK, GetStateValidity, GetPlanningScene
+from moveit_msgs.msg import RobotState, PlanningScene, AllowedCollisionMatrix, AllowedCollisionEntry, PlanningSceneComponents
 
 from kinova_interfaces.srv import (
     GetObjectCoordinates,
@@ -61,6 +63,19 @@ class ArmActions:
         # verify_grasp_pose) - not exposed to MoveIt's own move_group action,
         # a plain service so it can be checked cheaply before ever moving.
         self.compute_ik_client = node.create_client(GetPositionIK, '/compute_ik', callback_group=cb_group)
+
+        # For temporarily permitting deliberate gripper/object contact
+        # during 'push' (see set_collision_allowed) - a normal
+        # collision-aware plan would otherwise reject, or silently route
+        # around, the sustained contact a push actually requires.
+        self.apply_planning_scene_client = node.create_client(ApplyPlanningScene, '/apply_planning_scene', callback_group=cb_group)
+        self.get_planning_scene_client = node.create_client(GetPlanningScene, '/get_planning_scene', callback_group=cb_group)
+
+        # For solving a single-plane reach (fixed base + wrist, only
+        # shoulder/elbow move) via forward kinematics rather than a
+        # general 6-DOF IK search - see solve_planar_reach.
+        self.compute_fk_client = node.create_client(GetPositionFK, '/compute_fk', callback_group=cb_group)
+        self.check_state_validity_client = node.create_client(GetStateValidity, '/check_state_validity', callback_group=cb_group)
 
         # Dictionary of arm actions, keyed by recipe step 'action' name
         self.handlers = {
@@ -273,17 +288,29 @@ class ArmActions:
 
         return candidates
 
-    def verify_grasp_pose(self, x, y, z, roll, pitch, yaw):
+    def find_ik_solution(self, x, y, z, roll, pitch, yaw, seed_joint_positions=None):
         """Check whether a Cartesian pose is actually reachable and
         collision-free via IK (with collision-avoidance on), rather than
-        trusting a computed/geometric candidate blindly. This is exactly
+        trusting a computed/geometric candidate blindly - this is exactly
         what caught a plausible-looking but actually-in-collision pose
-        during testing (see docs/pour-motion-reference.md) - a manually
+        during testing (see docs/pour-motion-reference.md), a manually
         demonstrated pose that turned out to have never really been
-        validated at all."""
+        validated at all. Returns the solved [joint_1..joint_6] positions,
+        or None if unreachable/in collision.
+
+        'seed_joint_positions', if given, is used as the IK search's
+        starting point instead of the current robot state - KDL (the
+        default IK plugin here) is a local numerical solver, so seeding it
+        near an already-known-good configuration (e.g. 'push's contact
+        pose, when solving for the pose it extends to) reliably converges
+        to a nearby solution differing only in the joints that actually
+        need to move, rather than jumping to an unrelated configuration
+        branch. Seeding from a very different configuration (e.g. home)
+        is what caused a real, physically-reachable pose to report
+        NO_IK_SOLUTION during testing - see docs/pour-motion-reference.md."""
         if not self.compute_ik_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error("Compute IK service not available")
-            return False
+            return None
 
         req = GetPositionIK.Request()
         req.ik_request.group_name = 'arm'
@@ -299,11 +326,221 @@ class ArmActions:
         pose_stamped.pose = pose
         req.ik_request.pose_stamped = pose_stamped
 
+        if seed_joint_positions is not None:
+            seed_state = RobotState()
+            seed_js = JointState()
+            seed_js.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+            seed_js.position = [float(p) for p in seed_joint_positions]
+            seed_state.joint_state = seed_js
+            req.ik_request.robot_state = seed_state
+
         future = self.compute_ik_client.call_async(req)
         response = self.wait_for_future(future, '/compute_ik')
-        if response is None:
+        if response is None or response.error_code.val != response.error_code.SUCCESS:
+            return None
+
+        names = list(response.solution.joint_state.name)
+        positions = list(response.solution.joint_state.position)
+        return [positions[names.index(f'joint_{i}')] for i in range(1, 7)]
+
+    def verify_grasp_pose(self, x, y, z, roll, pitch, yaw):
+        """True/False convenience wrapper around find_ik_solution, for
+        callers that only need to know whether a candidate is valid, not
+        its actual joint solution (e.g. pickup's grasp_style='side')."""
+        return self.find_ik_solution(x, y, z, roll, pitch, yaw) is not None
+
+    def set_collision_allowed(self, object_id, allowed):
+        """Temporarily allow (or restore disallowing) collision between
+        'object_id' and every robot link, via an explicit update to the
+        planning scene's allowed collision matrix (ACM). Needed because
+        'push' (unlike every other action) deliberately keeps the gripper
+        in sustained contact with the object - a normal collision-aware
+        plan would otherwise reject that contact outright, or worse,
+        silently find a path that avoids the object entirely (planning
+        around it) rather than actually pushing it.
+
+        This must set an *explicit* entry for object_id against every
+        already-known link name, not just the ACM's 'default_entry'
+        fallback - verified directly: MoveIt auto-populates explicit
+        disallow entries for a collision object against nearby links as
+        soon as it's added to the scene, and those explicit entries take
+        precedence over a blanket default, so setting only the default
+        (an earlier version of this method) silently had no effect and
+        let a real push fail with INVALID_MOTION_PLAN (see
+        docs/push-motion-reference.md).
+
+        Scoped to just this one object, not the whole matrix, so the
+        table and every other object are still checked normally in the
+        meantime. Returns True/False for whether the scene update itself
+        succeeded - callers are responsible for reverting (allowed=False)
+        once done, in a 'finally' block, so a mid-push failure doesn't
+        leave it permanently collision-exempt."""
+        if not self.get_planning_scene_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Get Planning Scene service not available")
             return False
-        return response.error_code.val == response.error_code.SUCCESS
+        req = GetPlanningScene.Request()
+        req.components.components = PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
+        future = self.get_planning_scene_client.call_async(req)
+        response = self.wait_for_future(future, '/get_planning_scene')
+        if response is None:
+            self.get_logger().error("Failed to fetch current planning scene ACM")
+            return False
+        current_acm = response.scene.allowed_collision_matrix
+
+        names = list(current_acm.entry_names)
+        rows = [list(entry.enabled) for entry in current_acm.entry_values]
+        if object_id in names:
+            idx = names.index(object_id)
+            for i in range(len(names)):
+                rows[i][idx] = bool(allowed)
+                rows[idx][i] = bool(allowed)
+        else:
+            names.append(object_id)
+            for row in rows:
+                row.append(bool(allowed))
+            rows.append([bool(allowed)] * len(names))
+
+        new_acm = AllowedCollisionMatrix()
+        new_acm.entry_names = names
+        new_entry_values = []
+        for row in rows:
+            entry = AllowedCollisionEntry()
+            entry.enabled = row
+            new_entry_values.append(entry)
+        new_acm.entry_values = new_entry_values
+
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.allowed_collision_matrix = new_acm
+
+        if not self.apply_planning_scene_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Apply Planning Scene service not available")
+            return False
+        apply_req = ApplyPlanningScene.Request()
+        apply_req.scene = scene
+        apply_future = self.apply_planning_scene_client.call_async(apply_req)
+        apply_response = self.wait_for_future(apply_future, '/apply_planning_scene')
+        return apply_response is not None and apply_response.success
+
+    def compute_fk(self, joint_positions):
+        """Forward kinematics: [joint_1..joint_6] -> tool_frame's (x, y, z)
+        in base_link, or None on failure. Used by solve_planar_reach to
+        numerically search a 2-DOF reach, rather than relying on a
+        general 6-DOF IK search (see that method's docstring for why)."""
+        if not self.compute_fk_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Compute FK service not available")
+            return None
+        req = GetPositionFK.Request()
+        req.header.frame_id = 'base_link'
+        req.fk_link_names = ['tool_frame']
+        state = RobotState()
+        js = JointState()
+        js.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+        js.position = [float(p) for p in joint_positions]
+        state.joint_state = js
+        req.robot_state = state
+
+        future = self.compute_fk_client.call_async(req)
+        response = self.wait_for_future(future, '/compute_fk')
+        if response is None or response.error_code.val != response.error_code.SUCCESS:
+            return None
+        p = response.pose_stamped[0].pose.position
+        return (p.x, p.y, p.z)
+
+    def check_joint_state_validity(self, joint_positions):
+        """True if [joint_1..joint_6] is a collision-free, valid state,
+        via /check_state_validity - a direct check against a known joint
+        state, with none of the ambiguity find_ik_solution has (that
+        searches for *some* joint state satisfying a Cartesian pose;
+        this checks one specific, already-known state)."""
+        if not self.check_state_validity_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Check State Validity service not available")
+            return False
+        req = GetStateValidity.Request()
+        req.group_name = 'arm'
+        state = RobotState()
+        js = JointState()
+        js.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+        js.position = [float(p) for p in joint_positions]
+        state.joint_state = js
+        req.robot_state = state
+
+        future = self.check_state_validity_client.call_async(req)
+        response = self.wait_for_future(future, '/check_state_validity')
+        return response is not None and response.valid
+
+    # Wrist held level/neutral for a single-plane reach (push, and
+    # designed to be reused for thrust) - matches what was actually
+    # demonstrated (see docs/push-motion-reference.md). Combined with a
+    # fixed joint_1 (facing the target), the whole reach stays within one
+    # vertical plane - only the shoulder/elbow move.
+    _PLANAR_REACH_WRIST = (0.0, 0.0, 0.0)
+    # A reasonable default starting guess for solve_planar_reach's Newton
+    # search - an arbitrary "bent forward and down" shoulder/elbow shape,
+    # not tied to any specific object. A seed near (0, 0) was found to
+    # converge to the wrong side (behind the arm) instead of forward, so
+    # this needs to already be a genuinely bent posture.
+    _PLANAR_REACH_SEED = (math.radians(-20), math.radians(140))
+
+    def solve_planar_reach(self, base_yaw, target_x, target_y, target_z, seed_shoulder=None, seed_elbow=None, iterations=15):
+        """Solve for (joint_2, joint_3) reaching (target_x, target_y,
+        target_z), with joint_1 fixed at base_yaw and the wrist fixed
+        level (_PLANAR_REACH_WRIST) - the whole reach stays in a single
+        vertical plane containing that bearing, matching a manually
+        demonstrated push (see docs/push-motion-reference.md) and
+        designed to generalize to 'thrust' too.
+
+        Uses Newton-Raphson on (radial distance from the base, height)
+        via compute_fk, not a general 6-DOF IK search: with only 2
+        unknowns and a smooth forward-kinematics function, this converges
+        to near-exact precision from a reasonable seed - a general IK
+        search was tried first and found unreliable for exactly this kind
+        of small planar reach (see docs/push-motion-reference.md for the
+        verified failures that ruled it out).
+
+        Returns (joint_2, joint_3, achieved_xyz, position_error), or None
+        if compute_fk itself fails. The caller is responsible for
+        checking position_error is small enough and the resulting full
+        joint state ([base_yaw, joint_2, joint_3, *_PLANAR_REACH_WRIST])
+        is actually collision-free (check_joint_state_validity) before
+        trusting it - this only solves the geometry, it doesn't verify
+        collision-freeness itself."""
+        shoulder = seed_shoulder if seed_shoulder is not None else self._PLANAR_REACH_SEED[0]
+        elbow = seed_elbow if seed_elbow is not None else self._PLANAR_REACH_SEED[1]
+        target_radius = math.hypot(target_x, target_y)
+        eps = 1e-3
+
+        def radius_and_height(s, e):
+            pos = self.compute_fk([base_yaw, s, e, *self._PLANAR_REACH_WRIST])
+            if pos is None:
+                return None, None
+            return (math.hypot(pos[0], pos[1]), pos[2]), pos
+
+        for _ in range(iterations):
+            rz0, _ = radius_and_height(shoulder, elbow)
+            if rz0 is None:
+                return None
+            rz_ds, _ = radius_and_height(shoulder + eps, elbow)
+            rz_de, _ = radius_and_height(shoulder, elbow + eps)
+            if rz_ds is None or rz_de is None:
+                return None
+
+            jac = [
+                [(rz_ds[0] - rz0[0]) / eps, (rz_de[0] - rz0[0]) / eps],
+                [(rz_ds[1] - rz0[1]) / eps, (rz_de[1] - rz0[1]) / eps],
+            ]
+            det = jac[0][0] * jac[1][1] - jac[0][1] * jac[1][0]
+            if abs(det) < 1e-9:
+                break
+            f0 = (rz0[0] - target_radius, rz0[1] - target_z)
+            shoulder += (-jac[1][1] * f0[0] + jac[0][1] * f0[1]) / det
+            elbow += (jac[1][0] * f0[0] - jac[0][0] * f0[1]) / det
+
+        rz_final, achieved = radius_and_height(shoulder, elbow)
+        if rz_final is None:
+            return None
+        error = math.hypot(rz_final[0] - target_radius, rz_final[1] - target_z)
+        return shoulder, elbow, achieved, error
 
     # Direction keywords for 'push'/'throw' as an alternative to a named
     # destination, as an angle to rotate the reference bearing by. The
@@ -865,16 +1102,44 @@ class ArmActions:
         self.get_logger().info(f"Thrust '{target_name}' forward")
         return True
 
+    # Above this, a solved planar reach is considered to have failed to
+    # converge (meters) - a sanity bound, not a tolerance to plan within.
+    _PLANAR_REACH_MAX_ERROR = 0.01
+
     def _handle_push(self, params):
-        """Slide an object to a destination by contact, without ever
-        grasping or lifting it - approaches the object at its resting
-        height (plus an optional 'height_offset') with the gripper open,
-        partially closes it to act as a flat pusher once already in
-        position, then slides across to the destination at that same
-        height. Optionally holds a named 'orientation' throughout for a
-        level, consistent pushing face - not forced by default, since
-        constraining orientation can make an otherwise-reachable approach
-        point infeasible for the planner (see the note below).
+        """Slide an object to a destination by sustained contact, without
+        ever grasping or lifting it - captured from a manual RViz
+        demonstration (see docs/push-motion-reference.md): face the
+        object (joint_1 only), then move only the shoulder/elbow
+        (joint_2/joint_3) - the wrist and base stay fixed the whole time,
+        so the entire push happens in a single vertical plane, not a
+        general 6-DOF reach.
+
+        Both the contact pose and the extended end pose are solved with
+        solve_planar_reach (forward-kinematics-based, not IK) and checked
+        collision-free with check_joint_state_validity *before* any real
+        motion happens - unlike an earlier version of this, which
+        searched a handful of differently-rotated 6-DOF grasp-style
+        candidates via general IK and had to actually attempt (and
+        sometimes retreat from) each one in turn. That approach worked
+        but visibly produced arbitrary, sideways-looking approaches whose
+        IK solutions happened to be reachable in some direction unrelated
+        to the object's own bearing; this one only ever considers the
+        single, deliberate plane facing the object, matching the manual
+        demonstration this was built from (see
+        docs/push-motion-reference.md for the full history, including why
+        a general IK/6-DOF search and a plan-only pre-check were both
+        tried and ruled out first).
+
+        Push only ever extends an object further from the arm's own base
+        - it's not designed to drag one back in.
+
+        Sustained contact is deliberate here (unlike every other action),
+        so a normal collision-aware plan would otherwise reject it, or
+        silently route around the object instead of actually pushing it -
+        set_collision_allowed temporarily exempts just this one object for
+        the duration, and is always reverted in a 'finally' block even if
+        the push fails partway through.
 
         Where to push it is either a named 'destination' object, or a
         'direction' ('forward'/'backward'/'left'/'right', relative to the
@@ -893,81 +1158,89 @@ class ArmActions:
         if not target_info:
             self.get_logger().error(f"Could not resolve push target '{target_name}'")
             return False
-
-        tx, ty = target_info['pose']['position']['x'], target_info['pose']['position']['y']
+        origin = target_info['pose']['position']
 
         if destination_name:
             dest_info = self.get_object_info(destination_name)
             if not dest_info:
                 self.get_logger().error(f"Could not resolve push destination '{destination_name}'")
                 return False
-            dx, dy = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
+            release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
         else:
             distance = float(params.get('distance', 0.2))
-            offset = self.resolve_direction_offset(tx, ty, direction, distance)
+            offset = self.resolve_direction_offset(origin['x'], origin['y'], direction, distance)
             if offset is None:
                 self.get_logger().error(f"Unknown push direction '{direction}'")
                 return False
-            dx, dy = offset
+            release_x, release_y = offset
 
-        # No default orientation - forcing one removes an entire degree of
-        # freedom from the planner, and testing showed 'facing_forward'
-        # specifically is not reachable at some real approach points near
-        # the table (pickup succeeds at the same points precisely because
-        # it leaves orientation unconstrained). Only apply one if the
-        # caller explicitly asks for it.
-        orientation = self.resolve_orientation(params.get('orientation'))
-        if orientation is None:
-            self.get_logger().error(f"Unknown orientation preset '{params.get('orientation')}' for push")
+        # Face the object - joint_1 fixed for the whole push, the single
+        # plane every subsequent move stays within.
+        base_yaw = math.atan2(origin['y'], origin['x'])
+
+        contact = self.solve_planar_reach(base_yaw, origin['x'], origin['y'], origin['z'])
+        if contact is None or contact[3] > self._PLANAR_REACH_MAX_ERROR:
+            self.get_logger().error(f"Could not solve a planar reach to '{target_name}'")
             return False
-        has_orientation, roll, pitch, yaw = orientation
+        contact_shoulder, contact_elbow, _, _ = contact
+        contact_joints = [base_yaw, contact_shoulder, contact_elbow, *self._PLANAR_REACH_WRIST]
+        if not self.check_joint_state_validity(contact_joints):
+            self.get_logger().error(f"Push contact pose for '{target_name}' is in collision")
+            return False
 
-        close_pos = float(params.get('close_position', 0.5))
+        # Same height, same plane, seeded at the contact solution so the
+        # extend stays a small, local adjustment rather than jumping to
+        # an unrelated configuration.
+        extend = self.solve_planar_reach(
+            base_yaw, release_x, release_y, origin['z'],
+            seed_shoulder=contact_shoulder, seed_elbow=contact_elbow
+        )
+        if extend is None or extend[3] > self._PLANAR_REACH_MAX_ERROR:
+            self.get_logger().error(f"Could not solve a planar reach to the push destination for '{target_name}'")
+            return False
+        extend_shoulder, extend_elbow, _, _ = extend
+        extend_joints = [base_yaw, extend_shoulder, extend_elbow, *self._PLANAR_REACH_WRIST]
+        if not self.check_joint_state_validity(extend_joints):
+            self.get_logger().error(f"Push end pose for '{target_name}' is in collision")
+            return False
+
+        if not self.set_collision_allowed(target_name, True):
+            self.get_logger().error(f"Failed to allow contact with '{target_name}' for push")
+            return False
+
         motion_params = self.build_motion_params(params.get('speed'))
-        # height_offset defaults to 0.0 (unchanged from before) rather than
-        # a lower value - this exact height, close to the real table
-        # surface, is what caused push's collision failure during testing;
-        # tune it down incrementally on hardware rather than guess a new
-        # default blind.
-        push_z = target_info['pose']['position']['z'] + float(params.get('height_offset', 0.0))
+        close_pos = float(params.get('close_position', 0.75))
 
-        # 1. Open the gripper before approaching - closing it first risks
-        # the fingers colliding with the table at this low, near-surface
-        # height (this broke push during testing: a half-closed gripper
-        # made an otherwise-reachable goal pose collide with the table)
-        rg = self.call_move_gripper_service(0.0)
-        if not (rg and rg['success']):
-            self.get_logger().error('Failed to open gripper before push approach')
-            return False
+        try:
+            # 1. Open the gripper before approaching
+            rg = self.call_move_gripper_service(0.0)
+            if not (rg and rg['success']):
+                self.get_logger().error('Failed to open gripper before push approach')
+                return False
 
-        # 2. Move to the object at its resting height, holding the given
-        # orientation if one was requested (unconstrained by default)
-        r = self.call_move_service(tx, ty, push_z, has_orientation, roll, pitch, yaw, motion_params)
-        if not (r and r['success']):
-            self.get_logger().error('Failed to approach push target')
-            return False
+            # 2. Move to the contact pose
+            r = self.call_joint_move_service(contact_joints, motion_params=motion_params)
+            if not (r and r['success']):
+                self.get_logger().error('Failed to approach push target')
+                return False
 
-        # 3. Now in position - partially close the gripper to act as a
-        # flat pushing surface
-        rg = self.call_move_gripper_service(close_pos)
-        if not (rg and rg['success']):
-            self.get_logger().error('Failed to set gripper for push')
-            return False
+            # 3. Close the gripper onto it
+            rg = self.call_move_gripper_service(close_pos)
+            if not (rg and rg['success']):
+                self.get_logger().error('Failed to set gripper for push')
+                return False
 
-        # 4. Slide it to the destination, staying at the same height and
-        # orientation - it's pushed by contact the whole way, never
-        # grasped or lifted
-        r = self.call_move_service(dx, dy, push_z, has_orientation, roll, pitch, yaw, motion_params)
-        if not (r and r['success']):
-            self.get_logger().error('Failed to push to destination')
-            return False
+            # 4. Extend - shoulder/elbow only, same plane
+            r = self.call_joint_move_service(extend_joints, motion_params=motion_params)
+            if not (r and r['success']):
+                self.get_logger().error('Failed to push to destination')
+                return False
+        finally:
+            self.set_collision_allowed(target_name, False)
 
-        # 5. It moved by contact, not attachment - update its known position.
-        # Recorded at its real resting height, not push_z (which may include
-        # 'height_offset' - an approach-height tweak, not the object's
-        # actual height off the table).
+        # It moved by contact, not attachment - update its known position.
         orient = target_info['pose']['orientation']
-        if not self.update_object_pose(target_name, dx, dy, target_info['pose']['position']['z'], orient):
+        if not self.update_object_pose(target_name, release_x, release_y, origin['z'], orient):
             self.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
 
         where = f"to '{destination_name}'" if destination_name else f"{direction}"

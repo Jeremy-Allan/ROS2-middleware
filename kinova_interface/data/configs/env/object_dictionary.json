@@ -9,6 +9,16 @@
       "dimensions": [0.107, 0.075, 0.045]
     }
   },
+  "push_block": {
+    "pose": {
+      "position": { "x": 0.25, "y": -0.05, "z": 0.01 },
+      "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
+    },
+    "shape": {
+      "type": "BOX",
+      "dimensions": [0.06, 0.06, 0.03]
+    }
+  },
   "blue_cube": {
     "pose": {
       "position": { "x": 0.45, "y": 0.2, "z": 0.01 },
