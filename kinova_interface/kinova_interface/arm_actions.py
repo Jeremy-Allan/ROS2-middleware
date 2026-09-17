@@ -310,18 +310,24 @@ class ArmActions:
             self.get_logger().error(f"Failed to Move Gripper to: {position}: {response.message if response else 'no response'}")
             return None
 
-    def call_joint_move_service(self, joint_positions, motion_params=None, wait_for_completion=True):
-        """Move to an absolute joint-space target. With wait_for_completion
-        False, this returns as soon as the goal is accepted rather than
-        once the motion finishes - the caller (e.g. 'throw's fling) is then
-        responsible for whatever timing it needs, and won't know whether
-        the motion itself ultimately succeeded, only that it started."""
+    def call_joint_move_service(self, joint_positions, motion_params=None, wait_for_completion=True, relative=False):
+        """Move to a joint-space target - absolute by default, or a delta
+        from whatever the current joint state actually is if relative=True
+        (e.g. 'pour's tilt: a delta on joint_6 alone, without needing to
+        know or recompute the other five joints' current values).
+
+        With wait_for_completion False, this returns as soon as the goal is
+        accepted rather than once the motion finishes - the caller (e.g.
+        'throw's fling) is then responsible for whatever timing it needs,
+        and won't know whether the motion itself ultimately succeeded, only
+        that it started."""
         if not self.joint_move_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error("Joint Move service not available")
             return None
         req = JointMove.Request()
         req.joint_positions = [float(p) for p in joint_positions]
         req.wait_for_completion = wait_for_completion
+        req.relative = relative
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
         future = self.joint_move_client.call_async(req)
@@ -459,12 +465,25 @@ class ArmActions:
         return result is not None and result['success']
 
     def _handle_pickup(self, params):
+        """'orientation' is optional and unconstrained by default (matching
+        the original behaviour - forcing one can make an otherwise-reachable
+        approach point infeasible for the planner, same caveat as 'push').
+        Pass it explicitly (e.g. 'side_grasp_flat') when a later action
+        needs a known, repeatable grasp orientation instead of whatever the
+        planner happens to land on - 'pour' is the motivating case, see
+        docs/pour-motion-reference.md."""
         target_name = params['target']
         open_pos = float(params.get('open_position', 0.0))
         close_pos = float(params.get('close_position', 0.8))
         coords = self.get_static_object_coords(target_name)
         if not coords:
             return False
+
+        orientation = self.resolve_orientation(params.get('orientation'))
+        if orientation is None:
+            self.get_logger().error(f"Unknown orientation preset '{params.get('orientation')}' for pickup")
+            return False
+        has_orientation, roll, pitch, yaw = orientation
 
         # 1. Open gripper before moving
         rg = self.call_move_gripper_service(open_pos)
@@ -473,7 +492,7 @@ class ArmActions:
             return False
 
         # 2. Descend to the actual object position
-        r = self.call_move_service(coords['x'], coords['y'], coords['z'])
+        r = self.call_move_service(coords['x'], coords['y'], coords['z'], has_orientation, roll, pitch, yaw)
         if not (r and r['success']):
             self.get_logger().error('Failed to move to object position')
             return False
@@ -555,14 +574,34 @@ class ArmActions:
             self.held_object = None
         return True
 
-    def _handle_pour(self, params):
-        """Tilt the held object to pour, hold briefly, then return upright.
-        Assumes the object named by 'target' is already grasped - fails
-        cleanly rather than guessing if it isn't.
+    # Default tilt: matches the ~135 degree joint_6 delta captured in the
+    # manual RViz demo this was built from - see docs/pour-motion-reference.md.
+    _POUR_DEFAULT_TILT_ANGLE = math.radians(135)
+    _POUR_DEFAULT_LIFT_HEIGHT = 0.14  # meters; demo measured ~0.137m
 
-        The tilt itself is either a direct 'amount' (radians of pitch,
-        overriding everything else) or a named 'orientation' preset,
-        defaulting to 'tilted_for_pour'."""
+    def _handle_pour(self, params):
+        """Carry a held object above a destination and tip it to pour, then
+        return level. Assumes 'target' is already grasped - fails cleanly
+        rather than guessing if it isn't - and, importantly, assumes it was
+        grasped in a known, level orientation (e.g. via pickup's
+        'side_grasp_flat' preset), which lift/transit below then preserve
+        exactly rather than assume or recompute.
+
+        This replaces the previous design, which applied a relative
+        orientation delta on top of whatever arbitrary orientation an
+        unconstrained pickup happened to produce - workable in principle,
+        but only if the starting orientation is actually known, which it
+        wasn't. See docs/pour-motion-reference.md for the manually-driven
+        RViz demonstration this sequence is built from, and why.
+
+        The actual tilt is a pure joint-space delta on joint_6 alone (like
+        'throw's wind-up/fling), not a Cartesian orientation change -
+        deliberately: 'side_grasp_flat' holds the wrist at roughly a 90
+        degree roll, and composing a Cartesian relative orientation delta
+        from there hits exactly the asin()-based gimbal-lock-adjacent
+        coupling that handle_relative_move's own docstring already warns
+        about (see hardware_interface_client.py) - which is what produced
+        the unreachable target that made the original design fail."""
         target_name = params.get('target')
         if not target_name:
             self.get_logger().error("pour action requires 'target' naming the held object")
@@ -571,36 +610,71 @@ class ArmActions:
             self.get_logger().error(f"Cannot pour '{target_name}': held object is '{self.held_object}'")
             return False
 
-        amount = params.get('amount')
-        if amount is not None:
-            roll, pitch, yaw = 0.0, float(amount), 0.0
-        else:
-            preset_name = params.get('orientation', 'tilted_for_pour')
-            preset = self.get_orientation_preset(preset_name)
-            if preset is None:
-                self.get_logger().error(f"Unknown orientation preset '{preset_name}' for pour")
+        destination_name = params.get('destination')
+        direction = params.get('direction')
+        if not destination_name and not direction:
+            self.get_logger().error("pour action requires either 'destination' or 'direction'")
+            return False
+
+        target_info = self.get_object_info(target_name)
+        if not target_info:
+            self.get_logger().error(f"Could not resolve held object '{target_name}' for pour")
+            return False
+        origin = target_info['pose']['position']
+
+        if destination_name:
+            dest_info = self.get_object_info(destination_name)
+            if not dest_info:
+                self.get_logger().error(f"Could not resolve pour destination '{destination_name}'")
                 return False
-            roll, pitch, yaw = preset['roll'], preset['pitch'], preset['yaw']
+            release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
+        else:
+            distance = float(params.get('distance', 0.3))
+            offset = self.resolve_direction_offset(origin['x'], origin['y'], direction, distance)
+            if offset is None:
+                self.get_logger().error(f"Unknown pour direction '{direction}'")
+                return False
+            release_x, release_y = offset
 
         motion_params = self.build_motion_params(params.get('speed'))
-        dwell = float(params.get('duration', 1.5))
 
-        # 1. Tilt to pour, in place (zero displacement, orientation delta only)
-        r = self.call_relative_move_service(0.0, 0.0, 0.0, True, roll, pitch, yaw, motion_params)
+        # 1. Lift straight up from the grasp height, holding whatever
+        # orientation it was grasped in exactly unchanged (a zero-delta
+        # relative move - orientation is preserved, never recomputed)
+        lift_height = float(params.get('lift_height', self._POUR_DEFAULT_LIFT_HEIGHT))
+        r = self.call_relative_move_service(0.0, 0.0, lift_height, True, 0.0, 0.0, 0.0, motion_params)
+        if not (r and r['success']):
+            self.get_logger().error('Failed to lift for pour')
+            return False
+
+        # 2. Move horizontally to hover above the destination, at that same
+        # lifted height - orientation still untouched
+        dx, dy = release_x - origin['x'], release_y - origin['y']
+        r = self.call_relative_move_service(dx, dy, 0.0, True, 0.0, 0.0, 0.0, motion_params)
+        if not (r and r['success']):
+            self.get_logger().error('Failed to move above pour destination')
+            return False
+
+        # 3. Tilt: a pure joint-space delta on joint_6 alone (see docstring)
+        tilt_angle = float(params.get('tilt_angle', self._POUR_DEFAULT_TILT_ANGLE))
+        tilt_delta = [0.0, 0.0, 0.0, 0.0, 0.0, tilt_angle]
+        r = self.call_joint_move_service(tilt_delta, motion_params=motion_params, relative=True)
         if not (r and r['success']):
             self.get_logger().error('Failed to tilt for pour')
             return False
 
-        # 2. Hold the tilt so contents can pour out
+        # 4. Hold the tilt so contents can pour out
+        dwell = float(params.get('duration', 1.5))
         time.sleep(dwell)
 
-        # 3. Rotate back to upright
-        r = self.call_relative_move_service(0.0, 0.0, 0.0, True, -roll, -pitch, -yaw, motion_params)
+        # 5. Rotate back level - the exact negated delta
+        untilt_delta = [0.0, 0.0, 0.0, 0.0, 0.0, -tilt_angle]
+        r = self.call_joint_move_service(untilt_delta, motion_params=motion_params, relative=True)
         if not (r and r['success']):
-            self.get_logger().error('Failed to return to upright after pour')
+            self.get_logger().error('Failed to return to level after pour')
             return False
 
-        self.get_logger().info(f"Poured '{target_name}'")
+        self.get_logger().info(f"Poured '{target_name}' toward '{destination_name}'" if destination_name else f"Poured '{target_name}' {direction}")
         return True
 
     def _handle_thrust(self, params):

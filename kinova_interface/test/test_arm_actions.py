@@ -470,6 +470,40 @@ def test_pickup_sets_held_object(actions):
 
     assert result is True
     assert actions.held_object == "red_cube"
+    # unconstrained by default, same as before 'orientation' support was added
+    move_call = actions.call_move_service.call_args[0]
+    assert move_call == (1.0, 2.0, 3.0, False, 0.0, 0.0, 0.0)
+
+
+def test_pickup_applies_orientation_when_explicitly_given(actions):
+    """A named orientation preset should be forced on the descend move,
+    for actions (like 'pour') that need a known, repeatable grasp."""
+
+    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
+    actions.get_orientation_preset = MagicMock(
+        return_value={"roll": 1.66, "pitch": -0.04, "yaw": -1.57}
+    )
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+
+    result = actions.handlers['pickup']({"target": "red_cube", "orientation": "side_grasp_flat"})
+
+    assert result is True
+    move_call = actions.call_move_service.call_args[0]
+    assert move_call == (1.0, 2.0, 3.0, True, 1.66, -0.04, -1.57)
+    actions.get_orientation_preset.assert_called_once_with("side_grasp_flat")
+
+
+def test_pickup_fails_on_unknown_orientation(actions):
+    """pickup should fail cleanly if its orientation preset can't be resolved."""
+
+    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
+    actions.get_orientation_preset = MagicMock(return_value=None)
+
+    result = actions.handlers['pickup']({"target": "red_cube", "orientation": "not_a_real_preset"})
+
+    assert result is False
 
 
 def test_dropoff_clears_held_object(actions):
@@ -541,46 +575,107 @@ def test_pour_fails_if_target_not_held(actions):
 
     actions.held_object = "blue_cube"
 
+    result = actions.handlers['pour']({"target": "red_cube", "destination": "delivery_tray"})
+
+    assert result is False
+
+
+def test_pour_requires_destination_or_direction(actions):
+    """pour without either a destination or a direction should fail cleanly."""
+
+    actions.held_object = "red_cube"
+
     result = actions.handlers['pour']({"target": "red_cube"})
 
     assert result is False
 
 
-def test_pour_tilts_holds_and_returns_upright(actions):
-    """pour should tilt in place, dwell, then rotate back to upright."""
+def test_pour_lifts_transits_tilts_and_returns(actions):
+    """pour should lift, move above the destination, tilt via a pure
+    joint_6 delta, dwell, then rotate back level via the negated delta -
+    all with orientation preserved (zero-delta) on the Cartesian legs."""
 
     actions.held_object = "red_cube"
-    actions.get_orientation_preset = MagicMock(
-        return_value={"roll": 0.0, "pitch": 1.57, "yaw": 0.0}
-    )
+    actions.get_object_info = MagicMock(side_effect=lambda name: {
+        "red_cube": {
+            "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+            "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+        },
+        "delivery_tray": {
+            "pose": {"position": {"x": 0.5, "y": 0.4, "z": 0.0}, "orientation": {}},
+            "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
+        }
+    }[name])
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
     with patch("kinova_interface.arm_actions.time.sleep") as mock_sleep:
-        result = actions.handlers['pour']({"target": "red_cube", "duration": 2.0})
+        result = actions.handlers['pour']({
+            "target": "red_cube", "destination": "delivery_tray",
+            "lift_height": 0.14, "tilt_angle": 2.36, "duration": 2.0
+        })
 
     assert result is True
-    assert actions.call_relative_move_service.call_count == 2
     mock_sleep.assert_called_once_with(2.0)
 
-    tilt_call = actions.call_relative_move_service.call_args_list[0][0]
-    return_call = actions.call_relative_move_service.call_args_list[1][0]
+    assert actions.call_relative_move_service.call_count == 2
+    lift_call = actions.call_relative_move_service.call_args_list[0][0]
+    transit_call = actions.call_relative_move_service.call_args_list[1][0]
 
-    # tilt_call args: (vx, vy, vz, has_orientation, roll, pitch, yaw, motion_params)
-    assert tilt_call[0:3] == (0.0, 0.0, 0.0)
-    assert tilt_call[5] == pytest.approx(1.57)
-    # returning upright applies the negated delta
-    assert return_call[5] == pytest.approx(-1.57)
+    # lift_call args: (vx, vy, vz, has_orientation, roll_delta, pitch_delta, yaw_delta, motion_params)
+    assert lift_call[0:3] == (0.0, 0.0, pytest.approx(0.14))
+    assert lift_call[3] is True
+    assert lift_call[4:7] == (0.0, 0.0, 0.0)  # orientation preserved, not changed
+
+    # moves by the vector from the held object to the destination
+    assert transit_call[0:3] == (pytest.approx(0.2), pytest.approx(0.3), 0.0)
+    assert transit_call[4:7] == (0.0, 0.0, 0.0)
+
+    assert actions.call_joint_move_service.call_count == 2
+    tilt_call = actions.call_joint_move_service.call_args_list[0]
+    untilt_call = actions.call_joint_move_service.call_args_list[1]
+
+    assert tilt_call[0][0] == [0.0, 0.0, 0.0, 0.0, 0.0, pytest.approx(2.36)]
+    assert tilt_call[1]['relative'] is True
+    assert untilt_call[0][0] == [0.0, 0.0, 0.0, 0.0, 0.0, pytest.approx(-2.36)]
+    assert untilt_call[1]['relative'] is True
 
 
-def test_pour_fails_on_unknown_orientation(actions):
-    """pour should fail cleanly if its orientation preset can't be resolved."""
+def test_pour_fails_if_lift_fails(actions):
+    """pour should stop and fail cleanly if the initial lift fails, never
+    attempting the tilt."""
 
     actions.held_object = "red_cube"
-    actions.get_orientation_preset = MagicMock(return_value=None)
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.call_relative_move_service = MagicMock(return_value={"success": False})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
-    result = actions.handlers['pour']({"target": "red_cube"})
+    result = actions.handlers['pour']({"target": "red_cube", "direction": "forward"})
 
     assert result is False
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_pour_fails_if_tilt_fails(actions):
+    """pour should fail cleanly (and never open the gripper - this action
+    doesn't release at all) if the joint-space tilt fails."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.call_relative_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value=None)
+
+    with patch("kinova_interface.arm_actions.time.sleep") as mock_sleep:
+        result = actions.handlers['pour']({"target": "red_cube", "direction": "forward"})
+
+    assert result is False
+    mock_sleep.assert_not_called()
 
 
 # thrust()
@@ -640,28 +735,6 @@ def test_thrust_fails_on_unknown_vector(actions):
     result = actions.handlers['thrust']({"target": "red_cube"})
 
     assert result is False
-
-
-# pour() with a direct 'amount' override
-def test_pour_amount_overrides_preset(actions):
-    """An explicit 'amount' should be used as the pitch tilt directly,
-    without resolving any orientation preset."""
-
-    actions.held_object = "red_cube"
-    actions.get_orientation_preset = MagicMock()
-    actions.call_relative_move_service = MagicMock(return_value={"success": True})
-
-    with patch("kinova_interface.arm_actions.time.sleep"):
-        result = actions.handlers['pour']({"target": "red_cube", "amount": 0.5})
-
-    assert result is True
-    actions.get_orientation_preset.assert_not_called()
-
-    tilt_call = actions.call_relative_move_service.call_args_list[0][0]
-    return_call = actions.call_relative_move_service.call_args_list[1][0]
-
-    assert tilt_call[5] == pytest.approx(0.5)
-    assert return_call[5] == pytest.approx(-0.5)
 
 
 # push()

@@ -1,0 +1,7 @@
+cd ~/workspace/ros2_kortex_ws
+./run_recipe.sh src/repos/ROS2-middleware/kinova_interface/recipes/test_suite/recipe_pickup.json
+./run_recipe.sh src/repos/ROS2-middleware/kinova_interface/recipes/test_suite/recipe_dropoff.json
+./run_recipe.sh src/repos/ROS2-middleware/kinova_interface/recipes/test_suite/recipe_pour.json
+./run_recipe.sh src/repos/ROS2-middleware/kinova_interface/recipes/test_suite/recipe_thrust.json
+./run_recipe.sh src/repos/ROS2-middleware/kinova_interface/recipes/test_suite/recipe_push.json
+./run_recipe.sh src/repos/ROS2-middleware/kinova_interface/recipes/test_suite/recipe_throw.json

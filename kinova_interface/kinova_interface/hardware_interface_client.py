@@ -15,6 +15,9 @@ from geometry_msgs.msg import Pose
 # Gripper Actions and Messages
 from control_msgs.action import GripperCommand
 
+# Current joint positions, for relative joint moves (e.g. 'pour's tilt)
+from sensor_msgs.msg import JointState
+
 # Services
 from std_srvs.srv import Trigger
 from example_interfaces.msg import Bool
@@ -51,6 +54,18 @@ class HardwareInterfaceClient(Node):
         # TF Buffer and Listener
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        # Latest joint positions (name -> position), for relative joint
+        # moves (e.g. 'pour's tilt, a delta on joint_6 alone) - None until
+        # the first /joint_states message arrives.
+        self.latest_joint_positions = None
+        self.joint_state_sub = self.create_subscription(
+            JointState,
+            '/joint_states',
+            self._on_joint_state,
+            10,
+            callback_group=self.callback_group
+        )
 
         # Fault Monitoring and Recovery
         self.fault_sub = self.create_subscription(
@@ -104,6 +119,9 @@ class HardwareInterfaceClient(Node):
         msg.status_message = self.status_text
         msg.last_command_valid = self.command_success
         self.status_pub.publish(msg)
+
+    def _on_joint_state(self, msg):
+        self.latest_joint_positions = dict(zip(msg.name, msg.position))
 
     # --- Fault Controller Health Check & Helper ---
     def check_fault_controller_health(self):
@@ -211,16 +229,36 @@ class HardwareInterfaceClient(Node):
     FIRE_AND_FORGET_REJECTION_WINDOW_SEC = 0.5
 
     def handle_joint_move(self, request, response):
-        """Move to an absolute joint-space target. If wait_for_completion is
-        False, returns once either the goal is accepted and stays that way
-        for FIRE_AND_FORGET_REJECTION_WINDOW_SEC, or it fails/succeeds
-        within that window - whichever comes first. This lets a caller
-        (e.g. 'throw's fling) do something else, like releasing the
-        gripper, partway through a genuinely still-in-progress motion,
-        while still catching a fast rejection instead of treating it as a
-        success. A rejection arriving after the window would still be
+        """Move to a joint-space target - absolute by default, or relative
+        to the current joint state (from the latest /joint_states message)
+        if request.relative is True. Relative mode is for a delta on a
+        single joint (e.g. 'pour's tilt, joint_6 alone) without needing to
+        know or recompute the other joints' current values.
+
+        If wait_for_completion is False, returns once either the goal is
+        accepted and stays that way for FIRE_AND_FORGET_REJECTION_WINDOW_SEC,
+        or it fails/succeeds within that window - whichever comes first.
+        This lets a caller (e.g. 'throw's fling) do something else, like
+        releasing the gripper, partway through a genuinely still-in-progress
+        motion, while still catching a fast rejection instead of treating it
+        as a success. A rejection arriving after the window would still be
         missed - this narrows that gap, it doesn't close it entirely."""
         joint_positions = list(request.joint_positions)
+
+        if request.relative:
+            if self.latest_joint_positions is None:
+                response.success = False
+                response.message = "No joint state available for relative joint move"
+                return self.finalize_service_status(response)
+            joint_names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+            try:
+                current = [self.latest_joint_positions[name] for name in joint_names]
+            except KeyError as e:
+                response.success = False
+                response.message = f"Missing joint {e} in latest joint state"
+                return self.finalize_service_status(response)
+            joint_positions = [current[i] + joint_positions[i] for i in range(6)]
+
         self.get_logger().info(f"Service Call: Joint Move to {joint_positions}")
         self.current_state = ExtendedStatus.STATE_BUSY
         self.status_text = f"Moving to joint targets {joint_positions}..."

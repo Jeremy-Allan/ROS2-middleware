@@ -400,6 +400,70 @@ def test_handle_joint_move_failure_to_start(node):
     assert result.success is False
     assert result.message == "Failed to initiate joint move"
 
+
+def test_on_joint_state_caches_latest_positions(node):
+    """_on_joint_state should cache the latest name->position mapping,
+    for relative joint moves to read current values from."""
+    from sensor_msgs.msg import JointState
+
+    msg = JointState()
+    msg.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+    msg.position = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+
+    node._on_joint_state(msg)
+
+    assert node.latest_joint_positions == {
+        'joint_1': 0.1, 'joint_2': 0.2, 'joint_3': 0.3,
+        'joint_4': 0.4, 'joint_5': 0.5, 'joint_6': 0.6,
+    }
+
+
+def test_handle_joint_move_relative_adds_delta_to_current(node):
+    """A relative joint move should resolve to an absolute target of
+    current + delta before actually moving, e.g. 'pour's tilt: a delta on
+    joint_6 alone, without disturbing the other five joints."""
+
+    node.latest_joint_positions = {
+        'joint_1': 0.1, 'joint_2': 0.2, 'joint_3': 0.3,
+        'joint_4': 0.4, 'joint_5': 0.5, 'joint_6': 0.6,
+    }
+    node.send_joint_goal = MagicMock(return_value=True)
+    node.arm_movement_finished = MagicMock()
+    node.last_action_successful = True
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0, 0.0, 0.0, 0.0, 0.0, 2.36]
+    request.wait_for_completion = True
+    request.relative = True
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is True
+    node.send_joint_goal.assert_called_once()
+    resolved_positions = node.send_joint_goal.call_args[0][0]
+    assert resolved_positions == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5, 0.6 + 2.36])
+
+
+def test_handle_joint_move_relative_fails_without_joint_state(node):
+    """A relative joint move should fail cleanly (not crash or silently
+    treat deltas as absolutes) if no /joint_states message has arrived yet."""
+
+    node.latest_joint_positions = None
+    node.send_joint_goal = MagicMock()
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0, 0.0, 0.0, 0.0, 0.0, 2.36]
+    request.wait_for_completion = True
+    request.relative = True
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is False
+    assert result.message == "No joint state available for relative joint move"
+    node.send_joint_goal.assert_not_called()
+
 # handle_move_arm()
 def test_handle_move_arm_success(node):
     """Test successful arm movement service."""
