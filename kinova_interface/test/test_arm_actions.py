@@ -603,6 +603,7 @@ def test_thrust_levels_then_thrusts_forward(actions):
     """thrust should level to horizontal, then move by the thrust_forward vector."""
 
     actions.held_object = "red_cube"
+    actions.get_orientation_preset = MagicMock(return_value={"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
     actions.get_relative_movement_vector = MagicMock(
         return_value={"x": 0.1, "y": 0.0, "z": 0.0}
@@ -629,6 +630,7 @@ def test_thrust_fails_on_unknown_vector(actions):
     """thrust should fail cleanly if its movement vector can't be resolved."""
 
     actions.held_object = "red_cube"
+    actions.get_orientation_preset = MagicMock(return_value={"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
     actions.get_relative_movement_vector = MagicMock(return_value=None)
 
@@ -668,8 +670,9 @@ def test_push_requires_target_and_destination(actions):
 
 
 def test_push_slides_object_to_destination_at_same_height(actions):
-    """push should close the gripper, approach the object at its resting
-    height, then slide across to the destination without ever lifting it."""
+    """push should level the gripper flat, approach the object at its
+    resting height, then slide across to the destination at that same
+    height and orientation without ever lifting it."""
 
     def object_info_side_effect(name):
         if name == "red_cube":
@@ -685,6 +688,7 @@ def test_push_slides_object_to_destination_at_same_height(actions):
         return None
 
     actions.get_object_info = MagicMock(side_effect=object_info_side_effect)
+    actions.get_orientation_preset = MagicMock(return_value={"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.call_move_service = MagicMock(return_value={"success": True})
     actions.update_object_pose = MagicMock(return_value=True)
@@ -697,9 +701,13 @@ def test_push_slides_object_to_destination_at_same_height(actions):
     approach_call = actions.call_move_service.call_args_list[0][0]
     push_call = actions.call_move_service.call_args_list[1][0]
 
-    # both moves stay at the object's own resting height - never lifted
-    assert approach_call == (0.0, 0.0, 0.01)
+    # both moves stay at the object's own resting height - never lifted -
+    # and gripper leveled flat (has_orientation True, all angles 0)
+    assert approach_call[0:3] == (0.0, 0.0, 0.01)
+    assert approach_call[3] is True
+    assert approach_call[4:7] == (0.0, 0.0, 0.0)
     assert push_call[0:3] == (0.5, 0.1, 0.01)
+    assert push_call[3] is True
 
     actions.update_object_pose.assert_called_once_with(
         "red_cube", 0.5, 0.1, 0.01, {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
@@ -745,9 +753,10 @@ def test_throw_requires_destination(actions):
     assert result is False
 
 
-def test_throw_single_fast_move_then_release(actions):
-    """throw should be a single move to the release point followed by an
-    immediate release, unlike dropoff's two-stage hover-then-lower."""
+def test_throw_winds_up_then_pitches_then_releases(actions):
+    """throw should wind up (retreat back and up) then pitch fast to the
+    release point and release immediately - not dropoff's careful
+    hover-then-lower-then-release staging."""
 
     actions.held_object = "red_cube"
     actions.get_object_info = MagicMock(return_value={
@@ -762,7 +771,7 @@ def test_throw_single_fast_move_then_release(actions):
     result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
     assert result is True
-    actions.call_move_service.assert_called_once()
+    assert actions.call_move_service.call_count == 2
     actions.detach_object.assert_called_once_with("red_cube")
     assert actions.held_object is None
 
@@ -821,6 +830,7 @@ def test_push_with_direction(actions):
         "pose": {"position": {"x": 1.0, "y": 0.0, "z": 0.01}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
     })
+    actions.get_orientation_preset = MagicMock(return_value={"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.call_move_service = MagicMock(return_value={"success": True})
     actions.update_object_pose = MagicMock(return_value=True)
@@ -829,7 +839,7 @@ def test_push_with_direction(actions):
 
     assert result is True
     push_call = actions.call_move_service.call_args_list[1][0]
-    assert push_call == (1.3, 0.0, 0.01)
+    assert push_call[0:3] == (1.3, 0.0, 0.01)
 
 
 def test_push_fails_on_unknown_direction(actions):
@@ -862,7 +872,18 @@ def test_throw_with_direction(actions):
     result = actions.handlers['throw']({"target": "red_cube", "direction": "left", "distance": 0.3})
 
     assert result is True
-    release_call = actions.call_move_service.call_args_list[0][0]
+    assert actions.call_move_service.call_count == 2
+
+    windup_call = actions.call_move_service.call_args_list[0][0]
+    release_call = actions.call_move_service.call_args_list[1][0]
+
+    # throw direction is (0, 1) (origin (1,0) -> release (1, 0.3)); windup
+    # retreats the opposite way (0, -1) by wind_up_distance (default 0.15),
+    # and rises by wind_up_height (default 0.1) above the origin's z (0.05)
+    assert windup_call[0] == pytest.approx(1.0)
+    assert windup_call[1] == pytest.approx(-0.15)
+    assert windup_call[2] == pytest.approx(0.15)
+
     # left = bearing (1,0) rotated +90 degrees -> (0,1), scaled by distance
     assert release_call[0] == pytest.approx(1.0)
     assert release_call[1] == pytest.approx(0.3)

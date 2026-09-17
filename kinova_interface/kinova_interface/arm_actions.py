@@ -602,9 +602,11 @@ class ArmActions:
 
     def _handle_push(self, params):
         """Slide an object to a destination by contact, without ever
-        grasping or lifting it - the gripper partially closes to act as a
-        flat pusher, moves to the object at its resting height, then slides
-        across to the destination at that same height.
+        grasping or lifting it - levels the gripper flat and parallel to
+        the table, approaches the object at its resting height (plus an
+        optional 'height_offset') with the gripper open, partially closes
+        it to act as a flat pusher once already in position, then slides
+        across to the destination at that same height and orientation.
 
         Where to push it is either a named 'destination' object, or a
         'direction' ('forward'/'backward'/'left'/'right', relative to the
@@ -640,32 +642,59 @@ class ArmActions:
                 return False
             dx, dy = offset
 
+        orientation_name = params.get('orientation', 'facing_forward')
+        orientation = self.resolve_orientation(orientation_name)
+        if orientation is None:
+            self.get_logger().error(f"Unknown orientation preset '{orientation_name}' for push")
+            return False
+        has_orientation, roll, pitch, yaw = orientation
+
         close_pos = float(params.get('close_position', 0.5))
         motion_params = self.build_motion_params(params.get('speed'))
-        push_z = target_info['pose']['position']['z']
+        # height_offset defaults to 0.0 (unchanged from before) rather than
+        # a lower value - this exact height, close to the real table
+        # surface, is what caused push's collision failure during testing;
+        # tune it down incrementally on hardware rather than guess a new
+        # default blind.
+        push_z = target_info['pose']['position']['z'] + float(params.get('height_offset', 0.0))
 
-        # 1. Partially close the gripper to act as a flat pushing surface
+        # 1. Open the gripper before approaching - closing it first risks
+        # the fingers colliding with the table at this low, near-surface
+        # height (this broke push during testing: a half-closed gripper
+        # made an otherwise-reachable goal pose collide with the table)
+        rg = self.call_move_gripper_service(0.0)
+        if not (rg and rg['success']):
+            self.get_logger().error('Failed to open gripper before push approach')
+            return False
+
+        # 2. Move to the object at its resting height, gripper leveled
+        # flat and parallel to the table for a consistent pushing face
+        r = self.call_move_service(tx, ty, push_z, has_orientation, roll, pitch, yaw, motion_params)
+        if not (r and r['success']):
+            self.get_logger().error('Failed to approach push target')
+            return False
+
+        # 3. Now in position - partially close the gripper to act as a
+        # flat pushing surface
         rg = self.call_move_gripper_service(close_pos)
         if not (rg and rg['success']):
             self.get_logger().error('Failed to set gripper for push')
             return False
 
-        # 2. Move to the object at its resting height
-        r = self.call_move_service(tx, ty, push_z, motion_params=motion_params)
-        if not (r and r['success']):
-            self.get_logger().error('Failed to approach push target')
-            return False
-
-        # 3. Slide it to the destination, staying at the same height - it's
-        # pushed by contact the whole way, never grasped or lifted
-        r = self.call_move_service(dx, dy, push_z, motion_params=motion_params)
+        # 4. Slide it to the destination, staying at the same height and
+        # orientation - it's pushed by contact the whole way, never
+        # grasped or lifted
+        r = self.call_move_service(dx, dy, push_z, has_orientation, roll, pitch, yaw, motion_params)
         if not (r and r['success']):
             self.get_logger().error('Failed to push to destination')
             return False
 
-        # 4. It moved by contact, not attachment - update its known position
+        # 5. It moved by contact, not attachment - update its known position.
+        # Recorded at its real resting height, not push_z (which may include
+        # 'height_offset' - an approach-height tweak, not the object's
+        # actual height off the table).
         orient = target_info['pose']['orientation']
-        if not self.update_object_pose(target_name, dx, dy, push_z, orient):
+        if not self.update_object_pose(target_name, dx, dy, target_info['pose']['position']['z'], orient):
             self.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
 
         where = f"to '{destination_name}'" if destination_name else f"{direction}"
@@ -673,12 +702,18 @@ class ArmActions:
         return True
 
     def _handle_throw(self, params):
-        """Release the held object mid-motion toward a destination, unlike
-        dropoff's careful hover-then-lower-then-release staging - a single
-        fast move followed by an immediate release. Assumes the object named
-        by 'target' is already grasped - fails cleanly rather than guessing
-        if it isn't. The landing position recorded afterward is approximate,
-        since the object leaves the gripper before the arm finishes moving.
+        """Wind up like a pitch, then release the held object mid-motion
+        toward a destination: retreat back and up from where it was
+        grasped, then sweep fast through that point and on to the release
+        point, opening the gripper on arrival - closer to an overhand
+        throw than dropoff's careful hover-then-lower-then-release
+        staging. Assumes the object named by 'target' is already grasped -
+        fails cleanly rather than guessing if it isn't. The landing
+        position recorded afterward is approximate, since the object
+        leaves the gripper before the arm finishes moving, and the
+        wind-up/pitch are each their own planned motion rather than one
+        continuous accelerating swing - a genuine dynamic throw is beyond
+        what discrete pose-to-pose MoveIt planning can do.
 
         Where to throw it is either a named 'destination' object, or a
         'direction' ('forward'/'backward'/'left'/'right', relative to the
@@ -696,9 +731,15 @@ class ArmActions:
             self.get_logger().error("throw action requires either 'destination' or 'direction'")
             return False
 
+        target_info = self.get_object_info(target_name)
+        if not target_info:
+            self.get_logger().error(f"Could not resolve held object '{target_name}' for throw")
+            return False
+        origin = target_info['pose']['position']
+
         open_pos = float(params.get('open_position', 0.0))
         release_clearance = float(params.get('release_clearance', 0.15))
-        motion_params = self.build_motion_params(params.get('speed', 0.9))
+        motion_params = self.build_motion_params(params.get('speed', 1.0))
 
         if destination_name:
             dest_info = self.get_object_info(destination_name)
@@ -708,29 +749,46 @@ class ArmActions:
             release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
             release_top_z = dest_info['pose']['position']['z'] + self.object_half_height(dest_info['shape'])
         else:
-            target_info = self.get_object_info(target_name)
-            if not target_info:
-                self.get_logger().error(f"Could not resolve held object '{target_name}' for throw")
-                return False
             distance = float(params.get('distance', 0.2))
-            ref_x, ref_y = target_info['pose']['position']['x'], target_info['pose']['position']['y']
-            offset = self.resolve_direction_offset(ref_x, ref_y, direction, distance)
+            offset = self.resolve_direction_offset(origin['x'], origin['y'], direction, distance)
             if offset is None:
                 self.get_logger().error(f"Unknown throw direction '{direction}'")
                 return False
             release_x, release_y = offset
             # No destination object to measure height from - release at
             # roughly the height the object started at, plus clearance.
-            release_top_z = target_info['pose']['position']['z']
+            release_top_z = origin['z']
 
-        # 1. Move fast toward a release point above the destination - one
-        # motion, not dropoff's two-stage hover-then-descend
+        # Wind-up: retreat back (and up) along the reverse of the throw
+        # direction, like cocking the arm back before a pitch
+        throw_dx, throw_dy = release_x - origin['x'], release_y - origin['y']
+        throw_len = math.hypot(throw_dx, throw_dy)
+        if throw_len < 1e-6:
+            throw_dx, throw_dy = 1.0, 0.0
+        else:
+            throw_dx, throw_dy = throw_dx / throw_len, throw_dy / throw_len
+
+        wind_up_distance = float(params.get('wind_up_distance', 0.15))
+        wind_up_height = float(params.get('wind_up_height', 0.1))
+        windup_x = origin['x'] - throw_dx * wind_up_distance
+        windup_y = origin['y'] - throw_dy * wind_up_distance
+        windup_z = origin['z'] + wind_up_height
+
+        windup_motion = self.build_motion_params(0.5)
+        r = self.call_move_service(windup_x, windup_y, windup_z, motion_params=windup_motion)
+        if not (r and r['success']):
+            self.get_logger().error('Failed to wind up for throw')
+            return False
+
+        # Pitch: sweep fast through the original point and on to the
+        # release point - one motion, not dropoff's two-stage
+        # hover-then-descend
         r = self.call_move_service(release_x, release_y, release_top_z + release_clearance, motion_params=motion_params)
         if not (r and r['success']):
             self.get_logger().error('Failed to move to release point for throw')
             return False
 
-        # 2. Release immediately - the object leaves the gripper mid-motion
+        # Release immediately - the object leaves the gripper mid-motion
         rg = self.call_move_gripper_service(open_pos)
         if not (rg and rg['success']):
             self.get_logger().error('Failed to release gripper during throw')
