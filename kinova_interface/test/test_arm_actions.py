@@ -670,9 +670,11 @@ def test_push_requires_target_and_destination(actions):
 
 
 def test_push_slides_object_to_destination_at_same_height(actions):
-    """push should level the gripper flat, approach the object at its
-    resting height, then slide across to the destination at that same
-    height and orientation without ever lifting it."""
+    """push should approach the object at its resting height, then slide
+    across to the destination at that same height without ever lifting
+    it, and without forcing any orientation by default (unconstrained,
+    like pickup - forcing one can make an otherwise-reachable point
+    infeasible for the planner)."""
 
     def object_info_side_effect(name):
         if name == "red_cube":
@@ -688,7 +690,7 @@ def test_push_slides_object_to_destination_at_same_height(actions):
         return None
 
     actions.get_object_info = MagicMock(side_effect=object_info_side_effect)
-    actions.get_orientation_preset = MagicMock(return_value={"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
+    actions.get_orientation_preset = MagicMock()
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.call_move_service = MagicMock(return_value={"success": True})
     actions.update_object_pose = MagicMock(return_value=True)
@@ -697,17 +699,17 @@ def test_push_slides_object_to_destination_at_same_height(actions):
 
     assert result is True
     assert actions.call_move_service.call_count == 2
+    actions.get_orientation_preset.assert_not_called()
 
     approach_call = actions.call_move_service.call_args_list[0][0]
     push_call = actions.call_move_service.call_args_list[1][0]
 
     # both moves stay at the object's own resting height - never lifted -
-    # and gripper leveled flat (has_orientation True, all angles 0)
+    # and orientation is left unconstrained (has_orientation False)
     assert approach_call[0:3] == (0.0, 0.0, 0.01)
-    assert approach_call[3] is True
-    assert approach_call[4:7] == (0.0, 0.0, 0.0)
+    assert approach_call[3] is False
     assert push_call[0:3] == (0.5, 0.1, 0.01)
-    assert push_call[3] is True
+    assert push_call[3] is False
 
     actions.update_object_pose.assert_called_once_with(
         "red_cube", 0.5, 0.1, 0.01, {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
@@ -830,7 +832,7 @@ def test_push_with_direction(actions):
         "pose": {"position": {"x": 1.0, "y": 0.0, "z": 0.01}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
     })
-    actions.get_orientation_preset = MagicMock(return_value={"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
+    actions.get_orientation_preset = MagicMock()
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.call_move_service = MagicMock(return_value={"success": True})
     actions.update_object_pose = MagicMock(return_value=True)
@@ -838,6 +840,7 @@ def test_push_with_direction(actions):
     result = actions.handlers['push']({"target": "red_cube", "direction": "forward", "distance": 0.3})
 
     assert result is True
+    actions.get_orientation_preset.assert_not_called()
     push_call = actions.call_move_service.call_args_list[1][0]
     assert push_call[0:3] == (1.3, 0.0, 0.01)
 
@@ -852,6 +855,29 @@ def test_push_fails_on_unknown_direction(actions):
     result = actions.handlers['push']({"target": "red_cube", "direction": "sideways"})
 
     assert result is False
+
+
+def test_push_applies_orientation_when_explicitly_given(actions):
+    """push should still hold a named orientation throughout, if one is
+    explicitly requested - it's just not forced by default."""
+
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 1.0, "y": 0.0, "z": 0.01}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.get_orientation_preset = MagicMock(return_value={"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.update_object_pose = MagicMock(return_value=True)
+
+    result = actions.handlers['push']({
+        "target": "red_cube", "direction": "forward", "distance": 0.2, "orientation": "facing_forward"
+    })
+
+    assert result is True
+    approach_call = actions.call_move_service.call_args_list[0][0]
+    assert approach_call[3] is True
+    assert approach_call[4:7] == (0.0, 0.0, 0.0)
 
 
 # throw() with 'direction' instead of 'destination'

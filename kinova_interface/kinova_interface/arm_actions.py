@@ -602,11 +602,14 @@ class ArmActions:
 
     def _handle_push(self, params):
         """Slide an object to a destination by contact, without ever
-        grasping or lifting it - levels the gripper flat and parallel to
-        the table, approaches the object at its resting height (plus an
-        optional 'height_offset') with the gripper open, partially closes
-        it to act as a flat pusher once already in position, then slides
-        across to the destination at that same height and orientation.
+        grasping or lifting it - approaches the object at its resting
+        height (plus an optional 'height_offset') with the gripper open,
+        partially closes it to act as a flat pusher once already in
+        position, then slides across to the destination at that same
+        height. Optionally holds a named 'orientation' throughout for a
+        level, consistent pushing face - not forced by default, since
+        constraining orientation can make an otherwise-reachable approach
+        point infeasible for the planner (see the note below).
 
         Where to push it is either a named 'destination' object, or a
         'direction' ('forward'/'backward'/'left'/'right', relative to the
@@ -642,10 +645,15 @@ class ArmActions:
                 return False
             dx, dy = offset
 
-        orientation_name = params.get('orientation', 'facing_forward')
-        orientation = self.resolve_orientation(orientation_name)
+        # No default orientation - forcing one removes an entire degree of
+        # freedom from the planner, and testing showed 'facing_forward'
+        # specifically is not reachable at some real approach points near
+        # the table (pickup succeeds at the same points precisely because
+        # it leaves orientation unconstrained). Only apply one if the
+        # caller explicitly asks for it.
+        orientation = self.resolve_orientation(params.get('orientation'))
         if orientation is None:
-            self.get_logger().error(f"Unknown orientation preset '{orientation_name}' for push")
+            self.get_logger().error(f"Unknown orientation preset '{params.get('orientation')}' for push")
             return False
         has_orientation, roll, pitch, yaw = orientation
 
@@ -667,8 +675,8 @@ class ArmActions:
             self.get_logger().error('Failed to open gripper before push approach')
             return False
 
-        # 2. Move to the object at its resting height, gripper leveled
-        # flat and parallel to the table for a consistent pushing face
+        # 2. Move to the object at its resting height, holding the given
+        # orientation if one was requested (unconstrained by default)
         r = self.call_move_service(tx, ty, push_z, has_orientation, roll, pitch, yaw, motion_params)
         if not (r and r['success']):
             self.get_logger().error('Failed to approach push target')
