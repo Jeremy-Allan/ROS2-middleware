@@ -94,6 +94,7 @@ def test_node_initialises(node):
     assert node.parser is not None
     assert node.status_pub is not None
     assert node.execute_srv is not None
+    assert node.reset_srv is not None
 
     assert node.arm_actions is not None
     assert set(node.arm_actions.handlers.keys()) == {
@@ -300,3 +301,39 @@ def test_execute_recipe_stops_at_first_failure(node):
 
     assert result is False
     node.arm_actions.handlers['move_arm'].assert_not_called()
+
+
+# reset_environment_callback()
+def test_reset_environment_callback_success(node):
+    """The service handler should delegate to arm_actions.reset_environment()
+    and reflect its result."""
+
+    request = MagicMock()
+    response = MagicMock()
+
+    node.arm_actions.reset_environment = MagicMock(
+        return_value=(True, "Environment reset: 3 object(s), 1 obstacle(s) restored to configured defaults")
+    )
+
+    result = node.reset_environment_callback(request, response)
+
+    assert result == response
+    assert response.success is True
+    assert "restored to configured defaults" in response.message
+
+
+def test_reset_environment_callback_failure(node):
+    """A failed reset should still return a response, not raise."""
+
+    request = MagicMock()
+    response = MagicMock()
+
+    node.arm_actions.reset_environment = MagicMock(
+        return_value=(False, "Environment reset service not available")
+    )
+
+    result = node.reset_environment_callback(request, response)
+
+    assert result == response
+    assert response.success is False
+    assert response.message == "Environment reset service not available"

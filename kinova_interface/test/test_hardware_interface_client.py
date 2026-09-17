@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from std_srvs.srv import Trigger
 from example_interfaces.msg import Bool
 from kinova_interfaces.msg import ExtendedStatus
-from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove
+from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
 
 from moveit_msgs.action import MoveGroup
 from control_msgs.action import GripperCommand
@@ -277,6 +277,102 @@ def test_handle_home_arm_failure_to_start(node):
 
     assert result.success is False
     assert result.message == "Failed to initiate home movement"
+
+
+# send_joint_goal() / handle_joint_move()
+def test_send_joint_goal_custom_positions(node):
+    """send_joint_goal should build the same kind of joint-constrained goal
+    as send_home_goal, for arbitrary target positions."""
+
+    node.arm_client.wait_for_server.return_value = True
+    fake_future = MagicMock()
+    node.arm_client.send_goal_async.return_value = fake_future
+
+    positions = [0.5, 0.0, 1.0, 1.5708, 1.5708, 0.0]
+    result = node.send_joint_goal(positions)
+
+    assert result is True
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    constraints = goal.request.goal_constraints[0].joint_constraints
+
+    assert len(constraints) == 6
+    assert constraints[0].joint_name == "joint_1"
+    assert constraints[0].position == 0.5
+    assert constraints[2].joint_name == "joint_3"
+    assert constraints[2].position == 1.0
+
+
+def test_send_home_goal_matches_send_joint_goal_defaults(node):
+    """send_home_goal should just be send_joint_goal with home's fixed
+    positions - refactored from its own inline copy of the same logic."""
+
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    node.send_home_goal()
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    positions = [jc.position for jc in goal.request.goal_constraints[0].joint_constraints]
+
+    assert positions == node.HOME_JOINT_POSITIONS
+
+
+def test_handle_joint_move_waits_by_default(node):
+    """handle_joint_move should wait for completion when wait_for_completion
+    is True, same blocking pattern as the other arm-move handlers."""
+
+    node.send_joint_goal = MagicMock(return_value=True)
+    node.arm_movement_finished = MagicMock()
+    node.last_action_successful = True
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0, 0.0, 1.0, 1.5708, 1.5708, 0.0]
+    request.wait_for_completion = True
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is True
+    assert result.message == "Joint move complete"
+    node.arm_movement_finished.wait.assert_called_once()
+
+
+def test_handle_joint_move_fire_and_forget(node):
+    """With wait_for_completion False, handle_joint_move should return as
+    soon as the goal is accepted, without waiting or touching
+    current_state (the arm is still genuinely moving at that point)."""
+
+    node.send_joint_goal = MagicMock(return_value=True)
+    node.arm_movement_finished = MagicMock()
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0, 0.0, 0.5, 1.5708, 1.5708, 0.0]
+    request.wait_for_completion = False
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is True
+    assert result.message == "Joint move goal accepted (not waiting for completion)"
+    node.arm_movement_finished.wait.assert_not_called()
+    assert node.current_state == ExtendedStatus.STATE_BUSY
+
+
+def test_handle_joint_move_failure_to_start(node):
+    """Test joint move when the action cannot be started at all."""
+
+    node.send_joint_goal = MagicMock(return_value=False)
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0] * 6
+    request.wait_for_completion = True
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is False
+    assert result.message == "Failed to initiate joint move"
 
 # handle_move_arm()
 def test_handle_move_arm_success(node):
@@ -752,6 +848,10 @@ def test_result_callback_success(node):
 
     assert node.last_action_successful is True
     assert node.arm_movement_finished.is_set()
+    # current_state must reset even with nobody waiting (a fire-and-forget
+    # joint move has no finalize_service_status caller to do this instead)
+    assert node.current_state == ExtendedStatus.STATE_IDLE
+    node.status_pub.publish.assert_called_once()
 
 
 def test_result_callback_failure(node):
@@ -770,6 +870,8 @@ def test_result_callback_failure(node):
 
     assert node.last_action_successful is False
     assert node.arm_movement_finished.is_set()
+    assert node.current_state == ExtendedStatus.STATE_IDLE
+    assert node.status_text == "Movement failed"
 
     node.handle_moveit_failure.assert_called_once()
 

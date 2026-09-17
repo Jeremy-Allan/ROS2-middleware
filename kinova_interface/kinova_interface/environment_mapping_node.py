@@ -8,6 +8,7 @@ from pathlib import Path
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
 from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose
+from std_srvs.srv import Trigger
 from moveit_msgs.msg import PlanningScene, CollisionObject, AttachedCollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
 from shape_msgs.msg import SolidPrimitive
@@ -66,7 +67,8 @@ class EnvironmentMappingNode(Node):
         self.scene_client = self.create_client(ApplyPlanningScene, '/apply_planning_scene', callback_group=self.scene_cb_group)
         self.attach_srv = self.create_service(AttachObject, '/attach_object', self.attach_object_callback, callback_group=self.scene_cb_group)
         self.detach_srv = self.create_service(DetachObject, '/detach_object', self.detach_object_callback, callback_group=self.scene_cb_group)
-        
+        self.reset_srv = self.create_service(Trigger, '/reset_environment_scene', self.reset_environment_callback, callback_group=self.scene_cb_group)
+
         self.attached_objects = set() 
 
 
@@ -394,6 +396,32 @@ class EnvironmentMappingNode(Node):
             response.message = f"Failed to detach '{obj_id}'"
         return response
 
+    def reset_environment_callback(self, request, response):
+        """Reload objects/obstacles from their config files and republish a
+        fresh planning scene from them - clears any currently-attached
+        object and any pose drift from earlier pickup/dropoff/push/throw
+        actions, without needing a full middleware restart. This is the
+        scene-side half of a reset; json_parser_node's public
+        '/reset_environment' service calls this and also clears its own
+        held-object tracking to match."""
+        self.get_logger().info("Resetting environment to configured defaults...")
+        self.static_objects = self.load_object_dictionary()
+        self.obstacles = self.load_obstacles_dictionary()
+
+        if self.apply_full_scene():
+            response.success = True
+            response.message = f"Environment reset: {len(self.static_objects)} object(s), {len(self.obstacles)} obstacle(s) restored to configured defaults"
+            self.get_logger().info(response.message)
+        else:
+            response.success = False
+            response.message = "Failed to apply the reset planning scene"
+            self.get_logger().error(response.message)
+
+        self.command_success = response.success
+        self.status_text = response.message
+        self.publish_status()
+        return response
+
     # --- Quaternion helpers for re-expressing a pose in another frame ---
     # Same small-local-helper style as the euler/quaternion methods already
     # duplicated in hardware_interface_client.py, not shared into a util module.
@@ -580,17 +608,34 @@ class EnvironmentMappingNode(Node):
 
         self.get_logger().info('MoveIt ready. Publishing collision objects to planning scene...')
         time.sleep(1.0)
+        self.apply_full_scene()
 
+    def apply_full_scene(self):
+        """Build a fresh scene from the current self.obstacles/self.static_objects
+        and apply it, clearing any currently-attached object back out first so
+        everything ends up as a plain world object at its configured pose (a
+        no-op at startup, since nothing is attached yet). Re-adding an object
+        under the same id updates its pose, so this is also what the startup
+        publish and /reset_environment both use. Returns True on success."""
         scene = PlanningScene()
         scene.is_diff = True
 
+        if self.attached_objects:
+            scene.robot_state.is_diff = True
+            for obj_id in self.attached_objects:
+                detach_marker = AttachedCollisionObject()
+                detach_marker.link_name = "tool_frame"
+                detach_marker.object.id = obj_id
+                detach_marker.object.operation = CollisionObject.REMOVE
+                scene.robot_state.attached_collision_objects.append(detach_marker)
+
         # Add obstacles from obstacles dictionary
-        for obs_id, obs_data in self.obstacles.items(): 
+        for obs_id, obs_data in self.obstacles.items():
             obj = self.build_collision_object(obs_id, obs_data)
             if obj is not None:
                 scene.world.collision_objects.append(obj)
                 self.get_logger().info(f"Adding obstacle: '{obs_id}'")
-        
+
         # Add objects from object dictionary
         for obj_id, obj_data in self.static_objects.items():
             obj = self.build_collision_object(obj_id, obj_data)
@@ -602,10 +647,15 @@ class EnvironmentMappingNode(Node):
         request.scene = scene
 
         future = self.scene_client.call_async(request)
+        start = time.time()
         while rclpy.ok() and not future.done():
+            if time.time() - start > 5.0:
+                self.get_logger().error('Timed out waiting for apply_planning_scene (full scene)')
+                return False
             time.sleep(0.1)
 
         if future.result() is not None and future.result().success:
+            self.attached_objects.clear()
             total = len(self.obstacles) + len(self.static_objects)
             self.get_logger().info(f'Planning scene updated with {total} collision objects.')
             for obs_id, obs_data in self.obstacles.items():
@@ -614,10 +664,10 @@ class EnvironmentMappingNode(Node):
             for obj_id, obj_data in self.static_objects.items():
                 pos = obj_data['pose']['position']
                 self.get_logger().info(f"  Object '{obj_id}' at x={pos['x']}, y={pos['y']}, z={pos['z']}")
-            
-            self.get_logger().info(f'Planning scene updated with {len(self.obstacles)} obstacle(s).')
+            return True
         else:
             self.get_logger().error('Failed to apply planning scene.')
+            return False
 
 
 def main(args=None):

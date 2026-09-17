@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from unittest.mock import MagicMock, patch
@@ -55,6 +57,7 @@ def test_actions_creates_clients_and_handlers(actions):
     assert actions.attach_client is not None
     assert actions.detach_client is not None
     assert actions.update_pose_client is not None
+    assert actions.reset_scene_client is not None
 
     assert set(actions.handlers.keys()) == {
         'home', 'move_arm', 'relative_move', 'gripper', 'pickup', 'dropoff',
@@ -755,25 +758,50 @@ def test_throw_requires_destination(actions):
     assert result is False
 
 
-def test_throw_winds_up_then_pitches_then_releases(actions):
-    """throw should wind up (retreat back and up) then pitch fast to the
-    release point and release immediately - not dropoff's careful
-    hover-then-lower-then-release staging."""
+def test_throw_faces_winds_up_and_flings_then_releases(actions):
+    """throw should face the throw direction (home's pose rotated at
+    joint_1), wind up the elbow (joint_3) back, then fling it forward
+    without waiting for completion, releasing the gripper mid-swing -
+    not dropoff's careful hover-then-lower-then-release staging."""
 
     actions.held_object = "red_cube"
     actions.get_object_info = MagicMock(return_value={
         "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
     })
-    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
 
-    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+    with patch("kinova_interface.arm_actions.time.sleep") as mock_sleep:
+        result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
     assert result is True
-    assert actions.call_move_service.call_count == 2
+    assert actions.call_joint_move_service.call_count == 3
+    mock_sleep.assert_called_once_with(0.25)
+
+    face_args, _ = actions.call_joint_move_service.call_args_list[0]
+    windup_args, _ = actions.call_joint_move_service.call_args_list[1]
+    fling_args, fling_kwargs = actions.call_joint_move_service.call_args_list[2]
+
+    face_pose, windup_pose, fling_pose = face_args[0], windup_args[0], fling_args[0]
+
+    # destination == target here (same mocked get_object_info return), so
+    # the release point is (0.5, 0.1) - the bearing from the arm's base
+    expected_yaw = math.atan2(0.1, 0.5)
+    assert face_pose[0] == pytest.approx(expected_yaw)
+    assert face_pose[2] == pytest.approx(1.5708)  # home's elbow angle, unmodified
+
+    # windup/fling keep the same faced yaw, only the elbow (index 2) moves
+    assert windup_pose[0] == pytest.approx(expected_yaw)
+    assert windup_pose[2] == pytest.approx(1.5708 - 0.7854)
+    assert fling_pose[0] == pytest.approx(expected_yaw)
+    assert fling_pose[2] == pytest.approx(1.5708 + 0.7854)
+
+    # the fling is fired without waiting for it to finish
+    assert fling_kwargs.get('wait_for_completion') is False
+
     actions.detach_object.assert_called_once_with("red_cube")
     assert actions.held_object is None
 
@@ -883,38 +911,37 @@ def test_push_applies_orientation_when_explicitly_given(actions):
 # throw() with 'direction' instead of 'destination'
 def test_throw_with_direction(actions):
     """throw should accept 'direction'+'distance' as an alternative to
-    'destination', computed from the held object's own original bearing."""
+    'destination' when deciding which way to face, computed from the held
+    object's own original bearing."""
 
     actions.held_object = "red_cube"
     actions.get_object_info = MagicMock(return_value={
         "pose": {"position": {"x": 1.0, "y": 0.0, "z": 0.05}, "orientation": {}},
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
     })
-    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
 
-    result = actions.handlers['throw']({"target": "red_cube", "direction": "left", "distance": 0.3})
+    with patch("kinova_interface.arm_actions.time.sleep"):
+        result = actions.handlers['throw']({"target": "red_cube", "direction": "left", "distance": 0.3})
 
     assert result is True
-    assert actions.call_move_service.call_count == 2
+    assert actions.call_joint_move_service.call_count == 3
 
-    windup_call = actions.call_move_service.call_args_list[0][0]
-    release_call = actions.call_move_service.call_args_list[1][0]
+    # left = bearing (1,0) rotated +90 degrees -> (0,1), scaled by distance,
+    # giving release point (1.0, 0.3); face yaw points at that from the arm's base
+    expected_yaw = math.atan2(0.3, 1.0)
+    face_pose = actions.call_joint_move_service.call_args_list[0][0][0]
+    assert face_pose[0] == pytest.approx(expected_yaw)
 
-    # throw direction is (0, 1) (origin (1,0) -> release (1, 0.3)); windup
-    # retreats the opposite way (0, -1) by wind_up_distance (default 0.15),
-    # and rises by wind_up_height (default 0.1) above the origin's z (0.05)
-    assert windup_call[0] == pytest.approx(1.0)
-    assert windup_call[1] == pytest.approx(-0.15)
-    assert windup_call[2] == pytest.approx(0.15)
-
-    # left = bearing (1,0) rotated +90 degrees -> (0,1), scaled by distance
-    assert release_call[0] == pytest.approx(1.0)
-    assert release_call[1] == pytest.approx(0.3)
-    # height is the object's own original height (0.05) + release_clearance (default 0.15)
-    assert release_call[2] == pytest.approx(0.2)
+    actions.update_object_pose.assert_called_once()
+    pose_args = actions.update_object_pose.call_args[0]
+    assert pose_args[0] == "red_cube"
+    assert pose_args[1] == pytest.approx(1.0)
+    assert pose_args[2] == pytest.approx(0.3)
+    assert pose_args[3] == pytest.approx(0.05)
 
 
 def test_throw_fails_on_unknown_direction(actions):
@@ -927,3 +954,84 @@ def test_throw_fails_on_unknown_direction(actions):
     result = actions.handlers['throw']({"target": "red_cube", "direction": "sideways"})
 
     assert result is False
+
+
+def test_throw_fails_if_fling_does_not_start(actions):
+    """If the fling itself can't even be started (e.g. the joint move
+    service is unavailable), throw should fail cleanly rather than
+    releasing the gripper on an arm that never actually swung."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    # face and windup succeed, but the fling itself fails to start
+    actions.call_joint_move_service = MagicMock(side_effect=[
+        {"success": True},
+        {"success": True},
+        None,
+    ])
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+
+    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+
+    assert result is False
+    actions.call_move_gripper_service.assert_not_called()
+    assert actions.held_object == "red_cube"
+
+
+# reset_environment()
+def test_reset_environment_success(actions):
+    """reset_environment should call /reset_environment_scene and clear
+    locally-tracked held-object state."""
+
+    actions.held_object = "red_cube"
+    actions.reset_scene_client.wait_for_service = MagicMock(return_value=True)
+
+    response = MagicMock()
+    response.success = True
+    response.message = "Environment reset: 3 object(s), 1 obstacle(s) restored to configured defaults"
+    future = MagicMock()
+    future.done.return_value = True
+    future.result.return_value = response
+    actions.reset_scene_client.call_async = MagicMock(return_value=future)
+
+    success, message = actions.reset_environment()
+
+    assert success is True
+    assert message == response.message
+    assert actions.held_object is None
+
+
+def test_reset_environment_service_unavailable(actions):
+    """reset_environment should fail cleanly if the scene-reset service
+    isn't up, without raising."""
+
+    actions.reset_scene_client.wait_for_service = MagicMock(return_value=False)
+
+    success, message = actions.reset_environment()
+
+    assert success is False
+    assert "not available" in message
+
+
+def test_reset_environment_clears_held_object_even_on_failure(actions):
+    """Even if the scene-side reset fails, local held-object tracking
+    should still be cleared - a reset request means 'start over'."""
+
+    actions.held_object = "red_cube"
+    actions.reset_scene_client.wait_for_service = MagicMock(return_value=True)
+
+    response = MagicMock()
+    response.success = False
+    response.message = "Failed to apply the reset planning scene"
+    future = MagicMock()
+    future.done.return_value = True
+    future.result.return_value = response
+    actions.reset_scene_client.call_async = MagicMock(return_value=future)
+
+    success, message = actions.reset_environment()
+
+    assert success is False
+    assert actions.held_object is None

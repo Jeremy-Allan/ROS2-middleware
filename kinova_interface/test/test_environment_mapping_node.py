@@ -15,6 +15,7 @@ from kinova_interfaces.srv import (
 from kinova_interfaces.msg import ExtendedStatus
 
 from moveit_msgs.msg import CollisionObject
+from std_srvs.srv import Trigger
 
 """
 Test with: 
@@ -494,3 +495,54 @@ def test_publish_planning_scene_success(node):
     )
 
     assert collision_object.id == "table"
+
+# reset_environment_callback()
+# Note: isolated from the 'node' fixture for the same reason as the table
+# bounds tests above - the fixture can't currently construct a real node.
+def test_reset_environment_callback_success():
+    """reset_environment_callback should reload objects/obstacles from disk
+    and republish the scene from them."""
+
+    class FakeNode:
+        static_objects = {"box": {}}
+        obstacles = {"table": {}}
+        load_object_dictionary = MagicMock(return_value={"box": {}, "blue_cube": {}})
+        load_obstacles_dictionary = MagicMock(return_value={"table": {}})
+        apply_full_scene = MagicMock(return_value=True)
+        command_success = None
+        status_text = None
+        publish_status = MagicMock()
+
+    request = Trigger.Request()
+    response = Trigger.Response()
+
+    result = EnvironmentMappingNode.reset_environment_callback(FakeNode, request, response)
+
+    assert result.success is True
+    assert "2 object(s), 1 obstacle(s)" in result.message
+    FakeNode.load_object_dictionary.assert_called_once()
+    FakeNode.load_obstacles_dictionary.assert_called_once()
+    FakeNode.apply_full_scene.assert_called_once()
+    assert FakeNode.command_success is True
+
+
+def test_reset_environment_callback_scene_apply_failure():
+    """If applying the reloaded scene fails, the response should say so."""
+
+    class FakeNode:
+        static_objects = {}
+        obstacles = {}
+        load_object_dictionary = MagicMock(return_value={})
+        load_obstacles_dictionary = MagicMock(return_value={})
+        apply_full_scene = MagicMock(return_value=False)
+        command_success = None
+        status_text = None
+        publish_status = MagicMock()
+
+    request = Trigger.Request()
+    response = Trigger.Response()
+
+    result = EnvironmentMappingNode.reset_environment_callback(FakeNode, request, response)
+
+    assert result.success is False
+    assert FakeNode.command_success is False

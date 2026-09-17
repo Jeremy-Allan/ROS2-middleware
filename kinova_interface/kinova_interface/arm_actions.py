@@ -14,11 +14,13 @@ from kinova_interfaces.srv import (
     MoveArm,
     MoveGripper,
     RelativeMove,
+    JointMove,
     AttachObject,
     DetachObject,
     UpdateObjectPose,
 )
 from kinova_interfaces.msg import MotionParams
+from std_srvs.srv import Trigger
 
 
 class ArmActions:
@@ -38,6 +40,7 @@ class ArmActions:
         self.home_client = node.create_client(HomeArm, '/kinova_hardware_client/home_arm', callback_group=cb_group)
         self.move_arm_client = node.create_client(MoveArm, '/kinova_hardware_client/move_arm', callback_group=cb_group)
         self.move_gripper_client = node.create_client(MoveGripper, '/kinova_hardware_client/move_gripper', callback_group=cb_group)
+        self.joint_move_client = node.create_client(JointMove, '/kinova_hardware_client/joint_move', callback_group=cb_group)
         self.relative_move_client = node.create_client(RelativeMove, '/kinova_hardware_client/relative_move', callback_group=cb_group)
 
         # Service clients for coordinate/info fetching
@@ -50,6 +53,7 @@ class ArmActions:
         self.attach_client = node.create_client(AttachObject, '/attach_object', callback_group=cb_group)
         self.detach_client = node.create_client(DetachObject, '/detach_object', callback_group=cb_group)
         self.update_pose_client = node.create_client(UpdateObjectPose, '/update_object_pose', callback_group=cb_group)
+        self.reset_scene_client = node.create_client(Trigger, '/reset_environment_scene', callback_group=cb_group)
 
         # Dictionary of arm actions, keyed by recipe step 'action' name
         self.handlers = {
@@ -306,6 +310,29 @@ class ArmActions:
             self.get_logger().error(f"Failed to Move Gripper to: {position}: {response.message if response else 'no response'}")
             return None
 
+    def call_joint_move_service(self, joint_positions, motion_params=None, wait_for_completion=True):
+        """Move to an absolute joint-space target. With wait_for_completion
+        False, this returns as soon as the goal is accepted rather than
+        once the motion finishes - the caller (e.g. 'throw's fling) is then
+        responsible for whatever timing it needs, and won't know whether
+        the motion itself ultimately succeeded, only that it started."""
+        if not self.joint_move_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Joint Move service not available")
+            return None
+        req = JointMove.Request()
+        req.joint_positions = [float(p) for p in joint_positions]
+        req.wait_for_completion = wait_for_completion
+        req.motion_params = motion_params if motion_params is not None else MotionParams()
+
+        future = self.joint_move_client.call_async(req)
+        response = self.wait_for_future(future, '/kinova_hardware_client/joint_move')
+
+        if response and response.success:
+            return {'success': response.success, 'message': response.message}
+        else:
+            self.get_logger().error(f"Failed to move to joint positions {joint_positions}: {response.message if response else 'no response'}")
+            return None
+
     def attach_object(self, obj_id):
         """Remove object from planning scene (allow collision) via the environment mapping node."""
         if not self.attach_client.wait_for_service(timeout_sec=5.0):
@@ -370,6 +397,24 @@ class ArmActions:
         else:
             self.get_logger().error(f"Failed to update pose for {obj_id}: {response.message if response else 'no response'}")
             return False
+
+    def reset_environment(self):
+        """Reset the environment_mapping_node's objects/obstacles/scene back
+        to their configured defaults (undoing any pose drift from earlier
+        pickup/dropoff/push/throw actions), and clear locally-tracked
+        held-object state to match, without needing a full middleware
+        restart. Returns (success, message)."""
+        if not self.reset_scene_client.wait_for_service(timeout_sec=5.0):
+            return False, "Environment reset service not available"
+
+        future = self.reset_scene_client.call_async(Trigger.Request())
+        response = self.wait_for_future(future, '/reset_environment_scene')
+
+        self.held_object = None
+
+        if response and response.success:
+            return True, response.message
+        return False, response.message if response else "No response from /reset_environment_scene"
 
     def _handle_home(self, params):
         motion_params = self.build_motion_params(params.get('speed'))
@@ -709,23 +754,32 @@ class ArmActions:
         self.get_logger().info(f"Pushed '{target_name}' {where}")
         return True
 
-    def _handle_throw(self, params):
-        """Wind up like a pitch, then release the held object mid-motion
-        toward a destination: retreat back and up from where it was
-        grasped, then sweep fast through that point and on to the release
-        point, opening the gripper on arrival - closer to an overhand
-        throw than dropoff's careful hover-then-lower-then-release
-        staging. Assumes the object named by 'target' is already grasped -
-        fails cleanly rather than guessing if it isn't. The landing
-        position recorded afterward is approximate, since the object
-        leaves the gripper before the arm finishes moving, and the
-        wind-up/pitch are each their own planned motion rather than one
-        continuous accelerating swing - a genuine dynamic throw is beyond
-        what discrete pose-to-pose MoveIt planning can do.
+    # Mirrors HardwareInterfaceClient.HOME_JOINT_POSITIONS - duplicated here
+    # rather than shared across nodes/processes, the same way small
+    # per-node constants/helpers already are elsewhere in this codebase
+    # (e.g. the quaternion math duplicated in environment_mapping_node.py
+    # and hardware_interface_client.py). Update both if home's pose changes.
+    _HOME_JOINT_POSITIONS = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
+    _ELBOW_JOINT_INDEX = 2  # joint_3
 
-        Where to throw it is either a named 'destination' object, or a
-        'direction' ('forward'/'backward'/'left'/'right', relative to the
-        object's own original bearing from the arm) plus a 'distance'."""
+    def _handle_throw(self, params):
+        """A genuine joint-space throw: face the throw direction from
+        home's pose (rotating only joint_1, the base), wind up by rotating
+        the elbow (joint_3) back away from that direction, then fling it
+        forward past the faced pose, fast - releasing the gripper mid-swing
+        rather than waiting for the fling to finish. Assumes the object
+        named by 'target' is already grasped - fails cleanly rather than
+        guessing if it isn't.
+
+        The whole swing happens in a single vertical plane (only joint_1
+        and joint_3 move), aimed by 'destination' or 'direction' the same
+        way as other actions, but the actual distance thrown is governed
+        by 'wind_up_angle'/'fling_angle'/'speed', not by 'distance' alone -
+        those just decide which way the arm faces before swinging. Since
+        firing the fling without waiting for it to finish means we can't
+        confirm it actually succeeded, and the object leaves the gripper
+        mid-swing rather than at a controlled position, the landing
+        position recorded afterward is a rough approximation at best."""
         target_name = params.get('target')
         destination_name = params.get('destination')
         direction = params.get('direction')
@@ -745,65 +799,68 @@ class ArmActions:
             return False
         origin = target_info['pose']['position']
 
-        open_pos = float(params.get('open_position', 0.0))
-        release_clearance = float(params.get('release_clearance', 0.15))
-        motion_params = self.build_motion_params(params.get('speed', 1.0))
-
         if destination_name:
             dest_info = self.get_object_info(destination_name)
             if not dest_info:
                 self.get_logger().error(f"Could not resolve throw destination '{destination_name}'")
                 return False
             release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
-            release_top_z = dest_info['pose']['position']['z'] + self.object_half_height(dest_info['shape'])
         else:
-            distance = float(params.get('distance', 0.2))
+            distance = float(params.get('distance', 0.3))
             offset = self.resolve_direction_offset(origin['x'], origin['y'], direction, distance)
             if offset is None:
                 self.get_logger().error(f"Unknown throw direction '{direction}'")
                 return False
             release_x, release_y = offset
-            # No destination object to measure height from - release at
-            # roughly the height the object started at, plus clearance.
-            release_top_z = origin['z']
 
-        # Wind-up: retreat back (and up) along the reverse of the throw
-        # direction, like cocking the arm back before a pitch
-        throw_dx, throw_dy = release_x - origin['x'], release_y - origin['y']
-        throw_len = math.hypot(throw_dx, throw_dy)
-        if throw_len < 1e-6:
-            throw_dx, throw_dy = 1.0, 0.0
-        else:
-            throw_dx, throw_dy = throw_dx / throw_len, throw_dy / throw_len
+        # Face the throw direction: home's pose, rotated at the base
+        # (joint_1) to point along the release bearing from the arm's own
+        # origin - the single plane the whole swing happens in.
+        base_yaw = math.atan2(release_y, release_x)
+        face_pose = list(self._HOME_JOINT_POSITIONS)
+        face_pose[0] = base_yaw
 
-        wind_up_distance = float(params.get('wind_up_distance', 0.15))
-        wind_up_height = float(params.get('wind_up_height', 0.1))
-        windup_x = origin['x'] - throw_dx * wind_up_distance
-        windup_y = origin['y'] - throw_dy * wind_up_distance
-        windup_z = origin['z'] + wind_up_height
+        face_motion = self.build_motion_params(0.6)
+        r = self.call_joint_move_service(face_pose, motion_params=face_motion)
+        if not (r and r['success']):
+            self.get_logger().error('Failed to face throw direction')
+            return False
+
+        # Wind-up: rotate the elbow back, away from the throw direction,
+        # like cocking the arm before a pitch
+        wind_up_angle = float(params.get('wind_up_angle', 0.7854))  # 45 degrees
+        windup_pose = list(face_pose)
+        windup_pose[self._ELBOW_JOINT_INDEX] -= wind_up_angle
 
         windup_motion = self.build_motion_params(0.5)
-        r = self.call_move_service(windup_x, windup_y, windup_z, motion_params=windup_motion)
+        r = self.call_joint_move_service(windup_pose, motion_params=windup_motion)
         if not (r and r['success']):
             self.get_logger().error('Failed to wind up for throw')
             return False
 
-        # Pitch: sweep fast through the original point and on to the
-        # release point - one motion, not dropoff's two-stage
-        # hover-then-descend
-        r = self.call_move_service(release_x, release_y, release_top_z + release_clearance, motion_params=motion_params)
-        if not (r and r['success']):
-            self.get_logger().error('Failed to move to release point for throw')
+        # Fling: swing the elbow forward past the faced pose, fast - fire
+        # the motion without waiting for it to finish, so the release
+        # below happens mid-swing rather than only once the arm has stopped
+        fling_angle = float(params.get('fling_angle', 0.7854))
+        fling_pose = list(face_pose)
+        fling_pose[self._ELBOW_JOINT_INDEX] += fling_angle
+
+        fling_motion = self.build_motion_params(params.get('speed', 1.0))
+        if not self.call_joint_move_service(fling_pose, motion_params=fling_motion, wait_for_completion=False):
+            self.get_logger().error('Failed to start throw fling')
             return False
 
-        # Release immediately - the object leaves the gripper mid-motion
+        release_delay = float(params.get('release_delay', 0.25))
+        time.sleep(release_delay)
+
+        open_pos = float(params.get('open_position', 0.0))
         rg = self.call_move_gripper_service(open_pos)
         if not (rg and rg['success']):
             self.get_logger().error('Failed to release gripper during throw')
             return False
 
         self.detach_object(target_name)
-        self.update_object_pose(target_name, release_x, release_y, release_top_z, None)
+        self.update_object_pose(target_name, release_x, release_y, origin['z'], None)
         where = f"toward '{destination_name}'" if destination_name else direction
         self.get_logger().info(f"Threw '{target_name}' {where}")
 

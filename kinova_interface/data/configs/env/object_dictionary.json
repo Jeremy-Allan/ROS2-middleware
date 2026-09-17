@@ -1,12 +1,12 @@
 {
-  "red_cube": {
+  "box": {
     "pose": {
       "position": { "x": -0.3255, "y": -0.1235, "z": 0.01 },
       "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
     },
     "shape": {
       "type": "BOX",
-      "dimensions": [0.05, 0.05, 0.05]
+      "dimensions": [0.075, 0.107, 0.045]
     }
   },
   "blue_cube": {

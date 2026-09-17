@@ -22,7 +22,7 @@ from example_interfaces.srv import Trigger as ExampleTrigger
 
 # Custom telemetry message
 from kinova_interfaces.msg import ExtendedStatus
-from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove
+from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
 
 # Controller Manager Messages
 from controller_manager_msgs.srv import ListControllers
@@ -94,6 +94,7 @@ class HardwareInterfaceClient(Node):
         self.move_arm_srv = self.create_service(MoveArm, '~/move_arm', self.handle_move_arm, callback_group=self.callback_group )
         self.move_gripper_srv = self.create_service(MoveGripper, '~/move_gripper', self.handle_move_gripper,callback_group=self.callback_group)
         self.relative_move_srv = self.create_service(RelativeMove, '~/relative_move', self.handle_relative_move,callback_group=self.callback_group)
+        self.joint_move_srv = self.create_service(JointMove, '~/joint_move', self.handle_joint_move, callback_group=self.callback_group)
 
     # --- Telemetry Status Publisher ---
     def publish_status(self):
@@ -200,6 +201,35 @@ class HardwareInterfaceClient(Node):
             response.success = False
             response.message = "Failed to initiate home movement"
 
+        return self.finalize_service_status(response)
+
+    def handle_joint_move(self, request, response):
+        """Move to an absolute joint-space target. If wait_for_completion is
+        False, returns as soon as the goal is accepted rather than waiting
+        for the motion to finish - lets a caller (e.g. 'throw's fling) do
+        something else, like releasing the gripper, partway through the
+        motion instead of only after it completes. That also means a
+        fire-and-forget call can't report whether the motion itself
+        ultimately succeeded - only that it was accepted."""
+        joint_positions = list(request.joint_positions)
+        self.get_logger().info(f"Service Call: Joint Move to {joint_positions}")
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = f"Moving to joint targets {joint_positions}..."
+        self.publish_status()
+
+        if not self.send_joint_goal(joint_positions, motion_params=request.motion_params):
+            response.success = False
+            response.message = "Failed to initiate joint move"
+            return self.finalize_service_status(response)
+
+        if not request.wait_for_completion:
+            response.success = True
+            response.message = "Joint move goal accepted (not waiting for completion)"
+            return response
+
+        self.arm_movement_finished.wait()
+        response.success = self.last_action_successful
+        response.message = "Joint move complete" if response.success else "Arm movement failed"
         return self.finalize_service_status(response)
 
     def handle_move_arm(self, request, response):
@@ -416,16 +446,26 @@ class HardwareInterfaceClient(Node):
         future.add_done_callback(self.goal_response_callback)
         return True
 
+    # Home's fixed joint configuration - also the base pose 'throw' starts
+    # its wind-up/fling from, reoriented at joint_1 to face the throw
+    # direction and offset at joint_3 (the elbow) for the swing.
+    HOME_JOINT_POSITIONS = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
+
     def send_home_goal(self, motion_params=None):
+        return self.send_joint_goal(self.HOME_JOINT_POSITIONS, motion_params=motion_params)
+
+    def send_joint_goal(self, joint_positions, motion_params=None):
+        """Plan and execute a move to an absolute target for each of
+        joint_1..joint_6, the same JointConstraint-based approach send_home_goal
+        already used, just parameterized instead of hardcoded to home."""
         if not self.arm_client.wait_for_server(timeout_sec=5.0):
-            self.get_logger().error('Arm server not available (Home Goal)')
+            self.get_logger().error('Arm server not available (Joint Move)')
             return False
 
         goal_msg = MoveGroup.Goal()
         goal_msg.request.group_name = 'arm'
-        
+
         joint_names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
-        joint_positions = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
         tolerance = 0.01
 
         constraints = []
@@ -518,6 +558,15 @@ class HardwareInterfaceClient(Node):
                     self.get_logger().error(f'MoveIt failed with error code: {error_code}')
 
             self.handle_moveit_failure()
+
+        # Reset state here (not just in finalize_service_status, which only
+        # runs for a caller that waited) so a fire-and-forget joint move
+        # (e.g. 'throw's fling) doesn't leave current_state stuck on BUSY
+        # once it actually finishes with nobody waiting on it.
+        if not self.is_faulted:
+            self.current_state = ExtendedStatus.STATE_IDLE
+            self.status_text = "Movement complete!" if self.last_action_successful else "Movement failed"
+            self.publish_status()
 
         self.arm_movement_finished.set()
 

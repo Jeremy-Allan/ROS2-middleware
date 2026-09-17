@@ -8,6 +8,7 @@ from ament_index_python.packages import get_package_share_directory
 #Services
 from kinova_interfaces.srv import ExecuteRecipe
 from kinova_interfaces.msg import ExtendedStatus
+from std_srvs.srv import Trigger
 
 from kinova_interface.arm_actions import ArmActions
 
@@ -72,6 +73,7 @@ class JsonParserNode(Node):
         # 4. Create Service to execute recipes dynamically
         # Put this in the exec_cb_group so dynamic recipes don't overlap with static ones
         self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
+        self.reset_srv = self.create_service(Trigger, '/reset_environment', self.reset_environment_callback, callback_group=self.exec_cb_group)
 
         self.get_logger().info(f"JSON Parser Node Online.")
 
@@ -146,6 +148,21 @@ class JsonParserNode(Node):
             self.status_text = "Recipe execution failed"
             self.publish_status()
 
+        return response
+
+    def reset_environment_callback(self, request, response):
+        """Reset objects/obstacles back to their configured defaults and
+        clear held-object tracking, without a full middleware restart. In
+        the same exec_cb_group as recipe execution, so it can't run
+        concurrently with (or interrupt) an in-progress recipe."""
+        self.get_logger().info("Received environment reset request.")
+        success, message = self.arm_actions.reset_environment()
+        response.success = success
+        response.message = message
+        if success:
+            self.get_logger().info(f"Environment reset: {message}")
+        else:
+            self.get_logger().error(f"Environment reset failed: {message}")
         return response
 
     def _dispatch_step(self, index, step):

@@ -1,5 +1,5 @@
 {
-  "recipe_name": "Pick and Drop Routine (Blue then Red, No Intermediate Home)",
+  "recipe_name": "Pick and Drop Routine (Blue then Box, No Intermediate Home)",
   "steps": [
     {
       "step_id": 1,
@@ -29,20 +29,20 @@
       "step_id": 4,
       "action": "pickup",
       "parameters": {
-        "target": "red_cube",
+        "target": "box",
         "pre_offset": 0.1
       },
-      "description": "Pick up the red cube"
+      "description": "Pick up the box"
     },
     {
       "step_id": 5,
       "action": "dropoff",
       "parameters": {
-        "target": "red_cube",
+        "target": "box",
         "destination": "delivery_tray",
         "place_offset": 0.1
       },
-      "description": "Place red cube on delivery tray"
+      "description": "Place box on delivery tray"
     },
     {
       "step_id": 6,

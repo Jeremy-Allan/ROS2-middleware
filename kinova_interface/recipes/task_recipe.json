@@ -18,9 +18,9 @@
       "step_id": 3,
       "action": "move_arm",
       "parameters": {
-        "target": "red_cube"
+        "target": "box"
       },
-      "description": "Navigate to the red cube"
+      "description": "Navigate to the box"
     },
     {
       "step_id": 4,

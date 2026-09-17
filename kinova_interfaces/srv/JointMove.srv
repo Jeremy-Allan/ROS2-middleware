@@ -1,0 +1,6 @@
+float64[] joint_positions
+bool wait_for_completion
+kinova_interfaces/MotionParams motion_params
+---
+bool success
+string message
