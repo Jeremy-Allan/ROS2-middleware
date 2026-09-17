@@ -203,14 +203,23 @@ class HardwareInterfaceClient(Node):
 
         return self.finalize_service_status(response)
 
+    # A rejected/invalid goal (e.g. an unreachable combined joint state)
+    # typically fails within milliseconds, well before a real motion could
+    # possibly finish - so a short bounded wait here can catch that kind of
+    # fast rejection in the fire-and-forget path without turning into a
+    # real wait for a genuine, slow motion in progress.
+    FIRE_AND_FORGET_REJECTION_WINDOW_SEC = 0.5
+
     def handle_joint_move(self, request, response):
         """Move to an absolute joint-space target. If wait_for_completion is
-        False, returns as soon as the goal is accepted rather than waiting
-        for the motion to finish - lets a caller (e.g. 'throw's fling) do
-        something else, like releasing the gripper, partway through the
-        motion instead of only after it completes. That also means a
-        fire-and-forget call can't report whether the motion itself
-        ultimately succeeded - only that it was accepted."""
+        False, returns once either the goal is accepted and stays that way
+        for FIRE_AND_FORGET_REJECTION_WINDOW_SEC, or it fails/succeeds
+        within that window - whichever comes first. This lets a caller
+        (e.g. 'throw's fling) do something else, like releasing the
+        gripper, partway through a genuinely still-in-progress motion,
+        while still catching a fast rejection instead of treating it as a
+        success. A rejection arriving after the window would still be
+        missed - this narrows that gap, it doesn't close it entirely."""
         joint_positions = list(request.joint_positions)
         self.get_logger().info(f"Service Call: Joint Move to {joint_positions}")
         self.current_state = ExtendedStatus.STATE_BUSY
@@ -223,6 +232,10 @@ class HardwareInterfaceClient(Node):
             return self.finalize_service_status(response)
 
         if not request.wait_for_completion:
+            if self.arm_movement_finished.wait(timeout=self.FIRE_AND_FORGET_REJECTION_WINDOW_SEC):
+                response.success = self.last_action_successful
+                response.message = "Joint move complete" if response.success else "Arm movement failed"
+                return self.finalize_service_status(response)
             response.success = True
             response.message = "Joint move goal accepted (not waiting for completion)"
             return response

@@ -338,13 +338,15 @@ def test_handle_joint_move_waits_by_default(node):
     node.arm_movement_finished.wait.assert_called_once()
 
 
-def test_handle_joint_move_fire_and_forget(node):
-    """With wait_for_completion False, handle_joint_move should return as
-    soon as the goal is accepted, without waiting or touching
-    current_state (the arm is still genuinely moving at that point)."""
+def test_handle_joint_move_fire_and_forget_still_in_progress(node):
+    """With wait_for_completion False, if the motion is still going after
+    the short rejection-catching window, handle_joint_move should return
+    without waiting further or touching current_state (the arm is still
+    genuinely moving at that point)."""
 
     node.send_joint_goal = MagicMock(return_value=True)
     node.arm_movement_finished = MagicMock()
+    node.arm_movement_finished.wait.return_value = False  # still in progress
 
     request = JointMove.Request()
     request.joint_positions = [0.0, 0.0, 0.5, 1.5708, 1.5708, 0.0]
@@ -355,8 +357,32 @@ def test_handle_joint_move_fire_and_forget(node):
 
     assert result.success is True
     assert result.message == "Joint move goal accepted (not waiting for completion)"
-    node.arm_movement_finished.wait.assert_not_called()
+    node.arm_movement_finished.wait.assert_called_once_with(
+        timeout=node.FIRE_AND_FORGET_REJECTION_WINDOW_SEC
+    )
     assert node.current_state == ExtendedStatus.STATE_BUSY
+
+
+def test_handle_joint_move_fire_and_forget_catches_fast_rejection(node):
+    """With wait_for_completion False, a rejection that arrives within the
+    short catching window (e.g. an invalid combined joint state, which
+    fails within milliseconds) should be reported as a real failure -
+    not silently treated as accepted."""
+
+    node.send_joint_goal = MagicMock(return_value=True)
+    node.arm_movement_finished = MagicMock()
+    node.arm_movement_finished.wait.return_value = True  # finished within the window
+    node.last_action_successful = False
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0, 0.0, 2.3562, 1.5708, 1.5708, 0.0]
+    request.wait_for_completion = False
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is False
+    assert result.message == "Arm movement failed"
 
 
 def test_handle_joint_move_failure_to_start(node):

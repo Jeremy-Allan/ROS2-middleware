@@ -760,9 +760,11 @@ def test_throw_requires_destination(actions):
 
 def test_throw_faces_winds_up_and_flings_then_releases(actions):
     """throw should face the throw direction (home's pose rotated at
-    joint_1), wind up the elbow (joint_3) back, then fling it forward
-    without waiting for completion, releasing the gripper mid-swing -
-    not dropoff's careful hover-then-lower-then-release staging."""
+    joint_1), wind the elbow (joint_3) back 225 degrees past facing the
+    opposite way (rocking the shoulder, joint_2, back too), then fling
+    both forward without waiting for completion - resetting effectively
+    to the faced pose - releasing the gripper mid-swing rather than
+    dropoff's careful hover-then-lower-then-release staging."""
 
     actions.held_object = "red_cube"
     actions.get_object_info = MagicMock(return_value={
@@ -779,7 +781,6 @@ def test_throw_faces_winds_up_and_flings_then_releases(actions):
 
     assert result is True
     assert actions.call_joint_move_service.call_count == 3
-    mock_sleep.assert_called_once_with(0.25)
 
     face_args, _ = actions.call_joint_move_service.call_args_list[0]
     windup_args, _ = actions.call_joint_move_service.call_args_list[1]
@@ -793,11 +794,20 @@ def test_throw_faces_winds_up_and_flings_then_releases(actions):
     assert face_pose[0] == pytest.approx(expected_yaw)
     assert face_pose[2] == pytest.approx(1.5708)  # home's elbow angle, unmodified
 
-    # windup/fling keep the same faced yaw, only the elbow (index 2) moves
+    # windup/fling keep the same faced yaw, only the elbow (index 2) and
+    # shoulder (index 1) move
     assert windup_pose[0] == pytest.approx(expected_yaw)
-    assert windup_pose[2] == pytest.approx(1.5708 - 0.7854)
+    assert windup_pose[2] == pytest.approx(1.5708 - math.radians(225))
+    assert windup_pose[1] == pytest.approx(-math.radians(15))
     assert fling_pose[0] == pytest.approx(expected_yaw)
-    assert fling_pose[2] == pytest.approx(1.5708 + 0.7854)
+    assert fling_pose[2] == pytest.approx(1.5708)  # resets effectively to the faced pose
+    assert fling_pose[1] == pytest.approx(math.radians(15))
+
+    # release delay defaults to roughly half the estimated fling duration
+    # (225 degrees at the default speed), not a small fixed constant
+    fling_sweep = math.radians(225)
+    expected_delay = (fling_sweep / (0.5 * 1.0)) * 0.5
+    mock_sleep.assert_called_once_with(pytest.approx(expected_delay))
 
     # the fling is fired without waiting for it to finish
     assert fling_kwargs.get('wait_for_completion') is False

@@ -760,26 +760,37 @@ class ArmActions:
     # (e.g. the quaternion math duplicated in environment_mapping_node.py
     # and hardware_interface_client.py). Update both if home's pose changes.
     _HOME_JOINT_POSITIONS = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
+    _SHOULDER_JOINT_INDEX = 1  # joint_2
     _ELBOW_JOINT_INDEX = 2  # joint_3
+
+    # From kortex_description's gen3_lite_macro.xacro joint limits: used
+    # only to estimate roughly how long the fling will take, to time the
+    # mid-swing release - not an exact figure, real trajectories ramp
+    # velocity up/down rather than moving at a constant rate throughout.
+    _JOINT_MAX_VELOCITY_RAD_S = 0.5
 
     def _handle_throw(self, params):
         """A genuine joint-space throw: face the throw direction from
-        home's pose (rotating only joint_1, the base), wind up by rotating
-        the elbow (joint_3) back away from that direction, then fling it
-        forward past the faced pose, fast - releasing the gripper mid-swing
-        rather than waiting for the fling to finish. Assumes the object
-        named by 'target' is already grasped - fails cleanly rather than
-        guessing if it isn't.
+        home's pose (rotating only joint_1, the base), wind the elbow
+        (joint_3) back past facing the opposite way, then fling it forward
+        fast back to the faced pose - releasing the gripper mid-swing
+        rather than waiting for the fling to finish. joint_2 (the shoulder)
+        rocks back and forward in step with the elbow, to exaggerate the
+        motion. Assumes the object named by 'target' is already grasped -
+        fails cleanly rather than guessing if it isn't.
 
-        The whole swing happens in a single vertical plane (only joint_1
-        and joint_3 move), aimed by 'destination' or 'direction' the same
-        way as other actions, but the actual distance thrown is governed
-        by 'wind_up_angle'/'fling_angle'/'speed', not by 'distance' alone -
-        those just decide which way the arm faces before swinging. Since
-        firing the fling without waiting for it to finish means we can't
-        confirm it actually succeeded, and the object leaves the gripper
-        mid-swing rather than at a controlled position, the landing
-        position recorded afterward is a rough approximation at best."""
+        The whole swing happens in a single vertical plane (only joint_1,
+        joint_2, and joint_3 move), aimed by 'destination' or 'direction'
+        the same way as other actions, but the actual distance thrown is
+        governed by 'wind_up_angle'/'fling_angle'/'speed', not by
+        'distance' alone - those just decide which way the arm faces
+        before swinging. The fling is fired without waiting for it to
+        finish; a rejection arriving within about half a second is still
+        caught and fails the whole action before the gripper ever opens
+        (see HardwareInterfaceClient.handle_joint_move), but the object
+        leaves the gripper mid-swing rather than at a controlled position,
+        so the landing position recorded afterward is a rough
+        approximation at best."""
         target_name = params.get('target')
         destination_name = params.get('destination')
         direction = params.get('direction')
@@ -826,11 +837,15 @@ class ArmActions:
             self.get_logger().error('Failed to face throw direction')
             return False
 
-        # Wind-up: rotate the elbow back, away from the throw direction,
-        # like cocking the arm before a pitch
-        wind_up_angle = float(params.get('wind_up_angle', 0.7854))  # 45 degrees
+        # Wind-up: rotate the elbow back past facing the opposite way from
+        # the throw direction (225 degrees past the faced pose by default -
+        # 180 to face backward, plus 45 further), and rock the shoulder
+        # back too, like cocking the whole arm before a pitch
+        wind_up_angle = float(params.get('wind_up_angle', math.radians(225)))
+        shoulder_rock_angle = float(params.get('joint_2_rock_angle', math.radians(15)))
         windup_pose = list(face_pose)
         windup_pose[self._ELBOW_JOINT_INDEX] -= wind_up_angle
+        windup_pose[self._SHOULDER_JOINT_INDEX] -= shoulder_rock_angle
 
         windup_motion = self.build_motion_params(0.5)
         r = self.call_joint_move_service(windup_pose, motion_params=windup_motion)
@@ -838,19 +853,30 @@ class ArmActions:
             self.get_logger().error('Failed to wind up for throw')
             return False
 
-        # Fling: swing the elbow forward past the faced pose, fast - fire
-        # the motion without waiting for it to finish, so the release
-        # below happens mid-swing rather than only once the arm has stopped
-        fling_angle = float(params.get('fling_angle', 0.7854))
+        # Fling: swing the elbow (and shoulder) forward fast, resetting
+        # effectively to the faced pose ('fling_angle' 0.0 by default) -
+        # fired without waiting for it to finish, so the release below
+        # happens mid-swing rather than only once the arm has stopped
+        fling_angle = float(params.get('fling_angle', 0.0))
         fling_pose = list(face_pose)
         fling_pose[self._ELBOW_JOINT_INDEX] += fling_angle
+        fling_pose[self._SHOULDER_JOINT_INDEX] += shoulder_rock_angle
 
-        fling_motion = self.build_motion_params(params.get('speed', 1.0))
+        fling_speed = float(params.get('speed', 1.0))
+        fling_motion = self.build_motion_params(fling_speed)
         if not self.call_joint_move_service(fling_pose, motion_params=fling_motion, wait_for_completion=False):
             self.get_logger().error('Failed to start throw fling')
             return False
 
-        release_delay = float(params.get('release_delay', 0.25))
+        # Release roughly midway through the fling, not after a fixed
+        # delay - scaled to the actual size of the swing and its speed, so
+        # a much bigger wind-up/fling still releases mid-swing rather than
+        # either before the arm has really started moving or after it's
+        # already stopped.
+        fling_sweep = abs(fling_pose[self._ELBOW_JOINT_INDEX] - windup_pose[self._ELBOW_JOINT_INDEX])
+        estimated_fling_duration = fling_sweep / (self._JOINT_MAX_VELOCITY_RAD_S * max(fling_speed, 0.1))
+        default_release_delay = estimated_fling_duration * 0.5
+        release_delay = float(params.get('release_delay', default_release_delay))
         time.sleep(release_delay)
 
         open_pos = float(params.get('open_position', 0.0))
