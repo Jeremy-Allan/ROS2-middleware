@@ -3,3 +3,8 @@
 string[] object_list
 string[] movement_names
 string[] orientation_names
+bool has_table_bounds
+float64 table_x_min
+float64 table_x_max
+float64 table_y_min
+float64 table_y_max

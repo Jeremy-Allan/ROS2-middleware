@@ -329,6 +329,63 @@ def test_get_robot_parameters_callback(node):
     node.publish_status.assert_called_once()
 
 
+# get_robot_parameters_callback() table bounds
+# Note: these two don't use the 'node' fixture - it constructs a real
+# EnvironmentMappingNode via patch.object() on methods ('load_obstacles',
+# 'load_coordinate_dictionary') that don't exist on the current class
+# (pre-existing drift, not introduced here), so the fixture itself can't
+# currently run. Calling the callback directly against a minimal stand-in
+# keeps this test isolated from that.
+def test_get_robot_parameters_callback_table_bounds():
+    """get_robot_parameters_callback should report the table's footprint
+    from its own obstacle definition, when configured as a BOX."""
+
+    class FakeNode:
+        static_objects = {}
+        relative_movements = {}
+        orientation_presets = {}
+        obstacles = {
+            "table": {
+                "pose": {"position": {"x": 0.0, "y": 0.0, "z": -0.05}},
+                "shape": {"type": "BOX", "dimensions": [1.2, 0.8, 0.05]}
+            }
+        }
+        command_success = None
+        status_text = None
+        publish_status = MagicMock()
+
+    request = GetRobotParameters.Request()
+    response = GetRobotParameters.Response()
+
+    result = EnvironmentMappingNode.get_robot_parameters_callback(FakeNode, request, response)
+
+    assert result.has_table_bounds is True
+    assert result.table_x_min == pytest.approx(-0.6)
+    assert result.table_x_max == pytest.approx(0.6)
+    assert result.table_y_min == pytest.approx(-0.4)
+    assert result.table_y_max == pytest.approx(0.4)
+
+
+def test_get_robot_parameters_callback_no_table_configured():
+    """If no 'table' obstacle is configured, has_table_bounds should be False."""
+
+    class FakeNode:
+        static_objects = {}
+        relative_movements = {}
+        orientation_presets = {}
+        obstacles = {}
+        command_success = None
+        status_text = None
+        publish_status = MagicMock()
+
+    request = GetRobotParameters.Request()
+    response = GetRobotParameters.Response()
+
+    result = EnvironmentMappingNode.get_robot_parameters_callback(FakeNode, request, response)
+
+    assert result.has_table_bounds is False
+
+
 # build_collision_object()
 def test_build_collision_object(node):
 

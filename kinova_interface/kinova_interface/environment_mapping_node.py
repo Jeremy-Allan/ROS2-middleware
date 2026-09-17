@@ -283,6 +283,19 @@ class EnvironmentMappingNode(Node):
         response.object_list = list(self.static_objects.keys())
         response.movement_names = list(self.relative_movements.keys())
         response.orientation_names = list(self.orientation_presets.keys())
+
+        table = self.obstacles.get('table')
+        if table and table.get('shape', {}).get('type') == 'BOX':
+            pos = table['pose']['position']
+            dims = table['shape']['dimensions']
+            response.has_table_bounds = True
+            response.table_x_min = pos['x'] - dims[0] / 2.0
+            response.table_x_max = pos['x'] + dims[0] / 2.0
+            response.table_y_min = pos['y'] - dims[1] / 2.0
+            response.table_y_max = pos['y'] + dims[1] / 2.0
+        else:
+            response.has_table_bounds = False
+
         self.command_success = True
         self.status_text = f"Robot Parameters queried"
         self.publish_status()
