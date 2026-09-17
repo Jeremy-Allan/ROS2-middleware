@@ -765,3 +765,118 @@ def test_throw_single_fast_move_then_release(actions):
     actions.call_move_service.assert_called_once()
     actions.detach_object.assert_called_once_with("red_cube")
     assert actions.held_object is None
+
+
+# resolve_direction_offset()
+def test_resolve_direction_offset_forward_continues_same_bearing(actions):
+    """'forward' should extend further out along the same bearing from the
+    arm's base (origin) the reference point already had."""
+
+    x, y = actions.resolve_direction_offset(1.0, 0.0, 'forward', 0.2)
+
+    assert x == pytest.approx(1.2)
+    assert y == pytest.approx(0.0)
+
+
+def test_resolve_direction_offset_backward_reverses_bearing(actions):
+    x, y = actions.resolve_direction_offset(1.0, 0.0, 'backward', 0.2)
+
+    assert x == pytest.approx(0.8)
+    assert y == pytest.approx(0.0)
+
+
+def test_resolve_direction_offset_left_and_right_are_perpendicular(actions):
+    """'left'/'right' should be the bearing rotated +/-90 degrees, not
+    along the original bearing at all."""
+
+    left_x, left_y = actions.resolve_direction_offset(1.0, 0.0, 'left', 0.2)
+    right_x, right_y = actions.resolve_direction_offset(1.0, 0.0, 'right', 0.2)
+
+    assert left_x == pytest.approx(1.0)
+    assert left_y == pytest.approx(0.2)
+    assert right_x == pytest.approx(1.0)
+    assert right_y == pytest.approx(-0.2)
+
+
+def test_resolve_direction_offset_unknown_direction_returns_none(actions):
+    assert actions.resolve_direction_offset(1.0, 0.0, 'sideways', 0.2) is None
+
+
+def test_resolve_direction_offset_falls_back_when_at_origin(actions):
+    """A reference point essentially at the arm's base has no bearing to
+    rotate - fall back to a fixed +X bearing rather than dividing by zero."""
+
+    x, y = actions.resolve_direction_offset(0.0, 0.0, 'forward', 0.2)
+
+    assert x == pytest.approx(0.2)
+    assert y == pytest.approx(0.0)
+
+
+# push() with 'direction' instead of 'destination'
+def test_push_with_direction(actions):
+    """push should accept 'direction'+'distance' as an alternative to
+    'destination', computed from the target's own original bearing."""
+
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 1.0, "y": 0.0, "z": 0.01}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.update_object_pose = MagicMock(return_value=True)
+
+    result = actions.handlers['push']({"target": "red_cube", "direction": "forward", "distance": 0.3})
+
+    assert result is True
+    push_call = actions.call_move_service.call_args_list[1][0]
+    assert push_call == (1.3, 0.0, 0.01)
+
+
+def test_push_fails_on_unknown_direction(actions):
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 1.0, "y": 0.0, "z": 0.01}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+
+    result = actions.handlers['push']({"target": "red_cube", "direction": "sideways"})
+
+    assert result is False
+
+
+# throw() with 'direction' instead of 'destination'
+def test_throw_with_direction(actions):
+    """throw should accept 'direction'+'distance' as an alternative to
+    'destination', computed from the held object's own original bearing."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 1.0, "y": 0.0, "z": 0.05}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.detach_object = MagicMock(return_value=True)
+    actions.update_object_pose = MagicMock(return_value=True)
+
+    result = actions.handlers['throw']({"target": "red_cube", "direction": "left", "distance": 0.3})
+
+    assert result is True
+    release_call = actions.call_move_service.call_args_list[0][0]
+    # left = bearing (1,0) rotated +90 degrees -> (0,1), scaled by distance
+    assert release_call[0] == pytest.approx(1.0)
+    assert release_call[1] == pytest.approx(0.3)
+    # height is the object's own original height (0.05) + release_clearance (default 0.15)
+    assert release_call[2] == pytest.approx(0.2)
+
+
+def test_throw_fails_on_unknown_direction(actions):
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 1.0, "y": 0.0, "z": 0.05}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+
+    result = actions.handlers['throw']({"target": "red_cube", "direction": "sideways"})
+
+    assert result is False

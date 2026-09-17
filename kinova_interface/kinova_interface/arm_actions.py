@@ -1,3 +1,4 @@
+import math
 import time
 
 import rclpy
@@ -184,6 +185,45 @@ class ArmActions:
         if stype == SolidPrimitive.SPHERE:
             return dims[0]
         return 0.0
+
+    # Direction keywords for 'push'/'throw' as an alternative to a named
+    # destination, as an angle to rotate the reference bearing by. The
+    # workspace frame's origin is the arm's own base, so a held/pushed
+    # object's own (x, y) position doubles as the bearing vector from the
+    # arm out to it. 'left' is a +90 degree (counter-clockwise, viewed from
+    # above) rotation of that bearing, 'right' is -90 degrees - this matches
+    # the object's original position, not the arm's own facing, and should
+    # be validated against the real arm before relying on it.
+    _DIRECTION_ROTATIONS = {
+        'forward': 0.0,
+        'left': math.pi / 2.0,
+        'right': -math.pi / 2.0,
+        'backward': math.pi,
+    }
+
+    def resolve_direction_offset(self, reference_x, reference_y, direction, distance):
+        """Given the point a held/pushed object originally rested at
+        (reference_x, reference_y), return an (x, y) point further out
+        along that same bearing from the arm's base, rotated by the named
+        direction and displaced by 'distance'. Returns None for an
+        unrecognised direction."""
+        if direction not in self._DIRECTION_ROTATIONS:
+            return None
+
+        bearing_len = math.hypot(reference_x, reference_y)
+        if bearing_len < 1e-6:
+            # No meaningful bearing to rotate (object rests essentially at
+            # the arm's base) - fall back to a fixed +X bearing.
+            bx, by = 1.0, 0.0
+        else:
+            bx, by = reference_x / bearing_len, reference_y / bearing_len
+
+        angle = self._DIRECTION_ROTATIONS[direction]
+        cos_a, sin_a = math.cos(angle), math.sin(angle)
+        dx = bx * cos_a - by * sin_a
+        dy = bx * sin_a + by * cos_a
+
+        return reference_x + dx * distance, reference_y + dy * distance
 
     def call_home_service(self, motion_params=None):
         if not self.home_client.wait_for_service(timeout_sec=5.0):
@@ -564,21 +604,41 @@ class ArmActions:
         """Slide an object to a destination by contact, without ever
         grasping or lifting it - the gripper partially closes to act as a
         flat pusher, moves to the object at its resting height, then slides
-        across to the destination at that same height."""
+        across to the destination at that same height.
+
+        Where to push it is either a named 'destination' object, or a
+        'direction' ('forward'/'backward'/'left'/'right', relative to the
+        object's own original bearing from the arm) plus a 'distance'."""
         target_name = params.get('target')
         destination_name = params.get('destination')
-        if not target_name or not destination_name:
-            self.get_logger().error("push action requires 'target' and 'destination'")
+        direction = params.get('direction')
+        if not target_name:
+            self.get_logger().error("push action requires 'target'")
+            return False
+        if not destination_name and not direction:
+            self.get_logger().error("push action requires either 'destination' or 'direction'")
             return False
 
         target_info = self.get_object_info(target_name)
         if not target_info:
             self.get_logger().error(f"Could not resolve push target '{target_name}'")
             return False
-        dest_info = self.get_object_info(destination_name)
-        if not dest_info:
-            self.get_logger().error(f"Could not resolve push destination '{destination_name}'")
-            return False
+
+        tx, ty = target_info['pose']['position']['x'], target_info['pose']['position']['y']
+
+        if destination_name:
+            dest_info = self.get_object_info(destination_name)
+            if not dest_info:
+                self.get_logger().error(f"Could not resolve push destination '{destination_name}'")
+                return False
+            dx, dy = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
+        else:
+            distance = float(params.get('distance', 0.2))
+            offset = self.resolve_direction_offset(tx, ty, direction, distance)
+            if offset is None:
+                self.get_logger().error(f"Unknown push direction '{direction}'")
+                return False
+            dx, dy = offset
 
         close_pos = float(params.get('close_position', 0.5))
         motion_params = self.build_motion_params(params.get('speed'))
@@ -591,7 +651,6 @@ class ArmActions:
             return False
 
         # 2. Move to the object at its resting height
-        tx, ty = target_info['pose']['position']['x'], target_info['pose']['position']['y']
         r = self.call_move_service(tx, ty, push_z, motion_params=motion_params)
         if not (r and r['success']):
             self.get_logger().error('Failed to approach push target')
@@ -599,7 +658,6 @@ class ArmActions:
 
         # 3. Slide it to the destination, staying at the same height - it's
         # pushed by contact the whole way, never grasped or lifted
-        dx, dy = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
         r = self.call_move_service(dx, dy, push_z, motion_params=motion_params)
         if not (r and r['success']):
             self.get_logger().error('Failed to push to destination')
@@ -610,7 +668,8 @@ class ArmActions:
         if not self.update_object_pose(target_name, dx, dy, push_z, orient):
             self.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
 
-        self.get_logger().info(f"Pushed '{target_name}' to '{destination_name}'")
+        where = f"to '{destination_name}'" if destination_name else f"{direction}"
+        self.get_logger().info(f"Pushed '{target_name}' {where}")
         return True
 
     def _handle_throw(self, params):
@@ -619,34 +678,54 @@ class ArmActions:
         fast move followed by an immediate release. Assumes the object named
         by 'target' is already grasped - fails cleanly rather than guessing
         if it isn't. The landing position recorded afterward is approximate,
-        since the object leaves the gripper before the arm finishes moving."""
+        since the object leaves the gripper before the arm finishes moving.
+
+        Where to throw it is either a named 'destination' object, or a
+        'direction' ('forward'/'backward'/'left'/'right', relative to the
+        object's own original bearing from the arm) plus a 'distance'."""
         target_name = params.get('target')
         destination_name = params.get('destination')
+        direction = params.get('direction')
         if not target_name:
             self.get_logger().error("throw action requires 'target' naming the held object")
             return False
         if target_name != self.held_object:
             self.get_logger().error(f"Cannot throw '{target_name}': held object is '{self.held_object}'")
             return False
-        if not destination_name:
-            self.get_logger().error("throw action requires 'destination'")
-            return False
-
-        dest_info = self.get_object_info(destination_name)
-        if not dest_info:
-            self.get_logger().error(f"Could not resolve throw destination '{destination_name}'")
+        if not destination_name and not direction:
+            self.get_logger().error("throw action requires either 'destination' or 'direction'")
             return False
 
         open_pos = float(params.get('open_position', 0.0))
         release_clearance = float(params.get('release_clearance', 0.15))
         motion_params = self.build_motion_params(params.get('speed', 0.9))
 
-        dest_pos = dest_info['pose']['position']
-        dest_top_z = dest_pos['z'] + self.object_half_height(dest_info['shape'])
+        if destination_name:
+            dest_info = self.get_object_info(destination_name)
+            if not dest_info:
+                self.get_logger().error(f"Could not resolve throw destination '{destination_name}'")
+                return False
+            release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
+            release_top_z = dest_info['pose']['position']['z'] + self.object_half_height(dest_info['shape'])
+        else:
+            target_info = self.get_object_info(target_name)
+            if not target_info:
+                self.get_logger().error(f"Could not resolve held object '{target_name}' for throw")
+                return False
+            distance = float(params.get('distance', 0.2))
+            ref_x, ref_y = target_info['pose']['position']['x'], target_info['pose']['position']['y']
+            offset = self.resolve_direction_offset(ref_x, ref_y, direction, distance)
+            if offset is None:
+                self.get_logger().error(f"Unknown throw direction '{direction}'")
+                return False
+            release_x, release_y = offset
+            # No destination object to measure height from - release at
+            # roughly the height the object started at, plus clearance.
+            release_top_z = target_info['pose']['position']['z']
 
         # 1. Move fast toward a release point above the destination - one
         # motion, not dropoff's two-stage hover-then-descend
-        r = self.call_move_service(dest_pos['x'], dest_pos['y'], dest_top_z + release_clearance, motion_params=motion_params)
+        r = self.call_move_service(release_x, release_y, release_top_z + release_clearance, motion_params=motion_params)
         if not (r and r['success']):
             self.get_logger().error('Failed to move to release point for throw')
             return False
@@ -658,8 +737,9 @@ class ArmActions:
             return False
 
         self.detach_object(target_name)
-        self.update_object_pose(target_name, dest_pos['x'], dest_pos['y'], dest_top_z, None)
-        self.get_logger().info(f"Threw '{target_name}' toward '{destination_name}'")
+        self.update_object_pose(target_name, release_x, release_y, release_top_z, None)
+        where = f"toward '{destination_name}'" if destination_name else direction
+        self.get_logger().info(f"Threw '{target_name}' {where}")
 
         if target_name == self.held_object:
             self.held_object = None
