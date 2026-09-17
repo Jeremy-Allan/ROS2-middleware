@@ -2,8 +2,9 @@ import math
 import time
 
 import rclpy
-from geometry_msgs.msg import Quaternion
+from geometry_msgs.msg import Quaternion, Pose, PoseStamped
 from shape_msgs.msg import SolidPrimitive
+from moveit_msgs.srv import GetPositionIK
 
 from kinova_interfaces.srv import (
     GetObjectCoordinates,
@@ -54,6 +55,12 @@ class ArmActions:
         self.detach_client = node.create_client(DetachObject, '/detach_object', callback_group=cb_group)
         self.update_pose_client = node.create_client(UpdateObjectPose, '/update_object_pose', callback_group=cb_group)
         self.reset_scene_client = node.create_client(Trigger, '/reset_environment_scene', callback_group=cb_group)
+
+        # For verifying a computed grasp candidate is actually reachable and
+        # collision-free before trusting it (see compute_side_grasp_candidates/
+        # verify_grasp_pose) - not exposed to MoveIt's own move_group action,
+        # a plain service so it can be checked cheaply before ever moving.
+        self.compute_ik_client = node.create_client(GetPositionIK, '/compute_ik', callback_group=cb_group)
 
         # Dictionary of arm actions, keyed by recipe step 'action' name
         self.handlers = {
@@ -189,6 +196,114 @@ class ArmActions:
         if stype == SolidPrimitive.SPHERE:
             return dims[0]
         return 0.0
+
+    def euler_to_quaternion(self, roll, pitch, yaw):
+        # Same conversion as hardware_interface_client.py/environment_mapping_node.py,
+        # kept local rather than shared - both of those already duplicate
+        # this same small helper, not introducing a new pattern here.
+        cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
+        cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
+        cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
+        qw = cr * cp * cy + sr * sp * sy
+        qx = sr * cp * cy - cr * sp * sy
+        qy = cr * sp * cy + sr * cp * sy
+        qz = cr * cp * sy - sr * sp * cy
+        return qx, qy, qz, qw
+
+    def quaternion_to_euler(self, x, y, z, w):
+        # Same conversion as hardware_interface_client.py, kept local for
+        # the same reason as euler_to_quaternion above.
+        sinr_cosp = 2 * (w * x + y * z)
+        cosr_cosp = 1 - 2 * (x * x + y * y)
+        roll = math.atan2(sinr_cosp, cosr_cosp)
+
+        sinp = max(-1.0, min(1.0, 2 * (w * y - z * x)))
+        pitch = math.asin(sinp)
+
+        siny_cosp = 2 * (w * z + x * y)
+        cosy_cosp = 1 - 2 * (y * y + z * z)
+        yaw = math.atan2(siny_cosp, cosy_cosp)
+        return roll, pitch, yaw
+
+    # A flat, level wrist (not pointing down) - the one part of a side
+    # grasp that's genuinely independent of which object it is.
+    _SIDE_GRASP_ROLL = math.pi / 2.0
+    # Candidate yaw rotations relative to the object's own registered yaw -
+    # covers approaching aligned with, or perpendicular to, its own frame,
+    # from either side. Which of these is actually correct depends on the
+    # gripper's own closing-axis convention, which isn't assumed here -
+    # every candidate is verified for real (see verify_grasp_pose) rather
+    # than trusted from geometry alone.
+    _SIDE_GRASP_YAW_OFFSETS = [0.0, math.pi / 2.0, -math.pi / 2.0, math.pi]
+    # Small position nudges tried only if the object's exact center doesn't
+    # verify at any of the yaw offsets above - meters, along each world axis.
+    _SIDE_GRASP_POSITION_OFFSETS = [0.02, -0.02, 0.04, -0.04]
+
+    def compute_side_grasp_candidates(self, target_info):
+        """Generate candidate flat, side-on grasp poses for a BOX-shaped
+        object from its own registered shape and pose - not a fixed preset
+        calibrated to one specific object/position (see
+        docs/pour-motion-reference.md for why that didn't generalize).
+        Each candidate still needs verifying (verify_grasp_pose) before
+        being trusted - this generates plausible options, it doesn't
+        guarantee any one of them is actually reachable/collision-free.
+        Returns a list of (x, y, z, roll, pitch, yaw) tuples, cheapest/most
+        likely first; [] if the shape isn't supported."""
+        shape = target_info['shape']
+        if shape['type'] != SolidPrimitive.BOX:
+            self.get_logger().error(f"Side grasp only supports BOX shapes currently (got shape type {shape['type']})")
+            return []
+
+        pos = target_info['pose']['position']
+        orient = target_info['pose']['orientation']
+        _, _, object_yaw = self.quaternion_to_euler(orient['x'], orient['y'], orient['z'], orient['w'])
+
+        candidates = []
+        # Pass 1: the object's exact center, at each candidate yaw - the
+        # cheapest and most likely to work.
+        for yaw_offset in self._SIDE_GRASP_YAW_OFFSETS:
+            candidates.append((pos['x'], pos['y'], pos['z'], self._SIDE_GRASP_ROLL, 0.0, object_yaw + yaw_offset))
+
+        # Pass 2: only if none of those verify - small offsets along each
+        # world axis, at every candidate yaw again.
+        for offset in self._SIDE_GRASP_POSITION_OFFSETS:
+            for yaw_offset in self._SIDE_GRASP_YAW_OFFSETS:
+                candidates.append((pos['x'] + offset, pos['y'], pos['z'], self._SIDE_GRASP_ROLL, 0.0, object_yaw + yaw_offset))
+                candidates.append((pos['x'], pos['y'] + offset, pos['z'], self._SIDE_GRASP_ROLL, 0.0, object_yaw + yaw_offset))
+
+        return candidates
+
+    def verify_grasp_pose(self, x, y, z, roll, pitch, yaw):
+        """Check whether a Cartesian pose is actually reachable and
+        collision-free via IK (with collision-avoidance on), rather than
+        trusting a computed/geometric candidate blindly. This is exactly
+        what caught a plausible-looking but actually-in-collision pose
+        during testing (see docs/pour-motion-reference.md) - a manually
+        demonstrated pose that turned out to have never really been
+        validated at all."""
+        if not self.compute_ik_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Compute IK service not available")
+            return False
+
+        req = GetPositionIK.Request()
+        req.ik_request.group_name = 'arm'
+        req.ik_request.avoid_collisions = True
+        req.ik_request.timeout.sec = 1
+
+        pose_stamped = PoseStamped()
+        pose_stamped.header.frame_id = 'base_link'
+        pose = Pose()
+        pose.position.x, pose.position.y, pose.position.z = float(x), float(y), float(z)
+        qx, qy, qz, qw = self.euler_to_quaternion(roll, pitch, yaw)
+        pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = qx, qy, qz, qw
+        pose_stamped.pose = pose
+        req.ik_request.pose_stamped = pose_stamped
+
+        future = self.compute_ik_client.call_async(req)
+        response = self.wait_for_future(future, '/compute_ik')
+        if response is None:
+            return False
+        return response.error_code.val == response.error_code.SUCCESS
 
     # Direction keywords for 'push'/'throw' as an alternative to a named
     # destination, as an angle to rotate the reference bearing by. The
@@ -465,25 +580,56 @@ class ArmActions:
         return result is not None and result['success']
 
     def _handle_pickup(self, params):
-        """'orientation' is optional and unconstrained by default (matching
-        the original behaviour - forcing one can make an otherwise-reachable
-        approach point infeasible for the planner, same caveat as 'push').
-        Pass it explicitly (e.g. 'side_grasp_flat') when a later action
-        needs a known, repeatable grasp orientation instead of whatever the
-        planner happens to land on - 'pour' is the motivating case, see
-        docs/pour-motion-reference.md."""
+        """Default behaviour is unchanged: unconstrained orientation at the
+        object's registered center (forcing one can make an
+        otherwise-reachable approach infeasible for the planner, same
+        caveat as 'push').
+
+        'grasp_style': 'side' switches to a flat, side-on grasp instead -
+        computed from the object's own shape/pose (BOX only currently),
+        not a fixed preset for one specific object, and each candidate
+        pose is verified reachable/collision-free (via /compute_ik) before
+        being trusted, rather than assumed correct from geometry alone.
+        See compute_side_grasp_candidates/verify_grasp_pose and
+        docs/pour-motion-reference.md for why that verification step
+        matters - a manually-demonstrated pose used earlier turned out to
+        have never actually been validated this way.
+
+        'orientation'/'grasp_offset' remain available for a fully manual
+        override (an explicit preset name, plus an x/y/z shift off the
+        object's center) when 'grasp_style' isn't given."""
         target_name = params['target']
         open_pos = float(params.get('open_position', 0.0))
         close_pos = float(params.get('close_position', 0.8))
-        coords = self.get_static_object_coords(target_name)
-        if not coords:
-            return False
 
-        orientation = self.resolve_orientation(params.get('orientation'))
-        if orientation is None:
-            self.get_logger().error(f"Unknown orientation preset '{params.get('orientation')}' for pickup")
-            return False
-        has_orientation, roll, pitch, yaw = orientation
+        if params.get('grasp_style') == 'side':
+            target_info = self.get_object_info(target_name)
+            if not target_info:
+                return False
+            candidates = self.compute_side_grasp_candidates(target_info)
+            if not candidates:
+                return False
+            chosen = next((c for c in candidates if self.verify_grasp_pose(*c)), None)
+            if chosen is None:
+                self.get_logger().error(f"No valid side-grasp pose found for '{target_name}'")
+                return False
+            target_x, target_y, target_z, roll, pitch, yaw = chosen
+            has_orientation = True
+        else:
+            coords = self.get_static_object_coords(target_name)
+            if not coords:
+                return False
+
+            orientation = self.resolve_orientation(params.get('orientation'))
+            if orientation is None:
+                self.get_logger().error(f"Unknown orientation preset '{params.get('orientation')}' for pickup")
+                return False
+            has_orientation, roll, pitch, yaw = orientation
+
+            grasp_offset = params.get('grasp_offset') or {}
+            target_x = coords['x'] + float(grasp_offset.get('x', 0.0))
+            target_y = coords['y'] + float(grasp_offset.get('y', 0.0))
+            target_z = coords['z'] + float(grasp_offset.get('z', 0.0))
 
         # 1. Open gripper before moving
         rg = self.call_move_gripper_service(open_pos)
@@ -491,8 +637,8 @@ class ArmActions:
             self.get_logger().error('Failed to open gripper for pickup')
             return False
 
-        # 2. Descend to the actual object position
-        r = self.call_move_service(coords['x'], coords['y'], coords['z'], has_orientation, roll, pitch, yaw)
+        # 2. Descend to the chosen approach pose
+        r = self.call_move_service(target_x, target_y, target_z, has_orientation, roll, pitch, yaw)
         if not (r and r['success']):
             self.get_logger().error('Failed to move to object position')
             return False

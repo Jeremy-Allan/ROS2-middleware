@@ -487,12 +487,35 @@ def test_pickup_applies_orientation_when_explicitly_given(actions):
     actions.call_move_service = MagicMock(return_value={"success": True})
     actions.attach_object = MagicMock(return_value=True)
 
-    result = actions.handlers['pickup']({"target": "red_cube", "orientation": "side_grasp_flat"})
+    result = actions.handlers['pickup']({"target": "red_cube", "orientation": "some_orientation_preset"})
 
     assert result is True
     move_call = actions.call_move_service.call_args[0]
     assert move_call == (1.0, 2.0, 3.0, True, 1.66, -0.04, -1.57)
-    actions.get_orientation_preset.assert_called_once_with("side_grasp_flat")
+    actions.get_orientation_preset.assert_called_once_with("some_orientation_preset")
+
+
+def test_pickup_applies_grasp_offset_from_object_center(actions):
+    """'grasp_offset' should shift the approach target away from the
+    object's registered center - needed alongside a forced 'orientation'
+    that was only demonstrated/valid at an offset point, not dead-center."""
+
+    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
+    actions.get_orientation_preset = MagicMock(
+        return_value={"roll": 1.66, "pitch": -0.04, "yaw": -1.57}
+    )
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+
+    result = actions.handlers['pickup']({
+        "target": "red_cube", "orientation": "some_orientation_preset",
+        "grasp_offset": {"x": -0.04, "y": -0.01, "z": 0.007}
+    })
+
+    assert result is True
+    move_call = actions.call_move_service.call_args[0]
+    assert move_call[0:3] == (pytest.approx(0.96), pytest.approx(1.99), pytest.approx(3.007))
 
 
 def test_pickup_fails_on_unknown_orientation(actions):
@@ -504,6 +527,125 @@ def test_pickup_fails_on_unknown_orientation(actions):
     result = actions.handlers['pickup']({"target": "red_cube", "orientation": "not_a_real_preset"})
 
     assert result is False
+
+
+# compute_side_grasp_candidates() / verify_grasp_pose()
+def test_compute_side_grasp_candidates_for_box(actions):
+    """Candidates should be generated from the object's own registered
+    shape/pose (not a fixed preset), centered on it, at each of the 4
+    candidate yaw offsets, all with the flat 'side grasp' roll."""
+
+    target_info = {
+        "pose": {
+            "position": {"x": 0.3, "y": -0.1, "z": 0.02},
+            "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}  # yaw 0
+        },
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.07, 0.04]}
+    }
+
+    candidates = actions.compute_side_grasp_candidates(target_info)
+
+    assert len(candidates) >= 4
+    # first 4 candidates: object's exact center, each yaw offset
+    for cand in candidates[:4]:
+        assert cand[0:3] == (0.3, -0.1, 0.02)
+        assert cand[3] == pytest.approx(math.pi / 2.0)  # flat roll
+        assert cand[4] == 0.0
+    yaws = [c[5] for c in candidates[:4]]
+    assert yaws == pytest.approx([0.0, math.pi / 2.0, -math.pi / 2.0, math.pi])
+
+
+def test_compute_side_grasp_candidates_rejects_non_box(actions):
+    """Only BOX shapes are supported currently - fail cleanly (empty list),
+    not guess, for anything else."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.0, "y": 0.0, "z": 0.0}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.CYLINDER, "dimensions": [0.03, 0.1]}
+    }
+
+    assert actions.compute_side_grasp_candidates(target_info) == []
+
+
+def test_verify_grasp_pose_true_on_ik_success(actions):
+    """verify_grasp_pose should call /compute_ik with collision-avoidance
+    on, and report True only on a genuine SUCCESS error code."""
+
+    actions.compute_ik_client.wait_for_service = MagicMock(return_value=True)
+    response = MagicMock()
+    response.error_code.val = 1
+    response.error_code.SUCCESS = 1
+    future = MagicMock()
+    future.done.return_value = True
+    future.result.return_value = response
+    actions.compute_ik_client.call_async = MagicMock(return_value=future)
+
+    result = actions.verify_grasp_pose(0.3, -0.1, 0.02, math.pi / 2.0, 0.0, 0.0)
+
+    assert result is True
+    request = actions.compute_ik_client.call_async.call_args[0][0]
+    assert request.ik_request.avoid_collisions is True
+    assert request.ik_request.pose_stamped.pose.position.x == pytest.approx(0.3)
+
+
+def test_verify_grasp_pose_false_on_ik_failure(actions):
+    """A non-SUCCESS error code (e.g. NO_IK_SOLUTION or in-collision)
+    should report as not verified, not raise or assume success."""
+
+    actions.compute_ik_client.wait_for_service = MagicMock(return_value=True)
+    response = MagicMock()
+    response.error_code.val = -31
+    response.error_code.SUCCESS = 1
+    future = MagicMock()
+    future.done.return_value = True
+    future.result.return_value = response
+    actions.compute_ik_client.call_async = MagicMock(return_value=future)
+
+    result = actions.verify_grasp_pose(0.3, -0.1, 0.02, math.pi / 2.0, 0.0, 0.0)
+
+    assert result is False
+
+
+def test_pickup_side_grasp_uses_first_verified_candidate(actions):
+    """pickup with grasp_style='side' should try candidates in order and
+    use the first one that actually verifies, not just the first one
+    generated."""
+
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": -0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.07, 0.04]}
+    })
+    # first 3 candidates fail verification, the 4th succeeds
+    actions.verify_grasp_pose = MagicMock(side_effect=[False, False, False, True])
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+
+    result = actions.handlers['pickup']({"target": "box", "grasp_style": "side"})
+
+    assert result is True
+    assert actions.verify_grasp_pose.call_count == 4
+    move_call = actions.call_move_service.call_args[0]
+    expected = actions.compute_side_grasp_candidates(actions.get_object_info.return_value)[3]
+    assert move_call[0:3] == expected[0:3]
+    assert move_call[3] is True
+
+
+def test_pickup_side_grasp_fails_if_no_candidate_verifies(actions):
+    """If nothing in the candidate search verifies, pickup should fail
+    cleanly rather than attempt an unverified pose."""
+
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": -0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.07, 0.04]}
+    })
+    actions.verify_grasp_pose = MagicMock(return_value=False)
+    actions.call_move_service = MagicMock(return_value={"success": True})
+
+    result = actions.handlers['pickup']({"target": "box", "grasp_style": "side"})
+
+    assert result is False
+    actions.call_move_service.assert_not_called()
 
 
 def test_dropoff_clears_held_object(actions):

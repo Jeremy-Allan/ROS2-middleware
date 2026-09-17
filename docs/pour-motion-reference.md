@@ -104,11 +104,27 @@ case.
 
 Implemented in `arm_actions.py`/`hardware_interface_client.py`:
 
-- `pickup` gained an optional `orientation` param (unconstrained by
-  default, unchanged for every existing recipe) - a new preset
-  `side_grasp_flat` (`orientation_presets.json`) holds the exact roll/pitch
-  captured in stage 1 above, for anything that needs a known, repeatable
-  grasp rather than whatever the planner lands on.
+- `pickup` gained optional `orientation`/`grasp_offset` params for a fully
+  manual override (unconstrained/zero by default, unchanged for every
+  existing recipe), plus a `grasp_style: 'side'` mode for a general,
+  computed side grasp - not a fixed preset baked from this one demo. The
+  demo's exact captured pose (stage 1) was tried first as a literal
+  preset+offset and failed: `/check_state_validity` showed it genuinely in
+  collision with the box (gripper_base_link, both finger links, and
+  upper_wrist_link all in contact) - because that pose was only ever
+  reached *after* the box had already been attached by a prior plain
+  `pickup`, so it was never actually collision-checked against the box as
+  a real obstacle. The lesson generalizes past this one bug: a captured
+  demo pose shows the *shape* of a motion, not a literal, pre-validated
+  target - it still needs checking for real. `grasp_style: 'side'` acts on
+  that: `compute_side_grasp_candidates` derives a flat roll (the one
+  object-independent invariant) and a small set of candidate yaws/offsets
+  from the target's own registered shape and pose (BOX only so far), and
+  `verify_grasp_pose` checks each candidate via `/compute_ik` with
+  collision-avoidance on before any of them are trusted - the first one
+  that actually verifies is used, and pickup fails cleanly if none do.
+  This is what actually generalizes to a newly-added object: nothing
+  needs re-demonstrating by hand, and nothing gets executed unverified.
 - `pour` gained `destination`/`direction`, `lift_height` (default `0.14`,
   matching the ~0.137m measured here) and `tilt_angle` (default `radians(135)`,
   matching the captured joint_6 delta). Lift/transit are zero-delta

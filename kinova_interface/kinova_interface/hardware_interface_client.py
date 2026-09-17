@@ -442,8 +442,15 @@ class HardwareInterfaceClient(Node):
 
         goal_msg = MoveGroup.Goal()
         goal_msg.request.group_name = 'arm'
-        goal_msg.request.num_planning_attempts = 10
-        goal_msg.request.allowed_planning_time = 5.0
+        # A tight combined position+orientation constraint (see below) reached
+        # in one big jump from a very different starting configuration (e.g.
+        # 'pickup' going straight from home) is a much harder search problem
+        # than the same pose reached through several small incremental moves -
+        # bumped from 10/5.0s after exactly this case (a forced pickup
+        # orientation) failed with generic error 99999 despite being a
+        # confirmed-reachable, collision-free pose (manually verified in RViz).
+        goal_msg.request.num_planning_attempts = 20
+        goal_msg.request.allowed_planning_time = 10.0
 
         pos_constraint = PositionConstraint()
         pos_constraint.header.frame_id = "base_link" 

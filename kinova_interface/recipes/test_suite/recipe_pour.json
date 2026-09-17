@@ -3,7 +3,7 @@
   "description": "Pick up the box with a flat side grasp, carry it above the delivery tray, tilt to pour, then return level",
   "steps": [
     { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
-    { "step_id": 2, "action": "pickup", "parameters": { "target": "box", "orientation": "side_grasp_flat" }, "description": "Pick up the box with a flat, side-on grasp" },
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "box", "grasp_style": "side" }, "description": "Pick up the box with a flat, side-on grasp, computed and verified from its own shape" },
     { "step_id": 3, "action": "pour", "parameters": { "target": "box", "destination": "delivery_tray" }, "description": "Carry the box above the tray, tilt to pour, then return level" }
   ]
 }
