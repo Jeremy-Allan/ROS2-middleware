@@ -63,6 +63,8 @@ def test_actions_creates_clients_and_handlers(actions):
     assert actions.compute_fk_client is not None
     assert actions.check_state_validity_client is not None
     assert actions.get_planning_scene_client is not None
+    assert actions.joint_state_sub is not None
+    assert actions.latest_joint_positions is None
 
     assert set(actions.handlers.keys()) == {
         'home', 'move_arm', 'relative_move', 'gripper', 'pickup', 'dropoff',
@@ -1446,6 +1448,70 @@ def test_push_fails_if_target_unresolved(actions):
     assert result is False
 
 
+# _on_joint_state() / call_joint_move_service_async() / wait_for_joint_crossing()
+def test_on_joint_state_caches_latest_positions(actions):
+    """_on_joint_state should cache the latest name->position mapping."""
+
+    msg = MagicMock()
+    msg.name = ['joint_1', 'joint_2']
+    msg.position = [0.1, 0.2]
+
+    actions._on_joint_state(msg)
+
+    assert actions.latest_joint_positions == {'joint_1': 0.1, 'joint_2': 0.2}
+
+
+def test_call_joint_move_service_async_fires_without_waiting(actions):
+    """call_joint_move_service_async should send the request and return
+    the raw future immediately, without waiting for any response -
+    unlike call_joint_move_service, which always waits at least for the
+    server's own bounded fire-and-forget window."""
+
+    actions.joint_move_client.wait_for_service = MagicMock(return_value=True)
+    future = MagicMock()
+    actions.joint_move_client.call_async = MagicMock(return_value=future)
+
+    result = actions.call_joint_move_service_async([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+
+    assert result is future
+    request = actions.joint_move_client.call_async.call_args[0][0]
+    assert list(request.joint_positions) == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+    assert request.wait_for_completion is False
+    assert request.relative is False
+
+
+def test_call_joint_move_service_async_returns_none_if_unavailable(actions):
+    actions.joint_move_client.wait_for_service = MagicMock(return_value=False)
+
+    assert actions.call_joint_move_service_async([0.0] * 6) is None
+
+
+def test_wait_for_joint_crossing_detects_decreasing_crossing(actions):
+    """wait_for_joint_crossing should return True as soon as the joint's
+    value crosses the threshold while decreasing from starting_value."""
+
+    actions.latest_joint_positions = {'joint_5': 0.4}
+
+    def side_effect(*a, **k):
+        actions.latest_joint_positions = {'joint_5': -1.0}
+
+    with patch("kinova_interface.arm_actions.time.sleep", side_effect=side_effect):
+        result = actions.wait_for_joint_crossing('joint_5', -0.5, 0.4, timeout=1.0)
+
+    assert result is True
+
+
+def test_wait_for_joint_crossing_times_out_if_never_crossed(actions):
+    """If the joint never actually reaches the threshold, this should
+    time out and return False - not hang forever or assume success."""
+
+    actions.latest_joint_positions = {'joint_5': 0.4}
+
+    result = actions.wait_for_joint_crossing('joint_5', -0.5, 0.4, timeout=0.05)
+
+    assert result is False
+
+
 # throw()
 def test_throw_requires_target(actions):
     """throw without a target should fail cleanly, not assume anything is held."""
@@ -1475,62 +1541,155 @@ def test_throw_requires_destination(actions):
     assert result is False
 
 
-def test_throw_faces_winds_up_and_flings_then_releases(actions):
-    """throw should face the throw direction (home's pose rotated at
-    joint_1), wind the elbow (joint_3) back 225 degrees past facing the
-    opposite way (rocking the shoulder, joint_2, back too), then fling
-    both forward without waiting for completion - resetting effectively
-    to the faced pose - releasing the gripper mid-swing rather than
-    dropoff's careful hover-then-lower-then-release staging."""
+def _mock_future(result=None):
+    future = MagicMock()
+    future.done.return_value = True
+    future.result.return_value = result
+    return future
+
+
+def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
+    """throw should rotate to face the throw direction (joint_1 only,
+    current shoulder/elbow/wrist held exactly as read from
+    latest_joint_positions), move straight to the captured wind-up shape,
+    fire the fling asynchronously (not waiting for any response), then
+    release the instant joint_5 crosses the captured release point -
+    not after a fixed delay."""
 
     actions.held_object = "red_cube"
     actions.get_object_info = MagicMock(return_value={
         "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
     })
+    actions.latest_joint_positions = {
+        'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
+    }
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service_async = MagicMock(return_value=_mock_future())
+    actions.wait_for_joint_crossing = MagicMock(return_value=True)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
 
-    with patch("kinova_interface.arm_actions.time.sleep") as mock_sleep:
-        result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
     assert result is True
-    assert actions.call_joint_move_service.call_count == 3
-
-    face_args, _ = actions.call_joint_move_service.call_args_list[0]
-    windup_args, _ = actions.call_joint_move_service.call_args_list[1]
-    fling_args, fling_kwargs = actions.call_joint_move_service.call_args_list[2]
-
-    face_pose, windup_pose, fling_pose = face_args[0], windup_args[0], fling_args[0]
 
     # destination == target here (same mocked get_object_info return), so
     # the release point is (0.5, 0.1) - the bearing from the arm's base
     expected_yaw = math.atan2(0.1, 0.5)
-    assert face_pose[0] == pytest.approx(expected_yaw)
-    assert face_pose[2] == pytest.approx(1.5708)  # home's elbow angle, unmodified
 
-    # windup/fling keep the same faced yaw, only the elbow (index 2) and
-    # shoulder (index 1) move
-    assert windup_pose[0] == pytest.approx(expected_yaw)
-    assert windup_pose[2] == pytest.approx(1.5708 - math.radians(225))
-    assert windup_pose[1] == pytest.approx(-math.radians(15))
-    assert fling_pose[0] == pytest.approx(expected_yaw)
-    assert fling_pose[2] == pytest.approx(1.5708)  # resets effectively to the faced pose
-    assert fling_pose[1] == pytest.approx(math.radians(15))
+    rotate_args = actions.call_joint_move_service.call_args_list[0][0]
+    windup_args = actions.call_joint_move_service.call_args_list[1][0]
+    fling_args = actions.call_joint_move_service_async.call_args_list[0][0]
 
-    # release delay defaults to roughly half the estimated fling duration
-    # (225 degrees at the default speed), not a small fixed constant
-    fling_sweep = math.radians(225)
-    expected_delay = (fling_sweep / (0.5 * 1.0)) * 0.5
-    mock_sleep.assert_called_once_with(pytest.approx(expected_delay))
+    rotate_joints, windup_joints, fling_joints = rotate_args[0], windup_args[0], fling_args[0]
 
-    # the fling is fired without waiting for it to finish
-    assert fling_kwargs.get('wait_for_completion') is False
+    # rotate: joint_1 = face yaw, everything else exactly as currently held
+    assert rotate_joints[0] == pytest.approx(expected_yaw)
+    assert rotate_joints[1:] == [0.1, 0.2, 0.3, 0.4, 0.5]
+
+    # windup/fling: the captured, fixed shapes, joint_1 = the same face yaw
+    assert windup_joints[0] == pytest.approx(expected_yaw)
+    assert windup_joints[1:] == pytest.approx(actions._THROW_WINDUP_POSE)
+    assert fling_joints[0] == pytest.approx(expected_yaw)
+    assert fling_joints[1:] == pytest.approx(actions._THROW_FLING_POSE)
+
+    # release trigger: joint_5, moving from the wind-up's own joint_5
+    # toward the captured release threshold - not a timed sleep
+    crossing_args = actions.wait_for_joint_crossing.call_args[0]
+    assert crossing_args[0] == 'joint_5'
+    assert crossing_args[1] == pytest.approx(actions._THROW_RELEASE_JOINT5)
+    assert crossing_args[2] == pytest.approx(actions._THROW_WINDUP_POSE[3])
 
     actions.detach_object.assert_called_once_with("red_cube")
     assert actions.held_object is None
+
+
+def test_throw_fails_if_no_joint_state_available_to_rotate(actions):
+    """throw should fail cleanly (not guess or crash) if no /joint_states
+    message has arrived yet to read the current shoulder/elbow/wrist from."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
+    })
+    actions.latest_joint_positions = None
+    actions.call_joint_move_service = MagicMock()
+
+    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+
+    assert result is False
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_throw_fails_if_rotate_fails(actions):
+    """If rotating to face the throw direction fails, throw should fail
+    cleanly before ever attempting the wind-up."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
+    })
+    actions.latest_joint_positions = {
+        'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
+    }
+    actions.call_joint_move_service = MagicMock(return_value=None)
+    actions.call_joint_move_service_async = MagicMock()
+
+    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+
+    assert result is False
+    assert actions.call_joint_move_service.call_count == 1
+    actions.call_joint_move_service_async.assert_not_called()
+
+
+def test_throw_fails_if_windup_fails(actions):
+    """If the rotate succeeds but the wind-up move fails, throw should
+    fail cleanly before ever attempting the fling."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
+    })
+    actions.latest_joint_positions = {
+        'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
+    }
+    actions.call_joint_move_service = MagicMock(side_effect=[{"success": True}, None])
+    actions.call_joint_move_service_async = MagicMock()
+
+    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+
+    assert result is False
+    actions.call_joint_move_service_async.assert_not_called()
+
+
+def test_throw_fails_if_release_point_never_crossed(actions):
+    """If joint_5 never actually crosses the release threshold (a real
+    timeout, not a guess about elapsed time), throw should fail cleanly
+    and never open the gripper on an arm that hasn't reached it."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
+    })
+    actions.latest_joint_positions = {
+        'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
+    }
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service_async = MagicMock(return_value=_mock_future())
+    actions.wait_for_joint_crossing = MagicMock(return_value=False)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+
+    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+
+    assert result is False
+    actions.call_move_gripper_service.assert_not_called()
+    assert actions.held_object == "red_cube"
 
 
 # resolve_direction_offset()
@@ -1602,22 +1761,25 @@ def test_throw_with_direction(actions):
         "pose": {"position": {"x": 1.0, "y": 0.0, "z": 0.05}, "orientation": {}},
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
     })
+    actions.latest_joint_positions = {
+        'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
+    }
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service_async = MagicMock(return_value=_mock_future())
+    actions.wait_for_joint_crossing = MagicMock(return_value=True)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
 
-    with patch("kinova_interface.arm_actions.time.sleep"):
-        result = actions.handlers['throw']({"target": "red_cube", "direction": "left", "distance": 0.3})
+    result = actions.handlers['throw']({"target": "red_cube", "direction": "left", "distance": 0.3})
 
     assert result is True
-    assert actions.call_joint_move_service.call_count == 3
 
     # left = bearing (1,0) rotated +90 degrees -> (0,1), scaled by distance,
     # giving release point (1.0, 0.3); face yaw points at that from the arm's base
     expected_yaw = math.atan2(0.3, 1.0)
-    face_pose = actions.call_joint_move_service.call_args_list[0][0][0]
-    assert face_pose[0] == pytest.approx(expected_yaw)
+    rotate_joints = actions.call_joint_move_service.call_args_list[0][0][0]
+    assert rotate_joints[0] == pytest.approx(expected_yaw)
 
     actions.update_object_pose.assert_called_once()
     pose_args = actions.update_object_pose.call_args[0]
@@ -1649,12 +1811,12 @@ def test_throw_fails_if_fling_does_not_start(actions):
         "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
     })
-    # face and windup succeed, but the fling itself fails to start
-    actions.call_joint_move_service = MagicMock(side_effect=[
-        {"success": True},
-        {"success": True},
-        None,
-    ])
+    actions.latest_joint_positions = {
+        'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
+    }
+    # rotate and windup succeed, but the fling itself fails to start
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service_async = MagicMock(return_value=None)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
 
     result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})

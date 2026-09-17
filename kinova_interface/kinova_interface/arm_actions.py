@@ -71,6 +71,16 @@ class ArmActions:
         self.apply_planning_scene_client = node.create_client(ApplyPlanningScene, '/apply_planning_scene', callback_group=cb_group)
         self.get_planning_scene_client = node.create_client(GetPlanningScene, '/get_planning_scene', callback_group=cb_group)
 
+        # Latest joint positions (name -> position), for throw's
+        # closed-loop release trigger (see wait_for_joint_crossing) and
+        # for reading the arm's current shoulder/elbow/wrist before
+        # rotating to face a new direction without disturbing them.
+        # None until the first /joint_states message arrives.
+        self.latest_joint_positions = None
+        self.joint_state_sub = node.create_subscription(
+            JointState, '/joint_states', self._on_joint_state, 10, callback_group=cb_group
+        )
+
         # For solving a single-plane reach (fixed base + wrist, only
         # shoulder/elbow move) via forward kinematics rather than a
         # general 6-DOF IK search - see solve_planar_reach.
@@ -106,6 +116,40 @@ class ArmActions:
                 return None
             time.sleep(0.01)
         return future.result() if future.done() else None
+
+    def _on_joint_state(self, msg):
+        self.latest_joint_positions = dict(zip(msg.name, msg.position))
+
+    def wait_for_joint_crossing(self, joint_name, threshold, starting_value, timeout=5.0, poll_interval=0.005):
+        """Block until self.latest_joint_positions[joint_name] crosses
+        'threshold' - moving in whichever direction 'starting_value'
+        implies (decreasing if threshold < starting_value, increasing
+        otherwise) - or 'timeout' elapses without it. Returns True/False
+        for whether the crossing was actually observed.
+
+        This is throw's release trigger: tied to the arm's real, live
+        joint state, not a computed time.sleep() delay. A timed sleep was
+        tried first and found unreliable - the fire-and-forget fling call
+        itself was blocking for up to
+        HardwareInterfaceClient.FIRE_AND_FORGET_REJECTION_WINDOW_SEC
+        before this code could even start timing, which for a short,
+        fast fling could consume the whole motion before any release
+        logic ran at all (see docs/throw-motion-reference.md). Polling
+        the genuinely-async fling's real position sidesteps that
+        entirely - it doesn't matter how long the fling call took to
+        return (see call_joint_move_service_async), because this checks
+        where the arm actually is, not how much time has passed."""
+        decreasing = threshold < starting_value
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            current = self.latest_joint_positions.get(joint_name) if self.latest_joint_positions else None
+            if current is not None:
+                if decreasing and current <= threshold:
+                    return True
+                if not decreasing and current >= threshold:
+                    return True
+            time.sleep(poll_interval)
+        return False
 
     def get_static_object_coords(self, target_name):
         """Return a dict with x,y,z for the object, or None on failure."""
@@ -668,11 +712,16 @@ class ArmActions:
         (e.g. 'pour's tilt: a delta on joint_6 alone, without needing to
         know or recompute the other five joints' current values).
 
-        With wait_for_completion False, this returns as soon as the goal is
-        accepted rather than once the motion finishes - the caller (e.g.
-        'throw's fling) is then responsible for whatever timing it needs,
-        and won't know whether the motion itself ultimately succeeded, only
-        that it started."""
+        With wait_for_completion False, this still blocks the caller for
+        up to HardwareInterfaceClient.FIRE_AND_FORGET_REJECTION_WINDOW_SEC
+        (the server's own bounded wait to catch a fast rejection) before
+        returning - fine for a caller that only cares the motion started
+        without also needing precise timing of what happens next. A
+        caller that needs to react to the motion in real time as it
+        happens (e.g. throw's release trigger) should use
+        call_joint_move_service_async instead, which doesn't wait for
+        anything at all - see that method's docstring for why this
+        distinction turned out to matter in practice."""
         if not self.joint_move_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error("Joint Move service not available")
             return None
@@ -690,6 +739,35 @@ class ArmActions:
         else:
             self.get_logger().error(f"Failed to move to joint positions {joint_positions}: {response.message if response else 'no response'}")
             return None
+
+    def call_joint_move_service_async(self, joint_positions, motion_params=None):
+        """Fire a joint-space move without waiting for any response at
+        all - not even call_joint_move_service's own bounded
+        fire-and-forget wait. Returns the raw future (which the caller
+        can inspect later if it cares about eventual success/failure) or
+        None if the service isn't even available to call.
+
+        This exists specifically because that bounded wait
+        (HardwareInterfaceClient.FIRE_AND_FORGET_REJECTION_WINDOW_SEC,
+        0.5s) was found to break 'throw's release timing: it blocks the
+        *client* for up to that long before call_joint_move_service
+        returns at all, so for a short, fast fling, the entire motion
+        could finish before any release-timing code even started
+        running - the object would still be gripped when the arm had
+        already stopped (see docs/throw-motion-reference.md). Not
+        waiting for any response at all means the caller can start
+        reacting to the arm's real, live position (see
+        wait_for_joint_crossing) immediately after sending the goal,
+        regardless of how long the server takes to eventually reply."""
+        if not self.joint_move_client.wait_for_service(timeout_sec=5.0):
+            self.get_logger().error("Joint Move service not available")
+            return None
+        req = JointMove.Request()
+        req.joint_positions = [float(p) for p in joint_positions]
+        req.wait_for_completion = False
+        req.relative = False
+        req.motion_params = motion_params if motion_params is not None else MotionParams()
+        return self.joint_move_client.call_async(req)
 
     def attach_object(self, obj_id):
         """Remove object from planning scene (allow collision) via the environment mapping node."""
@@ -1358,43 +1436,52 @@ class ArmActions:
         self.get_logger().info(f"Pushed '{target_name}' {where}")
         return True
 
-    # Mirrors HardwareInterfaceClient.HOME_JOINT_POSITIONS - duplicated here
-    # rather than shared across nodes/processes, the same way small
-    # per-node constants/helpers already are elsewhere in this codebase
-    # (e.g. the quaternion math duplicated in environment_mapping_node.py
-    # and hardware_interface_client.py). Update both if home's pose changes.
-    _HOME_JOINT_POSITIONS = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
-    _SHOULDER_JOINT_INDEX = 1  # joint_2
-    _ELBOW_JOINT_INDEX = 2  # joint_3
-
-    # From kortex_description's gen3_lite_macro.xacro joint limits: used
-    # only to estimate roughly how long the fling will take, to time the
-    # mid-swing release - not an exact figure, real trajectories ramp
-    # velocity up/down rather than moving at a constant rate throughout.
-    _JOINT_MAX_VELOCITY_RAD_S = 0.5
+    # A captured, fixed joint_2..6 shape (see docs/throw-motion-reference.md)
+    # for a real, manually-demonstrated wind-up - not derived from home by
+    # a wind-up angle like an earlier version of this; joint_1 (base
+    # facing) is the only thing that varies per throw.
+    _THROW_WINDUP_POSE = [math.radians(v) for v in [-22.84, 56.01, 80.71, 50.6, 0.0]]
+    # The fling's own end pose - a single continuous swing straight from
+    # the wind-up to here, joint_1 fixed the whole way.
+    _THROW_FLING_POSE = [math.radians(v) for v in [32.63, -34.26, 80.71, -63.25, 0.0]]
+    # joint_5 barely moves during the early part of the fling, then swings
+    # hard right at the release moment - captured directly from the demo,
+    # this is where the gripper should open.
+    _THROW_RELEASE_JOINT5 = math.radians(-42.7)
 
     def _handle_throw(self, params):
-        """A genuine joint-space throw: face the throw direction from
-        home's pose (rotating only joint_1, the base), wind the elbow
-        (joint_3) back past facing the opposite way, then fling it forward
-        fast back to the faced pose - releasing the gripper mid-swing
-        rather than waiting for the fling to finish. joint_2 (the shoulder)
-        rocks back and forward in step with the elbow, to exaggerate the
-        motion. Assumes the object named by 'target' is already grasped -
-        fails cleanly rather than guessing if it isn't.
+        """A genuine joint-space throw, captured from a manual RViz
+        demonstration (see docs/throw-motion-reference.md): rotate to
+        face the throw direction (joint_1 only, current shoulder/elbow/
+        wrist held exactly where pickup left them), move straight to a
+        captured wind-up shape (_THROW_WINDUP_POSE), then one continuous
+        fling straight to a captured end pose (_THROW_FLING_POSE) -
+        releasing the gripper the instant joint_5 crosses
+        _THROW_RELEASE_JOINT5, not after a fixed delay or once the arm
+        has stopped.
 
-        The whole swing happens in a single vertical plane (only joint_1,
-        joint_2, and joint_3 move), aimed by 'destination' or 'direction'
-        the same way as other actions, but the actual distance thrown is
-        governed by 'wind_up_angle'/'fling_angle'/'speed', not by
-        'distance' alone - those just decide which way the arm faces
-        before swinging. The fling is fired without waiting for it to
-        finish; a rejection arriving within about half a second is still
-        caught and fails the whole action before the gripper ever opens
-        (see HardwareInterfaceClient.handle_joint_move), but the object
-        leaves the gripper mid-swing rather than at a controlled position,
-        so the landing position recorded afterward is a rough
-        approximation at best."""
+        Assumes 'target' is already grasped - fails cleanly rather than
+        guessing if it isn't.
+
+        The release is a closed-loop trigger on the arm's real, live
+        joint_5 position (wait_for_joint_crossing), not a computed
+        time.sleep(). A timed sleep - even one scaled to an estimated
+        fling duration - was tried first and found unreliable: the
+        fire-and-forget fling call itself blocked the client for up to
+        HardwareInterfaceClient.FIRE_AND_FORGET_REJECTION_WINDOW_SEC
+        (0.5s) before any release-timing code could even start running,
+        which for a short, fast fling could consume the entire motion -
+        the object would still be gripped once the arm had already
+        stopped. call_joint_move_service_async (no wait at all, not even
+        that bounded one) plus polling the real joint state fixes this by
+        not depending on timing at all - see docs/throw-motion-reference.md
+        for the full diagnosis.
+
+        Because release timing is now driven by the arm's real position
+        rather than a fixed delay, the landing position recorded
+        afterward is still a rough approximation - it isn't computing
+        where the object will actually land physically, just recording
+        the intended target."""
         target_name = params.get('target')
         destination_name = params.get('destination')
         direction = params.get('direction')
@@ -1428,60 +1515,49 @@ class ArmActions:
                 return False
             release_x, release_y = offset
 
-        # Face the throw direction: home's pose, rotated at the base
-        # (joint_1) to point along the release bearing from the arm's own
-        # origin - the single plane the whole swing happens in.
         base_yaw = math.atan2(release_y, release_x)
-        face_pose = list(self._HOME_JOINT_POSITIONS)
-        face_pose[0] = base_yaw
+        motion_params = self.build_motion_params(params.get('speed'))
 
-        face_motion = self.build_motion_params(0.6)
-        r = self.call_joint_move_service(face_pose, motion_params=face_motion)
+        # 1. Rotate to face the throw direction - joint_1 only, current
+        # shoulder/elbow/wrist (wherever pickup left them) held exactly
+        if self.latest_joint_positions is None:
+            self.get_logger().error("No joint state available to rotate for throw")
+            return False
+        try:
+            current_arm_joints = [self.latest_joint_positions[f'joint_{i}'] for i in range(2, 7)]
+        except KeyError as e:
+            self.get_logger().error(f"Missing joint {e} in latest joint state")
+            return False
+        rotate_joints = [base_yaw, *current_arm_joints]
+        r = self.call_joint_move_service(rotate_joints, motion_params=motion_params)
         if not (r and r['success']):
-            self.get_logger().error('Failed to face throw direction')
+            self.get_logger().error(f"Failed to rotate to face the throw direction for '{target_name}'")
             return False
 
-        # Wind-up: rotate the elbow back past facing the opposite way from
-        # the throw direction (225 degrees past the faced pose by default -
-        # 180 to face backward, plus 45 further), and rock the shoulder
-        # back too, like cocking the whole arm before a pitch
-        wind_up_angle = float(params.get('wind_up_angle', math.radians(225)))
-        shoulder_rock_angle = float(params.get('joint_2_rock_angle', math.radians(15)))
-        windup_pose = list(face_pose)
-        windup_pose[self._ELBOW_JOINT_INDEX] -= wind_up_angle
-        windup_pose[self._SHOULDER_JOINT_INDEX] -= shoulder_rock_angle
-
-        windup_motion = self.build_motion_params(0.5)
-        r = self.call_joint_move_service(windup_pose, motion_params=windup_motion)
+        # 2. Wind-up - go straight to the captured wind-up shape
+        windup_joints = [base_yaw, *self._THROW_WINDUP_POSE]
+        r = self.call_joint_move_service(windup_joints, motion_params=motion_params)
         if not (r and r['success']):
-            self.get_logger().error('Failed to wind up for throw')
+            self.get_logger().error(f"Failed to wind up for throw of '{target_name}'")
             return False
 
-        # Fling: swing the elbow (and shoulder) forward fast, resetting
-        # effectively to the faced pose ('fling_angle' 0.0 by default) -
-        # fired without waiting for it to finish, so the release below
-        # happens mid-swing rather than only once the arm has stopped
-        fling_angle = float(params.get('fling_angle', 0.0))
-        fling_pose = list(face_pose)
-        fling_pose[self._ELBOW_JOINT_INDEX] += fling_angle
-        fling_pose[self._SHOULDER_JOINT_INDEX] += shoulder_rock_angle
-
-        fling_speed = float(params.get('speed', 1.0))
-        fling_motion = self.build_motion_params(fling_speed)
-        if not self.call_joint_move_service(fling_pose, motion_params=fling_motion, wait_for_completion=False):
-            self.get_logger().error('Failed to start throw fling')
+        # 3. Fling - one continuous swing straight to the end pose, fired
+        # without waiting for any response at all (see
+        # call_joint_move_service_async's docstring for why)
+        fling_joints = [base_yaw, *self._THROW_FLING_POSE]
+        fling_motion = self.build_motion_params(params.get('speed', 1.0))
+        fling_future = self.call_joint_move_service_async(fling_joints, motion_params=fling_motion)
+        if fling_future is None:
+            self.get_logger().error(f"Failed to start throw fling for '{target_name}'")
             return False
 
-        # Release roughly midway through the fling, not after a fixed
-        # delay - scaled to the actual size of the swing and its speed, so
-        # a much bigger wind-up/fling still releases mid-swing rather than
-        # either before the arm has really started moving or after it's
-        # already stopped.
-        fling_sweep = abs(fling_pose[self._ELBOW_JOINT_INDEX] - windup_pose[self._ELBOW_JOINT_INDEX])
-        estimated_fling_duration = fling_sweep / (self._JOINT_MAX_VELOCITY_RAD_S * max(fling_speed, 0.1))
-        default_release_delay = estimated_fling_duration * 0.5
-        release_delay = float(params.get('release_delay', default_release_delay))
-        time.sleep(release_delay)
+        # 4. Release the instant joint_5 crosses the captured release
+        # point - a closed-loop trigger on the arm's real position
+        windup_joint5 = self._THROW_WINDUP_POSE[3]
+        crossed = self.wait_for_joint_crossing('joint_5', self._THROW_RELEASE_JOINT5, windup_joint5)
+        if not crossed:
+            self.get_logger().error(f"Timed out waiting for the release point during throw of '{target_name}'")
+            return False
 
         open_pos = float(params.get('open_position', 0.0))
         rg = self.call_move_gripper_service(open_pos)
