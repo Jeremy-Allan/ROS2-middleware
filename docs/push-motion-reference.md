@@ -162,3 +162,18 @@ bigger object may get pushed slightly off from how a human would
 naturally grip it (by its center rather than a computed near-face point)
 in exchange for keeping the single-plane motion exactly as simple as
 it already is.
+
+## Reused by `thrust`
+
+`thrust` reuses this exact mechanism (`solve_planar_reach` +
+`check_joint_state_validity`) for a held object rather than a resting
+one: raise straight up (facing wherever it was originally resting,
+wrist reset to `_PLANAR_REACH_WRIST` regardless of whatever orientation
+`pickup`'s `grasp_style: 'side'` search happened to land on), spin to
+face the thrust direction (`joint_1` only - shoulder/elbow held exactly
+where the raise left them, so an arbitrarily large turn doesn't disturb
+the object's orientation, only which way the arm points), then extend
+(shoulder/elbow only, seeded at the spin position). Since the object is
+attached by that point (from `pickup`), it's excluded from collision
+checking against the gripper automatically - unlike `push`, `thrust`
+needs no `set_collision_allowed` at all.

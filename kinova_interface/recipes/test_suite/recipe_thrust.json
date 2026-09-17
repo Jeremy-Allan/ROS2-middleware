@@ -1,9 +1,9 @@
 {
   "recipe_name": "Thrust - Box",
-  "description": "Pick up the box, level it, then thrust it forward",
+  "description": "Pick up the box with a flat side grasp, raise it, then thrust it forward as far as reliably possible",
   "steps": [
     { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
-    { "step_id": 2, "action": "pickup", "parameters": { "target": "box" }, "description": "Pick up the box" },
-    { "step_id": 3, "action": "thrust", "parameters": { "target": "box" }, "description": "Level and thrust the box forward" }
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "box", "grasp_style": "side" }, "description": "Pick up the box with a flat, side-on grasp" },
+    { "step_id": 3, "action": "thrust", "parameters": { "target": "box", "direction": "forward" }, "description": "Raise, then thrust the box forward (default 0.4m, ~77 degree shoulder swing)" }
   ]
 }

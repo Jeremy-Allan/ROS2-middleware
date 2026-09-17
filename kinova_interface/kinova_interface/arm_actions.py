@@ -1060,10 +1060,47 @@ class ArmActions:
         self.get_logger().info(f"Poured '{target_name}' toward '{destination_name}'" if destination_name else f"Poured '{target_name}' {direction}")
         return True
 
+    # Above this, a solved planar reach is considered to have failed to
+    # converge (meters) - a sanity bound, not a tolerance to plan within.
+    _PLANAR_REACH_MAX_ERROR = 0.01
+
     def _handle_thrust(self, params):
-        """Level the held object horizontally, then thrust it forward.
-        Assumes the object named by 'target' is already grasped - fails
-        cleanly rather than guessing if it isn't."""
+        """Raise a held object and thrust it toward a destination -
+        reuses the exact same single-plane mechanism as 'push' (see
+        docs/push-motion-reference.md): joint_1 fixed per stage, wrist
+        held level at _PLANAR_REACH_WRIST, only joint_2/joint_3
+        (shoulder/elbow) ever change to reach a position.
+
+        Assumes 'target' is already grasped - fails cleanly rather than
+        guessing if it isn't - and expects it to have been grasped via
+        pickup's grasp_style='side' (the same verified, level side grasp
+        'pour' uses), so it starts out level and pointing outward.
+
+        Sequence:
+        1. Raise straight up from the grasp position, facing wherever it
+           was originally resting (before pickup), to 'lift_height'
+           above it. This also resets the wrist to _PLANAR_REACH_WRIST
+           regardless of whatever specific orientation pickup's
+           grasp_style='side' search happened to land on, so the result
+           is level and facing outward the same way every time - not
+           dependent on which grasp candidate was chosen.
+        2. Spin to face the thrust direction, if it differs from where
+           it's currently facing - joint_1 only; joint_2/joint_3/wrist
+           stay exactly where the raise left them, so nothing about the
+           object's orientation changes, only which way the arm points.
+           There's no separate 'spin angle' parameter - an arbitrarily
+           large turn (e.g. facing a destination on the opposite side of
+           where it started) falls directly out of whichever
+           destination/direction is given, the same way push's own
+           facing does.
+        3. Extend toward the destination/direction at that same height,
+           joint_2/joint_3 only - exactly like push's own extend.
+
+        Where to thrust it is either a named 'destination' object, or a
+        'direction' ('forward'/'backward'/'left'/'right', relative to
+        the object's own original resting bearing from the arm) plus a
+        'distance' - both resolved from the object's pre-pickup
+        registered position, the same as 'push'."""
         target_name = params.get('target')
         if not target_name:
             self.get_logger().error("thrust action requires 'target' naming the held object")
@@ -1072,39 +1109,98 @@ class ArmActions:
             self.get_logger().error(f"Cannot thrust '{target_name}': held object is '{self.held_object}'")
             return False
 
-        orientation_name = params.get('orientation', 'facing_forward')
-        orientation = self.resolve_orientation(orientation_name)
-        if orientation is None:
-            self.get_logger().error(f"Unknown orientation preset '{orientation_name}' for thrust")
+        destination_name = params.get('destination')
+        direction = params.get('direction')
+        if not destination_name and not direction:
+            self.get_logger().error("thrust action requires either 'destination' or 'direction'")
             return False
-        has_orientation, roll, pitch, yaw = orientation
 
-        motion_params = self.build_motion_params(params.get('speed', 0.8))
+        target_info = self.get_object_info(target_name)
+        if not target_info:
+            self.get_logger().error(f"Could not resolve held object '{target_name}' for thrust")
+            return False
+        origin = target_info['pose']['position']
 
-        # 1. Level the held object horizontally before thrusting
-        r = self.call_relative_move_service(0.0, 0.0, 0.0, has_orientation, roll, pitch, yaw, motion_params)
+        if destination_name:
+            dest_info = self.get_object_info(destination_name)
+            if not dest_info:
+                self.get_logger().error(f"Could not resolve thrust destination '{destination_name}'")
+                return False
+            release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
+        else:
+            # 0.4m verified (via solve_planar_reach's own Newton solve) as
+            # close to the practical reach limit at a typical lift_height -
+            # a clean, collision-free ~77 degree shoulder swing; pushing
+            # further (0.5m+) was found to hit real kinematic instability,
+            # not just a small tuning gap - see docs/push-motion-reference.md.
+            distance = float(params.get('distance', 0.4))
+            offset = self.resolve_direction_offset(origin['x'], origin['y'], direction, distance)
+            if offset is None:
+                self.get_logger().error(f"Unknown thrust direction '{direction}'")
+                return False
+            release_x, release_y = offset
+
+        # Fast by default (unlike push/pour's more careful pace) - a
+        # thrust is meant to be a forceful, punchy motion; still
+        # overridable via an explicit 'speed' if a slower one is wanted.
+        motion_params = self.build_motion_params(params.get('speed', 1.0))
+        lift_height = float(params.get('lift_height', self._POUR_DEFAULT_LIFT_HEIGHT))
+        raise_z = origin['z'] + lift_height
+
+        # 1. Raise - facing wherever it was originally resting, wrist
+        # reset to level regardless of pickup's own grasp orientation
+        face_yaw = math.atan2(origin['y'], origin['x'])
+        raise_solved = self.solve_planar_reach(face_yaw, origin['x'], origin['y'], raise_z)
+        if raise_solved is None or raise_solved[3] > self._PLANAR_REACH_MAX_ERROR:
+            self.get_logger().error(f"Could not solve a planar reach to raise '{target_name}'")
+            return False
+        raise_shoulder, raise_elbow, _, _ = raise_solved
+        raise_joints = [face_yaw, raise_shoulder, raise_elbow, *self._PLANAR_REACH_WRIST]
+        if not self.check_joint_state_validity(raise_joints):
+            self.get_logger().error(f"Raised pose for '{target_name}' is in collision")
+            return False
+
+        r = self.call_joint_move_service(raise_joints, motion_params=motion_params)
         if not (r and r['success']):
-            self.get_logger().error('Failed to level for thrust')
+            self.get_logger().error(f"Failed to raise '{target_name}'")
             return False
 
-        vector_name = params.get('vector', 'thrust_forward')
-        vector = self.get_relative_movement_vector(vector_name)
-        if not vector:
-            self.get_logger().error(f"Unknown movement vector '{vector_name}' for thrust")
+        # 2. Spin to face the thrust direction - joint_1 only,
+        # shoulder/elbow held exactly where the raise left them
+        thrust_yaw = math.atan2(release_y, release_x)
+        spin_joints = [thrust_yaw, raise_shoulder, raise_elbow, *self._PLANAR_REACH_WRIST]
+        if not self.check_joint_state_validity(spin_joints):
+            self.get_logger().error(f"Spin pose for '{target_name}' is in collision")
             return False
 
-        # 2. Thrust forward
-        r = self.call_relative_move_service(vector['x'], vector['y'], vector['z'], motion_params=motion_params)
+        r = self.call_joint_move_service(spin_joints, motion_params=motion_params)
         if not (r and r['success']):
-            self.get_logger().error('Failed to thrust forward')
+            self.get_logger().error(f"Failed to spin to face the thrust direction for '{target_name}'")
             return False
 
-        self.get_logger().info(f"Thrust '{target_name}' forward")
+        # 3. Extend toward the destination - same height, seeded at the
+        # spin position so it stays a small, local adjustment
+        extend_solved = self.solve_planar_reach(
+            thrust_yaw, release_x, release_y, raise_z,
+            seed_shoulder=raise_shoulder, seed_elbow=raise_elbow
+        )
+        if extend_solved is None or extend_solved[3] > self._PLANAR_REACH_MAX_ERROR:
+            self.get_logger().error(f"Could not solve a planar reach to thrust '{target_name}' to its destination")
+            return False
+        extend_shoulder, extend_elbow, _, _ = extend_solved
+        extend_joints = [thrust_yaw, extend_shoulder, extend_elbow, *self._PLANAR_REACH_WRIST]
+        if not self.check_joint_state_validity(extend_joints):
+            self.get_logger().error(f"Thrust end pose for '{target_name}' is in collision")
+            return False
+
+        r = self.call_joint_move_service(extend_joints, motion_params=motion_params)
+        if not (r and r['success']):
+            self.get_logger().error(f"Failed to thrust '{target_name}' to its destination")
+            return False
+
+        where = f"toward '{destination_name}'" if destination_name else direction
+        self.get_logger().info(f"Thrust '{target_name}' {where}")
         return True
-
-    # Above this, a solved planar reach is considered to have failed to
-    # converge (meters) - a sanity bound, not a tolerance to plan within.
-    _PLANAR_REACH_MAX_ERROR = 0.01
 
     def _handle_push(self, params):
         """Slide an object to a destination by sustained contact, without

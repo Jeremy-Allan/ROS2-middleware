@@ -983,44 +983,154 @@ def test_thrust_fails_if_target_not_held(actions):
     assert result is False
 
 
-def test_thrust_levels_then_thrusts_forward(actions):
-    """thrust should level to horizontal, then move by the thrust_forward vector."""
+def test_thrust_requires_destination_or_direction(actions):
+    """thrust without either a destination or a direction should fail
+    cleanly, before ever touching the arm."""
 
     actions.held_object = "red_cube"
-    actions.get_orientation_preset = MagicMock(return_value={"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
-    actions.call_relative_move_service = MagicMock(return_value={"success": True})
-    actions.get_relative_movement_vector = MagicMock(
-        return_value={"x": 0.1, "y": 0.0, "z": 0.0}
-    )
-
-    result = actions.handlers['thrust']({"target": "red_cube"})
-
-    assert result is True
-    assert actions.call_relative_move_service.call_count == 2
-
-    level_call = actions.call_relative_move_service.call_args_list[0][0]
-    thrust_call = actions.call_relative_move_service.call_args_list[1][0]
-
-    # facing_forward is (0, 0, 0) - leveling is a zero-delta orientation set
-    assert level_call[3] is True
-    assert level_call[4:7] == (0.0, 0.0, 0.0)
-    # the actual forward displacement
-    assert thrust_call[0:3] == (0.1, 0.0, 0.0)
-
-    actions.get_relative_movement_vector.assert_called_once_with("thrust_forward")
-
-
-def test_thrust_fails_on_unknown_vector(actions):
-    """thrust should fail cleanly if its movement vector can't be resolved."""
-
-    actions.held_object = "red_cube"
-    actions.get_orientation_preset = MagicMock(return_value={"roll": 0.0, "pitch": 0.0, "yaw": 0.0})
-    actions.call_relative_move_service = MagicMock(return_value={"success": True})
-    actions.get_relative_movement_vector = MagicMock(return_value=None)
 
     result = actions.handlers['thrust']({"target": "red_cube"})
 
     assert result is False
+
+
+def test_thrust_raises_spins_and_extends(actions):
+    """thrust should raise straight up (facing wherever the object was
+    originally resting, wrist reset to level), spin to face the thrust
+    direction (joint_1 only, shoulder/elbow held from the raise), then
+    extend toward the destination (shoulder/elbow only, seeded at the
+    spin position) - reusing the exact same single-plane mechanism as
+    push (see docs/push-motion-reference.md)."""
+
+    actions.held_object = "red_cube"
+    origin_x, origin_y, origin_z = 0.3, 0.1, 0.02
+    target_info = {
+        "pose": {"position": {"x": origin_x, "y": origin_y, "z": origin_z}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    }
+    dest_info = {
+        "pose": {"position": {"x": -0.2, "y": 0.4, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.1, 0.02]}
+    }
+    actions.get_object_info = MagicMock(side_effect=lambda name: {
+        "red_cube": target_info, "target_spot": dest_info
+    }[name])
+
+    face_yaw = math.atan2(origin_y, origin_x)
+    thrust_yaw = math.atan2(0.4, -0.2)
+    raise_z = origin_z + actions._POUR_DEFAULT_LIFT_HEIGHT
+
+    def solve_side_effect(base_yaw, x, y, z, seed_shoulder=None, seed_elbow=None):
+        if seed_shoulder is None:
+            assert base_yaw == pytest.approx(face_yaw)
+            assert (x, y, z) == pytest.approx((origin_x, origin_y, raise_z))
+            return (-0.1, 1.8, (x, y, z), 0.0)
+        assert base_yaw == pytest.approx(thrust_yaw)
+        assert seed_shoulder == pytest.approx(-0.1)
+        assert seed_elbow == pytest.approx(1.8)
+        return (-0.4, 1.5, (x, y, z), 0.0)
+
+    actions.solve_planar_reach = MagicMock(side_effect=solve_side_effect)
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+
+    result = actions.handlers['thrust']({"target": "red_cube", "destination": "target_spot"})
+
+    assert result is True
+    raise_call, spin_call, extend_call = actions.call_joint_move_service.call_args_list
+
+    assert raise_call[0][0] == [pytest.approx(face_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
+    assert spin_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
+    assert extend_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.4), pytest.approx(1.5), 0.0, 0.0, 0.0]
+
+
+def test_thrust_fails_if_raise_unsolvable(actions):
+    """If solve_planar_reach can't find the raised pose at all, thrust
+    should fail cleanly before ever moving."""
+
+    actions.held_object = "red_cube"
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=None)
+    actions.call_joint_move_service = MagicMock()
+
+    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert result is False
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_thrust_fails_if_raise_pose_in_collision(actions):
+    """A geometrically-solved raise pose that's actually in collision
+    should fail cleanly, without ever moving."""
+
+    actions.held_object = "red_cube"
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.3, 0.1, 0.16), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=False)
+    actions.call_joint_move_service = MagicMock()
+
+    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert result is False
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_thrust_fails_if_spin_pose_in_collision(actions):
+    """If the raise succeeds but spinning to face the thrust direction
+    would be in collision, thrust should fail cleanly rather than spin
+    into it."""
+
+    actions.held_object = "red_cube"
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.3, 0.1, 0.16), 0.0))
+    # raise pose valid, spin pose (same shoulder/elbow, different yaw) invalid
+    actions.check_joint_state_validity = MagicMock(side_effect=[True, False])
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+
+    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert result is False
+    # the raise itself should still have been attempted (it was valid)
+    assert actions.call_joint_move_service.call_count == 1
+
+
+def test_thrust_fails_if_extend_unsolvable(actions):
+    """If the raise and spin succeed but the extend can't be solved,
+    thrust should fail cleanly rather than attempt an unresolved move."""
+
+    actions.held_object = "red_cube"
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+
+    def solve_side_effect(base_yaw, x, y, z, seed_shoulder=None, seed_elbow=None):
+        if seed_shoulder is None:
+            return (-0.1, 1.8, (x, y, z), 0.0)
+        return None
+
+    actions.solve_planar_reach = MagicMock(side_effect=solve_side_effect)
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+
+    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert result is False
+    # raise and spin both happen (2 real moves) before the extend fails to solve
+    assert actions.call_joint_move_service.call_count == 2
 
 
 # push()
