@@ -1,0 +1,8 @@
+{
+  "recipe_name": "Pickup - Box",
+  "description": "Simple pickup test: home, then pick up the box",
+  "steps": [
+    { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "box" }, "description": "Pick up the box" }
+  ]
+}

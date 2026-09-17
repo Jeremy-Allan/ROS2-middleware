@@ -1,0 +1,9 @@
+{
+  "recipe_name": "Pour - Box",
+  "description": "Pick up the box, tilt it to pour, hold, then return upright",
+  "steps": [
+    { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "box" }, "description": "Pick up the box" },
+    { "step_id": 3, "action": "pour", "parameters": { "target": "box" }, "description": "Tilt the box to pour, hold, then return upright" }
+  ]
+}

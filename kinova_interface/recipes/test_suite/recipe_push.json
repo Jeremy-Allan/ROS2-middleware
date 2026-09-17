@@ -1,0 +1,8 @@
+{
+  "recipe_name": "Push - Box Forward",
+  "description": "Slide the box forward by contact, without ever grasping or lifting it",
+  "steps": [
+    { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
+    { "step_id": 2, "action": "push", "parameters": { "target": "box", "direction": "forward" }, "description": "Push the box forward (default 0.2m)" }
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "recipe_name": "Dropoff - Box to Tray",
+  "description": "Pick up the box, then drop it off onto the delivery tray",
+  "steps": [
+    { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "box" }, "description": "Pick up the box" },
+    { "step_id": 3, "action": "dropoff", "parameters": { "target": "box", "destination": "delivery_tray" }, "description": "Place the box onto the delivery tray" }
+  ]
+}

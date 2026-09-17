@@ -1,0 +1,9 @@
+{
+  "recipe_name": "Throw - Box Forward",
+  "description": "Pick up the box, face forward, wind up, and fling it forward mid-release",
+  "steps": [
+    { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "box" }, "description": "Pick up the box" },
+    { "step_id": 3, "action": "throw", "parameters": { "target": "box", "direction": "forward" }, "description": "Wind up and throw the box forward" }
+  ]
+}
