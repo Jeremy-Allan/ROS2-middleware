@@ -1,8 +1,8 @@
 {
-  "recipe_name": "Push - Push Block Forward",
-  "description": "Slide push_block forward by sustained contact, without ever grasping or lifting it",
+  "recipe_name": "Push - Box Forward",
+  "description": "Slide the box forward by sustained contact, without ever grasping or lifting it",
   "steps": [
     { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
-    { "step_id": 2, "action": "push", "parameters": { "target": "push_block", "direction": "forward" }, "description": "Push push_block forward (default 0.2m), extending joint_2/joint_3 from a verified contact pose" }
+    { "step_id": 2, "action": "push", "parameters": { "target": "box", "direction": "forward" }, "description": "Push the box forward (default 0.2m), extending joint_2/joint_3 from a verified contact pose" }
   ]
 }

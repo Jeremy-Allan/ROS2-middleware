@@ -137,3 +137,28 @@ search:
 `solve_planar_reach` was deliberately written generic (facing angle +
 fixed wrist + 2-joint solve) rather than push-specific, since the same
 single-plane extend/retract shape is intended to generalize to `thrust`.
+
+### Generalizing past `push_block`: bigger objects
+
+Retested end to end against `box` (~107x75mm, much bigger than
+`push_block`'s ~60x60mm), targeting it by name with no code changes -
+confirming the mechanism itself is generic. It failed at the contact
+check: `check_joint_state_validity` correctly found the gripper
+genuinely overlapping `box` at its solved contact pose. Verified
+directly (`/check_state_validity`) that this is a real, single-cause
+collision - `(gripper finger links, box)` only, nothing else (no table,
+no self-collision) - because reaching a bigger object's exact registered
+*center* inherently requires the gripper to overlap it more than a small
+object like `push_block` ever does.
+
+Rather than computing a near-face offset from the object's own
+dimensions (the fix used for `pickup`'s equivalent problem), the chosen
+fix here is simpler and was an explicit choice: contact with the target
+object is the entire point of a push, so `set_collision_allowed` is now
+applied *before* the geometry/validity checks, not after - the checks
+still correctly catch a collision with anything else (table, other
+objects), just not with the object being pushed. This accepts that a
+bigger object may get pushed slightly off from how a human would
+naturally grip it (by its center rather than a computed near-face point)
+in exchange for keeping the single-plane motion exactly as simple as
+it already is.

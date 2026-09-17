@@ -1178,40 +1178,55 @@ class ArmActions:
         # plane every subsequent move stays within.
         base_yaw = math.atan2(origin['y'], origin['x'])
 
-        contact = self.solve_planar_reach(base_yaw, origin['x'], origin['y'], origin['z'])
-        if contact is None or contact[3] > self._PLANAR_REACH_MAX_ERROR:
-            self.get_logger().error(f"Could not solve a planar reach to '{target_name}'")
-            return False
-        contact_shoulder, contact_elbow, _, _ = contact
-        contact_joints = [base_yaw, contact_shoulder, contact_elbow, *self._PLANAR_REACH_WRIST]
-        if not self.check_joint_state_validity(contact_joints):
-            self.get_logger().error(f"Push contact pose for '{target_name}' is in collision")
-            return False
-
-        # Same height, same plane, seeded at the contact solution so the
-        # extend stays a small, local adjustment rather than jumping to
-        # an unrelated configuration.
-        extend = self.solve_planar_reach(
-            base_yaw, release_x, release_y, origin['z'],
-            seed_shoulder=contact_shoulder, seed_elbow=contact_elbow
-        )
-        if extend is None or extend[3] > self._PLANAR_REACH_MAX_ERROR:
-            self.get_logger().error(f"Could not solve a planar reach to the push destination for '{target_name}'")
-            return False
-        extend_shoulder, extend_elbow, _, _ = extend
-        extend_joints = [base_yaw, extend_shoulder, extend_elbow, *self._PLANAR_REACH_WRIST]
-        if not self.check_joint_state_validity(extend_joints):
-            self.get_logger().error(f"Push end pose for '{target_name}' is in collision")
-            return False
-
+        # Contact with the target object itself is the entire point of a
+        # push, not a collision to avoid - permitted up front, before the
+        # validity checks below, not just before the real motion. A
+        # bigger object (e.g. 'box', ~107x75mm, vs. push_block's small
+        # ~60x60mm) genuinely needs the gripper to overlap it to reach its
+        # exact registered center, which the pre-check would otherwise
+        # (correctly) reject - verified directly that the only contact at
+        # that pose is (gripper, target object), nothing else (see
+        # docs/push-motion-reference.md), so exempting just this object
+        # doesn't hide a real problem with anything else in the scene.
+        # This intentionally doesn't try to approach a bigger object's
+        # near face instead - see docs/push-motion-reference.md for why
+        # that's a known, accepted limitation for now: it may push a
+        # larger object slightly off from how a human would naturally
+        # grip it, favoring keeping the single-plane motion simple.
         if not self.set_collision_allowed(target_name, True):
             self.get_logger().error(f"Failed to allow contact with '{target_name}' for push")
             return False
 
-        motion_params = self.build_motion_params(params.get('speed'))
-        close_pos = float(params.get('close_position', 0.75))
-
         try:
+            contact = self.solve_planar_reach(base_yaw, origin['x'], origin['y'], origin['z'])
+            if contact is None or contact[3] > self._PLANAR_REACH_MAX_ERROR:
+                self.get_logger().error(f"Could not solve a planar reach to '{target_name}'")
+                return False
+            contact_shoulder, contact_elbow, _, _ = contact
+            contact_joints = [base_yaw, contact_shoulder, contact_elbow, *self._PLANAR_REACH_WRIST]
+            if not self.check_joint_state_validity(contact_joints):
+                self.get_logger().error(f"Push contact pose for '{target_name}' is in collision")
+                return False
+
+            # Same height, same plane, seeded at the contact solution so
+            # the extend stays a small, local adjustment rather than
+            # jumping to an unrelated configuration.
+            extend = self.solve_planar_reach(
+                base_yaw, release_x, release_y, origin['z'],
+                seed_shoulder=contact_shoulder, seed_elbow=contact_elbow
+            )
+            if extend is None or extend[3] > self._PLANAR_REACH_MAX_ERROR:
+                self.get_logger().error(f"Could not solve a planar reach to the push destination for '{target_name}'")
+                return False
+            extend_shoulder, extend_elbow, _, _ = extend
+            extend_joints = [base_yaw, extend_shoulder, extend_elbow, *self._PLANAR_REACH_WRIST]
+            if not self.check_joint_state_validity(extend_joints):
+                self.get_logger().error(f"Push end pose for '{target_name}' is in collision")
+                return False
+
+            motion_params = self.build_motion_params(params.get('speed'))
+            close_pos = float(params.get('close_position', 0.75))
+
             # 1. Open the gripper before approaching
             rg = self.call_move_gripper_service(0.0)
             if not (rg and rg['success']):

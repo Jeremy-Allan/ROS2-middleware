@@ -1088,7 +1088,9 @@ def test_push_faces_object_and_extends_shoulder_elbow_only(actions):
 
 def test_push_fails_if_contact_reach_unsolvable(actions):
     """If solve_planar_reach can't find the contact pose at all (returns
-    None), push should fail cleanly before ever moving."""
+    None), push should fail cleanly before ever moving, but still revert
+    the collision allowance it already granted (contact with the target
+    is permitted up front now - see test_push_allows_target_object_contact_before_checking)."""
 
     target_info = {
         "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
@@ -1096,14 +1098,16 @@ def test_push_fails_if_contact_reach_unsolvable(actions):
     }
     actions.get_object_info = MagicMock(return_value=target_info)
     actions.solve_planar_reach = MagicMock(return_value=None)
-    actions.set_collision_allowed = MagicMock()
+    actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_joint_move_service = MagicMock()
 
     result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
     assert result is False
-    actions.set_collision_allowed.assert_not_called()
     actions.call_joint_move_service.assert_not_called()
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[0][0] == ("push_block", True)
+    assert allow_calls[-1][0] == ("push_block", False)
 
 
 def test_push_fails_if_contact_reach_error_too_large(actions):
@@ -1116,18 +1120,58 @@ def test_push_fails_if_contact_reach_error_too_large(actions):
     }
     actions.get_object_info = MagicMock(return_value=target_info)
     actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.1, 0.1, 0.5), 0.3))
-    actions.set_collision_allowed = MagicMock()
+    actions.set_collision_allowed = MagicMock(return_value=True)
 
     result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
     assert result is False
-    actions.set_collision_allowed.assert_not_called()
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[-1][0] == ("push_block", False)
+
+
+def test_push_allows_target_object_contact_before_checking(actions):
+    """Contact with the target object is the whole point of a push - it
+    should be permitted (set_collision_allowed) *before* the pose
+    validity checks, not after, so a geometrically-necessary overlap
+    with a bigger object (e.g. reaching a large box's exact center)
+    isn't rejected as if it were an unrelated collision. Verified this
+    matters for real: a plain box, much bigger than the small test
+    block this was first built against, needs exactly this (see
+    docs/push-motion-reference.md)."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.08, 0.05]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+
+    call_order = []
+    actions.set_collision_allowed = MagicMock(
+        side_effect=lambda *a: call_order.append("set_collision_allowed") or True
+    )
+    actions.solve_planar_reach = MagicMock(
+        side_effect=lambda *a, **k: call_order.append("solve_planar_reach") or (-0.3, 2.0, (0.3, 0.1, 0.02), 0.0)
+    )
+    actions.check_joint_state_validity = MagicMock(
+        side_effect=lambda *a: call_order.append("check_joint_state_validity") or True
+    )
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.update_object_pose = MagicMock(return_value=True)
+
+    result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert result is True
+    assert actions.set_collision_allowed.call_args_list[0][0] == ("push_block", True)
+    # allowed BEFORE the geometry/validity checks ever run
+    assert call_order.index("set_collision_allowed") < call_order.index("solve_planar_reach")
+    assert call_order.index("set_collision_allowed") < call_order.index("check_joint_state_validity")
 
 
 def test_push_fails_if_contact_pose_in_collision(actions):
-    """A geometrically-solved contact pose that's actually in collision
-    should fail cleanly, without ever granting collision allowance or
-    moving."""
+    """A geometrically-solved contact pose that's in collision with
+    something *other* than the target object should still fail cleanly,
+    and still revert the collision allowance."""
 
     target_info = {
         "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
@@ -1136,19 +1180,22 @@ def test_push_fails_if_contact_pose_in_collision(actions):
     actions.get_object_info = MagicMock(return_value=target_info)
     actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
     actions.check_joint_state_validity = MagicMock(return_value=False)
-    actions.set_collision_allowed = MagicMock()
+    actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_joint_move_service = MagicMock()
 
     result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
     assert result is False
-    actions.set_collision_allowed.assert_not_called()
     actions.call_joint_move_service.assert_not_called()
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[0][0] == ("push_block", True)
+    assert allow_calls[-1][0] == ("push_block", False)
 
 
 def test_push_fails_if_extend_reach_unsolvable(actions):
     """If the contact pose is fine but the extended end pose can't be
-    solved, push should fail cleanly before ever moving."""
+    solved, push should fail cleanly before ever moving, still reverting
+    the collision allowance."""
 
     target_info = {
         "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
@@ -1163,14 +1210,16 @@ def test_push_fails_if_extend_reach_unsolvable(actions):
 
     actions.solve_planar_reach = MagicMock(side_effect=solve_side_effect)
     actions.check_joint_state_validity = MagicMock(return_value=True)
-    actions.set_collision_allowed = MagicMock()
+    actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_joint_move_service = MagicMock()
 
     result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
     assert result is False
-    actions.set_collision_allowed.assert_not_called()
     actions.call_joint_move_service.assert_not_called()
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[0][0] == ("push_block", True)
+    assert allow_calls[-1][0] == ("push_block", False)
 
 
 def test_push_reverts_collision_allowance_if_real_move_fails(actions):
