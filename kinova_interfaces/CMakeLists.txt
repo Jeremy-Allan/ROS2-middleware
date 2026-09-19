@@ -22,6 +22,11 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/HomeArm.srv"
   "srv/UpdateObjectPose.srv"
   "srv/JointMove.srv"
+
+  "srv/GetSceneObjects.srv"
+  "srv/Snapshot.srv"
+  "srv/UpdateSceneObjects.srv"
+
   "msg/ExtendedStatus.msg"
   "msg/SystemSummary.msg"
   "msg/MotionParams.msg"

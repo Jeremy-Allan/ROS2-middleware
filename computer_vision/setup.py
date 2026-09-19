@@ -23,7 +23,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'XXXXXXXX = computer_vision.XXXXXXX:main',
+            'vision_node = computer_vision.vision_node:main',
         ],
     },
 )

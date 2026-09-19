@@ -3,31 +3,29 @@
 <package format="3">
   <name>computer_vision</name>
   <version>0.1.0</version>
-  <description>Computer vision integration with Depth Sensing Camera</description>
+  <description>Computer vision integration with depth sensing camera</description>
   <maintainer email="enoch@todo.todo">enoch</maintainer>
   <license>Apache License 2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
-  
-  <buildtool_depend>rosidl_default_generators</buildtool_depend>
-  <exec_depend>rosidl_default_runtime</exec_depend>
-  <member_of_group>rosidl_interface_packages</member_of_group>
 
+  <!-- ROS deps used by vision_node.py -->
   <depend>rclpy</depend>
+  <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
-  <depend>moveit_msgs</depend>
-  <depend>shape_msgs</depend>
-  <depend>control_msgs</depend>
-  <depend>std_srvs</depend>
   <depend>tf2_ros</depend>
-  <depend>rcl_interfaces</depend>
-  <depend>ament_index_python</depend>
+  <depend>cv_bridge</depend>
+  <depend>kinova_interfaces</depend>
+
+  <!-- Launch-file support -->
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
 
-  <!-- Custom Services Package -->
-  <depend>kinova_interfaces</depend>
-  <depend>example_interfaces</depend>
+  <!-- Python libraries (installed via apt or pip, not built by colcon) -->
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-sklearn</exec_depend>
 
   <export>
     <build_type>ament_python</build_type>

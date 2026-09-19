@@ -6,7 +6,7 @@ import rclpy
 from pathlib import Path
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
-from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose
+from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose,GetSceneObjects, UpdateSceneObjects
 from std_srvs.srv import Trigger
 from moveit_msgs.msg import PlanningScene, CollisionObject, AttachedCollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
@@ -70,9 +70,14 @@ class EnvironmentMappingNode(Node):
         self.attach_srv = self.create_service(AttachObject, '/attach_object', self.attach_object_callback, callback_group=self.scene_cb_group)
         self.detach_srv = self.create_service(DetachObject, '/detach_object', self.detach_object_callback, callback_group=self.scene_cb_group)
         self.reset_srv = self.create_service(Trigger, '/reset_environment_scene', self.reset_environment_callback, callback_group=self.scene_cb_group)
+        self.srv_get_scene = self.create_service(GetSceneObjects, '/get_scene_objects',
+        self.get_scene_objects_callback, callback_group=self.scene_cb_group)
+        self.srv_update_scene = self.create_service(UpdateSceneObjects, '/update_scene_objects',
+        self.update_scene_objects_callback, callback_group=self.scene_cb_group)
 
         self.attached_objects = set() 
-
+        
+        self._dict_lock = threading.Lock()
 
         self.scene_thread = threading.Thread(target=self.publish_planning_scene, daemon=True)
         self.scene_thread.start()

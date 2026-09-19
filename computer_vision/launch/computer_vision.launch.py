@@ -11,10 +11,15 @@ def launch_setup(context, *args, **kwargs):
     return [
         Node(
             package='computer_vision',
-            executable='XXXXX',
-            name='XXXXXXX',
-            output='screen',
-            parameters=[config_path],
+            executable='vision_node',
+            name='computer_vision',
+            parameters=[{
+            'color_topic': '/kinect2/sd/image_color_rect',
+            'depth_topic': '/kinect2/sd/image_depth_rect',
+            'info_topic':  '/kinect2/sd/camera_info',
+            'table_z': 0.0,          # ADD Later
+            'workspace': [-0.6, 0.6, -0.5, 0.5], #check later as well
+    }],
         )
     ]
 
