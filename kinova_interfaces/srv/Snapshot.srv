@@ -1,0 +1,6 @@
+uint32 num_frames
+bool remove_missing
+---
+bool success
+string message
+string summary_json
