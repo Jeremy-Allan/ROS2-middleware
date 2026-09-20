@@ -1,0 +1,15 @@
+# Rig / hardware: changes when the camera or robot setup changes.
+vision_snapshot_node:
+  ros__parameters:
+    base_frame: base_link
+    color_topic: /kinect2/sd/image_color_rect
+    depth_topic: /kinect2/sd/image_depth_rect
+    info_topic: /kinect2/sd/camera_info
+    # HD colour for YOLO (better small-object detection). '' = use SD for YOLO.
+    hd_color_topic: /kinect2/hd/image_color_rect
+    hd_info_topic: /kinect2/hd/camera_info
+
+    # Arm self-mask: a sphere of arm_radius around each of these TF frames is removed from the cloud.
+    arm_frames: ['shoulder_link', 'arm_link', 'forearm_link',
+                 'lower_wrist_link', 'upper_wrist_link', 'end_effector_link']
+    arm_radius: 0.12

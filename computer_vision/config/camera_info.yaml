@@ -1,6 +1,0 @@
-computer_vision_bbox3d:
-  ros__parameters:
-    color_topic: /kinect2/qhd/image_color_rect
-    depth_topic: /kinect2/qhd/image_depth_rect
-    camera_info_topic: /kinect2/qhd/camera_info
-
