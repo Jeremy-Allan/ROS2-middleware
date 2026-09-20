@@ -1,0 +1,26 @@
+# Geometry + snapshot behaviour: the file you tune most often.
+# NOTE: write floats with a decimal point (0.0, not 0).
+vision_snapshot_node:
+  ros__parameters:
+    # --- scene ---
+    workspace: [-0.23, 0.17, -0.30, 0.15]   # x_min, x_max, y_min, y_max in base_frame
+    table_z: 0.008                       # rough; the plane fit refines it
+    plane_band: 0.08
+    min_height: 0.006
+    max_height: 0.30
+
+    # --- clustering ---
+    cluster_eps: 0.018
+    cluster_min_points: 200
+    merge_gap: 0.02                          # merges clusters split by depth dropouts
+    drop_border_clusters: true
+
+    # --- snapshot ---
+    num_frames: 8
+    save_dir: ''                             # e.g. /home/you/vision_snaps to record .npz frames
+
+    # --- stability across snapshots ---
+    unknown_margin: 0.005
+    id_match_dist: 0.08
+    label_flip_conf: 0.6
+    grace_snapshots: 2

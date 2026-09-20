@@ -9,12 +9,17 @@ setup(
     version='0.1.0',
     packages=find_packages(exclude=['test']),
     data_files=[
-        ('share/ament_index/resource_index/packages',
-            ['resource/' + package_name]),
+        ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
+        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),   # <-- add
     ],
-    install_requires=[],
+    install_requires=[
+        'numpy',
+        'opencv-python',
+        'scipy',
+        'scikit-learn',
+    ],
     zip_safe=True,
     maintainer='Enoch',
     maintainer_email='enoch@example.com',
@@ -26,4 +31,5 @@ setup(
             'vision_node = computer_vision.vision_node:main',
         ],
     },
+    
 )

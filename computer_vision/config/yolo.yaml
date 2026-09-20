@@ -1,0 +1,42 @@
+# Detector + per-class knowledge: changes when you change the model / object set.
+# Class keys are LOWERCASE with underscores (label 'cell phone' -> cell_phone, or use label_alias).
+vision_snapshot_node:
+  ros__parameters:
+    yolo_model: 'yolov8n.pt'              # e.g. /home/you/models/best.pt   ('' = clusters only)
+    yolo_device: ''                       # '' = auto | 'cpu' | 'cuda:0'
+    yolo_imgsz: 640                       # raise (800/960) if small objects such as pens are missed
+    yolo_conf: 0.25                       # per-frame threshold: keep LOW, aggregation filters
+    yolo_frames: 5                        # colour frames per snapshot
+    yolo_min_presence: 0.4                # a detection must appear in this fraction of those frames
+    yolo_track_iou: 0.5
+
+    carried_conf_floor: 0.4      # a carried label below this conf is dropped
+
+    # cluster <-> box association
+    match_thresh: 0.30
+    claim_frac: 0.25
+    split_by_boxes: true                  # split clusters claimed by 2+ boxes (touching objects)
+
+    # box with no cluster under it (transparent / dark / shiny objects the ToF cannot see)
+    orphan_conf: 0.55                     # aggregated confidence needed to keep it
+    orphan_depth_valid_frac: 0.3          # if depth IS valid there, it is a false positive
+
+    # label hygiene (comma separated strings; avoids empty-list typing problems in ROS params)
+    ignore_labels: "table, chair"
+    label_alias: "cell phone:phone"
+
+    # used ONLY for depth-hole detections: [width, depth, height] in metres
+    class_dims:
+      cube:   [0.05, 0.05, 0.05]
+      pen:    [0.015, 0.15, 0.012]
+      cup:    [0.08, 0.08, 0.10]
+      bottle: [0.07, 0.07, 0.22]
+      book:   [0.15, 0.22, 0.02]
+      phone:  [0.07, 0.15, 0.01]
+
+    # MoveIt primitive for named classes (default BOX). CYLINDER = [height, radius]
+    class_shape:
+      cup: CYLINDER
+      bottle: CYLINDER
+      can: CYLINDER
+      ball: SPHERE
