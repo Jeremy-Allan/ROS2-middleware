@@ -38,6 +38,7 @@ import numpy as np
 import rclpy
 from cv_bridge import CvBridge
 from geometry_msgs.msg import Point
+from rcl_interfaces.msg import SetParametersResult
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
@@ -334,7 +335,11 @@ class VisionSnapshotNode(Node):
         self._mask_uv = None
         self._missing_frames = set()
 
+        # --- runtime parameter updates (ros2 param set) ---
+        self.add_on_set_parameters_callback(self._on_param_change)
+
         self.workspace_pub = self.create_publisher(MarkerArray, '/vision/workspace', 1)
+        self._last_published_ws = None
         self.workspace_timer = self.create_timer(1.0, self.publish_workspace_markers)
 
         # --- ROS plumbing ---
@@ -388,6 +393,45 @@ class VisionSnapshotNode(Node):
         self._log_config()
 
     # ------------------------------------------------ setup helpers
+
+    def _on_param_change(self, params):
+        """React to runtime parameter changes (e.g. `ros2 param set ... workspace ...`)."""
+        for p in params:
+            if p.name == 'workspace':
+                try:
+                    new_ws = [float(v) for v in p.value]
+                    if len(new_ws) != 4:
+                        return SetParametersResult(
+                            successful=False,
+                            reason='workspace must be 4 values: [x_min, x_max, y_min, y_max]')
+                    self.workspace = new_ws
+                    self.get_logger().info(f'workspace updated to {self.workspace}')
+                except (TypeError, ValueError) as e:
+                    return SetParametersResult(successful=False, reason=str(e))
+            elif p.name == 'table_z':
+                try:
+                    self.table_z = float(p.value)
+                    self.get_logger().info(f'table_z updated to {self.table_z}')
+                except (TypeError, ValueError) as e:
+                    return SetParametersResult(successful=False, reason=str(e))
+            elif p.name in ('min_height', 'max_height', 'plane_band'):
+                try:
+                    self.cfg[p.name] = float(p.value)
+                    self.get_logger().info(f'{p.name} updated to {self.cfg[p.name]}')
+                except (TypeError, ValueError) as e:
+                    return SetParametersResult(successful=False, reason=str(e))
+            elif p.name in ('cluster_eps', 'cluster_min_points', 'merge_gap',
+                            'id_match_dist', 'label_flip_conf', 'grace_snapshots',
+                            'unknown_margin', 'carried_conf_floor',
+                            'match_thresh', 'claim_frac', 'orphan_conf',
+                            'orphan_depth_valid_frac',
+                            'yolo_conf', 'yolo_frames', 'yolo_min_presence', 'yolo_track_iou'):
+                self.cfg[p.name] = p.value
+                self.get_logger().info(f'{p.name} updated to {self.cfg[p.name]}')
+            elif p.name == 'drop_border_clusters':
+                self.cfg[p.name] = bool(p.value)
+                self.get_logger().info(f'drop_border_clusters updated to {self.cfg[p.name]}')
+        return SetParametersResult(successful=True)
 
     def _warn_unknown_params(self):
         known = set(DEFAULTS) | {'use_sim_time'}
@@ -1035,6 +1079,13 @@ class VisionSnapshotNode(Node):
         self.debug_pub.publish(self.bridge.cv2_to_imgmsg(img, 'bgr8'))
 
     def publish_workspace_markers(self):
+        # Skip if nothing changed — prevents 1 Hz flicker in RViz.
+        key = (tuple(self.workspace), float(self.table_z),
+               float(self.cfg['max_height']))
+        if key == self._last_published_ws:
+            return
+        self._last_published_ws = key
+
         x0, x1, y0, y1 = self.workspace
         xy = [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
         bot = [self.table_z_at(x, y) for x, y in xy]
@@ -1043,7 +1094,17 @@ class VisionSnapshotNode(Node):
                            [[x, y, z] for (x, y), z in zip(xy, top)])
         edges = [(0, 1), (1, 2), (2, 3), (3, 0), (4, 5), (5, 6), (6, 7), (7, 4),
                  (0, 4), (1, 5), (2, 6), (3, 7)]
+
         arr = MarkerArray()
+
+        # Clear any stale markers so RViz doesn't render both old and new.
+        clear = Marker()
+        clear.header.frame_id = self.base_frame
+        clear.header.stamp = self.get_clock().now().to_msg()
+        clear.ns = 'workspace'
+        clear.action = Marker.DELETEALL
+        arr.markers.append(clear)
+
         m = Marker()
         m.header.frame_id = self.base_frame
         m.header.stamp = self.get_clock().now().to_msg()
@@ -1056,6 +1117,7 @@ class VisionSnapshotNode(Node):
             m.points.append(Point(x=float(corners[b][0]), y=float(corners[b][1]),
                                   z=float(corners[b][2])))
         arr.markers.append(m)
+
         t = Marker()
         t.header.frame_id = self.base_frame
         t.header.stamp = m.header.stamp
@@ -1180,7 +1242,8 @@ def main():
         pass
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':
