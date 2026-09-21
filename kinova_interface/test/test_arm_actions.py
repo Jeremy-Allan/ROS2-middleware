@@ -868,14 +868,51 @@ def test_pour_fails_if_target_not_held(actions):
     assert result is False
 
 
-def test_pour_requires_destination_or_direction(actions):
-    """pour without either a destination or a direction should fail cleanly."""
+def test_pour_without_destination_or_direction_pours_in_place(actions):
+    """Unlike push/thrust/throw, pour doesn't inherently need to go
+    anywhere - with neither a destination nor a direction given, it
+    should skip the horizontal move entirely and pour right where the
+    object already was, not fail or assume a default travel distance."""
 
     actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.call_relative_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
-    result = actions.handlers['pour']({"target": "red_cube"})
+    with patch("kinova_interface.arm_actions.time.sleep"):
+        result = actions.handlers['pour']({"target": "red_cube"})
 
-    assert result is False
+    assert result is True
+    # only the vertical lift - no horizontal transit move at all
+    assert actions.call_relative_move_service.call_count == 1
+    lift_call = actions.call_relative_move_service.call_args_list[0][0]
+    assert lift_call[0:3] == (0.0, 0.0, pytest.approx(actions._POUR_DEFAULT_LIFT_HEIGHT))
+
+
+def test_pour_in_place_still_lifts_and_tilts(actions):
+    """An in-place pour is still a real pour - it should still lift and
+    tilt, just without moving sideways first."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.call_relative_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+
+    with patch("kinova_interface.arm_actions.time.sleep") as mock_sleep:
+        result = actions.handlers['pour']({"target": "red_cube", "tilt_angle": 2.0, "duration": 1.0})
+
+    assert result is True
+    mock_sleep.assert_called_once_with(1.0)
+    assert actions.call_joint_move_service.call_count == 2
+    tilt_call, untilt_call = actions.call_joint_move_service.call_args_list
+    assert tilt_call[0][0] == [0.0, 0.0, 0.0, 0.0, 0.0, pytest.approx(2.0)]
+    assert untilt_call[0][0] == [0.0, 0.0, 0.0, 0.0, 0.0, pytest.approx(-2.0)]
 
 
 def test_pour_lifts_transits_tilts_and_returns(actions):
@@ -1100,6 +1137,10 @@ def test_thrust_fails_if_spin_pose_in_collision(actions):
     # raise pose valid, spin pose (same shoulder/elbow, different yaw) invalid
     actions.check_joint_state_validity = MagicMock(side_effect=[True, False])
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    # Bypass the dynamic distance search (its own coverage is separate) so
+    # this test's check_joint_state_validity side_effect list lines up with
+    # just the real raise/spin checks it's actually testing.
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.4)
 
     result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
 
@@ -1127,12 +1168,191 @@ def test_thrust_fails_if_extend_unsolvable(actions):
     actions.solve_planar_reach = MagicMock(side_effect=solve_side_effect)
     actions.check_joint_state_validity = MagicMock(return_value=True)
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    # Bypass the dynamic distance search (its own coverage is separate) so
+    # solve_planar_reach's side_effect sequencing lines up with just the
+    # real raise/extend calls it's actually testing.
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.4)
 
     result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
 
     assert result is False
     # raise and spin both happen (2 real moves) before the extend fails to solve
     assert actions.call_joint_move_service.call_count == 2
+
+
+# _find_max_planar_reach_distance()
+def test_find_max_planar_reach_distance_backs_off_from_the_solvable_edge(actions):
+    """The search should converge close to the furthest feasible distance,
+    then return a value _PLANAR_DISTANCE_SAFETY_MARGIN below it - not the
+    exact edge itself, which is numerically marginal."""
+
+    origin = {"x": 0.3, "y": 0.0, "z": 0.02}
+    feasible_up_to = 0.27
+
+    def solve_side_effect(base_yaw, x, y, z, seed_shoulder=None, seed_elbow=None):
+        distance = x - origin["x"]
+        if distance <= feasible_up_to:
+            return (-0.1, 1.8, (x, y, z), 0.0)
+        return (-0.1, 1.8, (x, y, z), actions._PLANAR_REACH_MAX_ERROR * 10)
+
+    actions.solve_planar_reach = MagicMock(side_effect=solve_side_effect)
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+
+    result = actions._find_max_planar_reach_distance(origin, "forward", 0.16, -0.2, 1.7)
+
+    assert result == pytest.approx(feasible_up_to - actions._PLANAR_DISTANCE_SAFETY_MARGIN, abs=1e-2)
+    assert result < feasible_up_to
+
+
+def test_find_max_planar_reach_distance_returns_search_max_minus_margin_if_fully_reachable(actions):
+    """If even the search ceiling is feasible, there's no need to bisect -
+    the result should just be the ceiling minus the safety margin."""
+
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+
+    result = actions._find_max_planar_reach_distance(
+        {"x": 0.3, "y": 0.0, "z": 0.02}, "forward", 0.16, -0.2, 1.7
+    )
+
+    assert result == pytest.approx(
+        actions._PLANAR_DISTANCE_SEARCH_MAX - actions._PLANAR_DISTANCE_SAFETY_MARGIN
+    )
+
+
+def test_find_max_planar_reach_distance_returns_none_if_nothing_reachable(actions):
+    """If not even the minimum search distance is reachable, there's no
+    safe default to fall back to - the caller must fail cleanly instead
+    of thrusting into something invalid."""
+
+    actions.solve_planar_reach = MagicMock(return_value=None)
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+
+    result = actions._find_max_planar_reach_distance(
+        {"x": 0.3, "y": 0.0, "z": 0.02}, "forward", 0.16, -0.2, 1.7
+    )
+
+    assert result is None
+
+
+def test_find_max_planar_reach_distance_checks_spin_pose_validity_too(actions):
+    """A candidate distance should be rejected if spinning to face it would
+    be in collision, even if the extend geometry itself solves fine - the
+    search should reflect the real handler's full spin+extend sequence."""
+
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=False)
+
+    result = actions._find_max_planar_reach_distance(
+        {"x": 0.3, "y": 0.0, "z": 0.02}, "forward", 0.16, -0.2, 1.7
+    )
+
+    assert result is None
+
+
+def test_find_max_planar_reach_distance_with_fixed_yaw_skips_spin_check(actions):
+    """push passes fixed_yaw (it never reorients - the whole action stays
+    in the one plane it faced the object in), so the search should use
+    that yaw for every candidate and never touch check_joint_state_validity
+    for a nonexistent spin pose - only for the real extend pose."""
+
+    origin = {"x": 0.3, "y": 0.0, "z": 0.02}
+    fixed_yaw = math.atan2(origin["y"], origin["x"])
+    seen_yaws = []
+
+    def solve_side_effect(base_yaw, x, y, z, seed_shoulder=None, seed_elbow=None):
+        seen_yaws.append(base_yaw)
+        return (-0.1, 1.8, (x, y, z), 0.0)
+
+    actions.solve_planar_reach = MagicMock(side_effect=solve_side_effect)
+    validity_checks = []
+    actions.check_joint_state_validity = MagicMock(
+        side_effect=lambda joints: validity_checks.append(joints) or True
+    )
+
+    result = actions._find_max_planar_reach_distance(
+        origin, "forward", 0.16, -0.2, 1.7, fixed_yaw=fixed_yaw
+    )
+
+    assert result == pytest.approx(actions._PLANAR_DISTANCE_SEARCH_MAX - actions._PLANAR_DISTANCE_SAFETY_MARGIN)
+    # every solve used the fixed yaw, never a recomputed one
+    assert all(yaw == pytest.approx(fixed_yaw) for yaw in seen_yaws)
+    # every validity check was for the extend pose (yaw first element), not
+    # a separate spin pose distinct from it - with fixed_yaw there's only
+    # ever one joint state shape checked per candidate
+    assert all(joints[0] == pytest.approx(fixed_yaw) for joints in validity_checks)
+
+
+def test_thrust_uses_dynamic_distance_when_none_given(actions):
+    """With a direction but no explicit distance, thrust should ask
+    _find_max_planar_reach_distance for how far it can actually go, rather than
+    assuming a fixed default is reachable."""
+
+    actions.held_object = "red_cube"
+    origin_x, origin_y, origin_z = 0.3, 0.0, 0.02
+    target_info = {
+        "pose": {"position": {"x": origin_x, "y": origin_y, "z": origin_z}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.22)
+
+    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert result is True
+    actions._find_max_planar_reach_distance.assert_called_once()
+    # 'forward' extends straight along the object's own bearing from the
+    # arm's base, so the resolved release point should sit 0.22m further
+    # out along the same (origin_x, origin_y) direction.
+    call_args = actions._find_max_planar_reach_distance.call_args[0]
+    assert call_args[0] == {"x": origin_x, "y": origin_y, "z": origin_z}
+    assert call_args[1] == "forward"
+
+
+def test_thrust_honors_explicit_distance_without_dynamic_search(actions):
+    """An explicit 'distance' should be used as-is, bypassing the dynamic
+    search entirely - only the default is meant to be adaptive."""
+
+    actions.held_object = "red_cube"
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.22)
+
+    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward", "distance": 0.15})
+
+    assert result is True
+    actions._find_max_planar_reach_distance.assert_not_called()
+
+
+def test_thrust_fails_cleanly_if_no_reachable_distance_found(actions):
+    """If _find_max_planar_reach_distance can't find anything reachable, thrust
+    should fail before ever moving the arm - not fall back to a default
+    that was already ruled unreachable."""
+
+    actions.held_object = "red_cube"
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions._find_max_planar_reach_distance = MagicMock(return_value=None)
+
+    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert result is False
+    actions.call_joint_move_service.assert_not_called()
 
 
 # push()
@@ -1324,6 +1544,10 @@ def test_push_fails_if_extend_reach_unsolvable(actions):
     actions.check_joint_state_validity = MagicMock(return_value=True)
     actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_joint_move_service = MagicMock()
+    # Bypass the dynamic distance search (its own coverage is separate) so
+    # solve_planar_reach's side_effect sequencing lines up with just the
+    # real contact/extend calls it's actually testing.
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.2)
 
     result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
@@ -1353,6 +1577,84 @@ def test_push_reverts_collision_allowance_if_real_move_fails(actions):
     result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
     assert result is False
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[0][0] == ("push_block", True)
+    assert allow_calls[-1][0] == ("push_block", False)
+
+
+def test_push_uses_dynamic_distance_when_none_given(actions):
+    """With a direction but no explicit distance, push should ask
+    _find_max_planar_reach_distance for how far it can actually go,
+    passing its own fixed base_yaw (it never reorients) - rather than
+    assuming a fixed default is reachable."""
+
+    origin_x, origin_y, origin_z = 0.3, 0.0, 0.02
+    target_info = {
+        "pose": {"position": {"x": origin_x, "y": origin_y, "z": origin_z}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.update_object_pose = MagicMock(return_value=True)
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.12)
+
+    result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert result is True
+    actions._find_max_planar_reach_distance.assert_called_once()
+    call_args, call_kwargs = actions._find_max_planar_reach_distance.call_args
+    assert call_args[0] == {"x": origin_x, "y": origin_y, "z": origin_z}
+    assert call_args[1] == "forward"
+    assert call_kwargs["fixed_yaw"] == pytest.approx(math.atan2(origin_y, origin_x))
+
+
+def test_push_honors_explicit_distance_without_dynamic_search(actions):
+    """An explicit 'distance' should be used as-is, bypassing the dynamic
+    search entirely - only the default is meant to be adaptive."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.update_object_pose = MagicMock(return_value=True)
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.12)
+
+    result = actions.handlers['push']({"target": "push_block", "direction": "forward", "distance": 0.08})
+
+    assert result is True
+    actions._find_max_planar_reach_distance.assert_not_called()
+
+
+def test_push_fails_cleanly_and_reverts_collision_allowance_if_no_reachable_distance_found(actions):
+    """If _find_max_planar_reach_distance can't find anything reachable,
+    push should fail before ever moving the arm, and still revert the
+    collision allowance it had already granted for the contact solve."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.0, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions._find_max_planar_reach_distance = MagicMock(return_value=None)
+
+    result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert result is False
+    actions.call_joint_move_service.assert_not_called()
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[0][0] == ("push_block", True)
     assert allow_calls[-1][0] == ("push_block", False)

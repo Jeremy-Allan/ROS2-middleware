@@ -1041,12 +1041,22 @@ class ArmActions:
     _POUR_DEFAULT_LIFT_HEIGHT = 0.14  # meters; demo measured ~0.137m
 
     def _handle_pour(self, params):
-        """Carry a held object above a destination and tip it to pour, then
-        return level. Assumes 'target' is already grasped - fails cleanly
-        rather than guessing if it isn't - and, importantly, assumes it was
-        grasped in a known, level orientation (e.g. via pickup's
-        'side_grasp_flat' preset), which lift/transit below then preserve
-        exactly rather than assume or recompute.
+        """Lift a held object and tip it to pour, then return level -
+        directly above wherever it currently is by default, or above a
+        'destination'/'direction' first if one is given. Assumes 'target'
+        is already grasped - fails cleanly rather than guessing if it
+        isn't - and, importantly, assumes it was grasped in a known,
+        level orientation (e.g. via pickup's 'side_grasp_flat' preset),
+        which lift/transit below then preserve exactly rather than assume
+        or recompute.
+
+        'destination'/'direction' are optional, unlike push/thrust/throw:
+        a pour doesn't inherently need to go anywhere - pouring is the
+        point, not the travel - so with neither given this skips the
+        horizontal move entirely and pours right where the object already
+        was. Only when a destination/direction actually is given does it
+        first move to hover above that point before tilting, exactly the
+        same as before.
 
         This replaces the previous design, which applied a relative
         orientation delta on top of whatever arbitrary orientation an
@@ -1073,9 +1083,6 @@ class ArmActions:
 
         destination_name = params.get('destination')
         direction = params.get('direction')
-        if not destination_name and not direction:
-            self.get_logger().error("pour action requires either 'destination' or 'direction'")
-            return False
 
         target_info = self.get_object_info(target_name)
         if not target_info:
@@ -1089,13 +1096,17 @@ class ArmActions:
                 self.get_logger().error(f"Could not resolve pour destination '{destination_name}'")
                 return False
             release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
-        else:
+        elif direction:
             distance = float(params.get('distance', 0.3))
             offset = self.resolve_direction_offset(origin['x'], origin['y'], direction, distance)
             if offset is None:
                 self.get_logger().error(f"Unknown pour direction '{direction}'")
                 return False
             release_x, release_y = offset
+        else:
+            # No destination/direction - pour stays exactly where the
+            # object already was, so there's nothing to move sideways to.
+            release_x, release_y = origin['x'], origin['y']
 
         motion_params = self.build_motion_params(params.get('speed'))
 
@@ -1109,12 +1120,15 @@ class ArmActions:
             return False
 
         # 2. Move horizontally to hover above the destination, at that same
-        # lifted height - orientation still untouched
+        # lifted height - orientation still untouched. Skipped entirely
+        # (no real move issued) when neither destination nor direction was
+        # given, since release_x/release_y then equal origin exactly.
         dx, dy = release_x - origin['x'], release_y - origin['y']
-        r = self.call_relative_move_service(dx, dy, 0.0, True, 0.0, 0.0, 0.0, motion_params)
-        if not (r and r['success']):
-            self.get_logger().error('Failed to move above pour destination')
-            return False
+        if dx != 0.0 or dy != 0.0:
+            r = self.call_relative_move_service(dx, dy, 0.0, True, 0.0, 0.0, 0.0, motion_params)
+            if not (r and r['success']):
+                self.get_logger().error('Failed to move above pour destination')
+                return False
 
         # 3. Tilt: a pure joint-space delta on joint_6 alone (see docstring)
         tilt_angle = float(params.get('tilt_angle', self._POUR_DEFAULT_TILT_ANGLE))
@@ -1135,12 +1149,99 @@ class ArmActions:
             self.get_logger().error('Failed to return to level after pour')
             return False
 
-        self.get_logger().info(f"Poured '{target_name}' toward '{destination_name}'" if destination_name else f"Poured '{target_name}' {direction}")
+        if destination_name:
+            where = f"toward '{destination_name}'"
+        elif direction:
+            where = direction
+        else:
+            where = "in place"
+        self.get_logger().info(f"Poured '{target_name}' {where}")
         return True
 
     # Above this, a solved planar reach is considered to have failed to
     # converge (meters) - a sanity bound, not a tolerance to plan within.
     _PLANAR_REACH_MAX_ERROR = 0.01
+
+    # Search bounds for the dynamic default push/thrust distance (see
+    # _find_max_planar_reach_distance): 0.4m (thrust) / 0.2m (push) were
+    # each previously-verified reach limits at their respective typical
+    # heights, but only for the specific object position they were
+    # measured against - for others they can already be past what's
+    # solvable, which is what made a single flat default unreliable. 0.5m
+    # is a search ceiling comfortably past either, not a claim anything
+    # past it is generally reachable.
+    _PLANAR_DISTANCE_SEARCH_MIN = 0.05
+    _PLANAR_DISTANCE_SEARCH_MAX = 0.5
+    _PLANAR_DISTANCE_SEARCH_ITERATIONS = 10
+    # Back off from the furthest distance the search found solvable -
+    # right at that edge is numerically marginal (small enough real-world
+    # deviations could tip it back into failure), so this trades a little
+    # reach for headroom.
+    _PLANAR_DISTANCE_SAFETY_MARGIN = 0.03
+
+    def _find_max_planar_reach_distance(self, origin, direction, height, seed_shoulder, seed_elbow, fixed_yaw=None):
+        """Binary-search the furthest distance (up to
+        _PLANAR_DISTANCE_SEARCH_MAX) in 'direction' from an object's
+        original position that a single-plane reach (push's extend, or
+        thrust's spin+extend) can actually reach at 'height' - used as
+        the default distance instead of a fixed constant, since a flat
+        default is sometimes already past what's reachable for a given
+        object position/direction. That gap previously only showed up as
+        a failed push/thrust after the object had already been approached
+        (push) or raised and spun into place (thrust) - this finds it up
+        front instead, as pure geometry (compute_fk/collision checks),
+        before the arm actually moves.
+
+        fixed_yaw covers the two callers' different geometry:
+        - thrust (fixed_yaw=None, the default): spins to face each
+          candidate distance's own point, so a new yaw is computed per
+          distance and that spin pose's validity is checked too, exactly
+          mirroring the real spin+extend steps.
+        - push (fixed_yaw=<push's one unchanging base_yaw>): push never
+          reorients - the whole action stays in the single plane it faced
+          the object in - so every candidate is checked at that same
+          fixed yaw, with no separate spin-pose check (there's no spin
+          move to check).
+
+        Either way this mirrors exactly what the real extend step does at
+        a given distance, so 'reachable per this search' really does mean
+        'the real move will reach it'. Returns a distance backed off by
+        _PLANAR_DISTANCE_SAFETY_MARGIN from the furthest point found
+        solvable, or None if not even the minimum search distance is
+        reachable."""
+        def feasible(distance):
+            offset = self.resolve_direction_offset(origin['x'], origin['y'], direction, distance)
+            if offset is None:
+                return False
+            x, y = offset
+            if fixed_yaw is not None:
+                yaw = fixed_yaw
+            else:
+                yaw = math.atan2(y, x)
+                spin_joints = [yaw, seed_shoulder, seed_elbow, *self._PLANAR_REACH_WRIST]
+                if not self.check_joint_state_validity(spin_joints):
+                    return False
+            solved = self.solve_planar_reach(yaw, x, y, height, seed_shoulder=seed_shoulder, seed_elbow=seed_elbow)
+            if solved is None or solved[3] > self._PLANAR_REACH_MAX_ERROR:
+                return False
+            extend_joints = [yaw, solved[0], solved[1], *self._PLANAR_REACH_WRIST]
+            return self.check_joint_state_validity(extend_joints)
+
+        if not feasible(self._PLANAR_DISTANCE_SEARCH_MIN):
+            return None
+
+        low, high = self._PLANAR_DISTANCE_SEARCH_MIN, self._PLANAR_DISTANCE_SEARCH_MAX
+        if feasible(high):
+            low = high
+        else:
+            for _ in range(self._PLANAR_DISTANCE_SEARCH_ITERATIONS):
+                mid = (low + high) / 2.0
+                if feasible(mid):
+                    low = mid
+                else:
+                    high = mid
+
+        return max(self._PLANAR_DISTANCE_SEARCH_MIN, low - self._PLANAR_DISTANCE_SAFETY_MARGIN)
 
     def _handle_thrust(self, params):
         """Raise a held object and thrust it toward a destination -
@@ -1199,25 +1300,6 @@ class ArmActions:
             return False
         origin = target_info['pose']['position']
 
-        if destination_name:
-            dest_info = self.get_object_info(destination_name)
-            if not dest_info:
-                self.get_logger().error(f"Could not resolve thrust destination '{destination_name}'")
-                return False
-            release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
-        else:
-            # 0.4m verified (via solve_planar_reach's own Newton solve) as
-            # close to the practical reach limit at a typical lift_height -
-            # a clean, collision-free ~77 degree shoulder swing; pushing
-            # further (0.5m+) was found to hit real kinematic instability,
-            # not just a small tuning gap - see docs/push-motion-reference.md.
-            distance = float(params.get('distance', 0.4))
-            offset = self.resolve_direction_offset(origin['x'], origin['y'], direction, distance)
-            if offset is None:
-                self.get_logger().error(f"Unknown thrust direction '{direction}'")
-                return False
-            release_x, release_y = offset
-
         # Fast by default (unlike push/pour's more careful pace) - a
         # thrust is meant to be a forceful, punchy motion; still
         # overridable via an explicit 'speed' if a slower one is wanted.
@@ -1225,8 +1307,13 @@ class ArmActions:
         lift_height = float(params.get('lift_height', self._POUR_DEFAULT_LIFT_HEIGHT))
         raise_z = origin['z'] + lift_height
 
-        # 1. Raise - facing wherever it was originally resting, wrist
-        # reset to level regardless of pickup's own grasp orientation
+        # 1. Solve + validate the raise pose - facing wherever the object
+        # was originally resting, wrist reset to level regardless of
+        # pickup's own grasp orientation. Solved (but not yet executed)
+        # before the destination/direction is resolved below, since its
+        # shoulder/elbow double as the seed for the dynamic thrust-distance
+        # search, and are reused unchanged for the real raise move further
+        # down - this is geometry only so far, the arm hasn't moved yet.
         face_yaw = math.atan2(origin['y'], origin['x'])
         raise_solved = self.solve_planar_reach(face_yaw, origin['x'], origin['y'], raise_z)
         if raise_solved is None or raise_solved[3] > self._PLANAR_REACH_MAX_ERROR:
@@ -1237,6 +1324,33 @@ class ArmActions:
         if not self.check_joint_state_validity(raise_joints):
             self.get_logger().error(f"Raised pose for '{target_name}' is in collision")
             return False
+
+        if destination_name:
+            dest_info = self.get_object_info(destination_name)
+            if not dest_info:
+                self.get_logger().error(f"Could not resolve thrust destination '{destination_name}'")
+                return False
+            release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
+        else:
+            requested_distance = params.get('distance')
+            if requested_distance is not None:
+                distance = float(requested_distance)
+            else:
+                # No explicit distance - find how far this specific object
+                # position/direction/lift_height combination can actually
+                # reach, rather than assuming a fixed default is reachable
+                # (see _find_max_planar_reach_distance).
+                distance = self._find_max_planar_reach_distance(origin, direction, raise_z, raise_shoulder, raise_elbow)
+                if distance is None:
+                    self.get_logger().error(
+                        f"No reachable thrust distance found for '{target_name}' in direction '{direction}'"
+                    )
+                    return False
+            offset = self.resolve_direction_offset(origin['x'], origin['y'], direction, distance)
+            if offset is None:
+                self.get_logger().error(f"Unknown thrust direction '{direction}'")
+                return False
+            release_x, release_y = offset
 
         r = self.call_joint_move_service(raise_joints, motion_params=motion_params)
         if not (r and r['success']):
@@ -1334,22 +1448,9 @@ class ArmActions:
             return False
         origin = target_info['pose']['position']
 
-        if destination_name:
-            dest_info = self.get_object_info(destination_name)
-            if not dest_info:
-                self.get_logger().error(f"Could not resolve push destination '{destination_name}'")
-                return False
-            release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
-        else:
-            distance = float(params.get('distance', 0.2))
-            offset = self.resolve_direction_offset(origin['x'], origin['y'], direction, distance)
-            if offset is None:
-                self.get_logger().error(f"Unknown push direction '{direction}'")
-                return False
-            release_x, release_y = offset
-
         # Face the object - joint_1 fixed for the whole push, the single
-        # plane every subsequent move stays within.
+        # plane every subsequent move (including the dynamic distance
+        # search below) stays within.
         base_yaw = math.atan2(origin['y'], origin['x'])
 
         # Contact with the target object itself is the entire point of a
@@ -1381,6 +1482,37 @@ class ArmActions:
             if not self.check_joint_state_validity(contact_joints):
                 self.get_logger().error(f"Push contact pose for '{target_name}' is in collision")
                 return False
+
+            if destination_name:
+                dest_info = self.get_object_info(destination_name)
+                if not dest_info:
+                    self.get_logger().error(f"Could not resolve push destination '{destination_name}'")
+                    return False
+                release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
+            else:
+                requested_distance = params.get('distance')
+                if requested_distance is not None:
+                    distance = float(requested_distance)
+                else:
+                    # No explicit distance - find how far this specific
+                    # object position/direction combination can actually
+                    # reach, rather than assuming a fixed default is
+                    # reachable (see _find_max_planar_reach_distance).
+                    # Push never reorients (fixed_yaw=base_yaw) - unlike
+                    # thrust, there's no separate spin step to search over.
+                    distance = self._find_max_planar_reach_distance(
+                        origin, direction, origin['z'], contact_shoulder, contact_elbow, fixed_yaw=base_yaw
+                    )
+                    if distance is None:
+                        self.get_logger().error(
+                            f"No reachable push distance found for '{target_name}' in direction '{direction}'"
+                        )
+                        return False
+                offset = self.resolve_direction_offset(origin['x'], origin['y'], direction, distance)
+                if offset is None:
+                    self.get_logger().error(f"Unknown push direction '{direction}'")
+                    return False
+                release_x, release_y = offset
 
             # Same height, same plane, seeded at the contact solution so
             # the extend stays a small, local adjustment rather than
