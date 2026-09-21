@@ -4,6 +4,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallb
 import time
 import os
 import json
+import traceback
 from ament_index_python.packages import get_package_share_directory
 #Services
 from kinova_interfaces.srv import ExecuteRecipe
@@ -47,6 +48,9 @@ class JsonParserNode(Node):
     hardware/environment services they call) live in ArmActions
     (arm_actions.py). This node only owns recipe loading, the step-by-step
     execution loop, and telemetry/service plumbing."""
+
+    STEP_SETTLE_DELAY_SEC = 0.5
+
     def __init__(self):
         super().__init__('json_parser_node')
 
@@ -75,7 +79,7 @@ class JsonParserNode(Node):
         self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
         self.reset_srv = self.create_service(Trigger, '/reset_environment', self.reset_environment_callback, callback_group=self.exec_cb_group)
 
-        self.get_logger().info(f"JSON Parser Node Online.")
+        self.get_logger().info("JSON Parser Node Online.")
 
         # 5. Declare and get the recipe parameter
         self.declare_parameter('recipe', 'none')
@@ -103,6 +107,16 @@ class JsonParserNode(Node):
             else:
                 self.get_logger().error(f"Failed to load recipe from {recipe_path}")
 
+    def _update_node_status(self, state=None, status_text=None, success=None):
+        """Helper to update internal telemetry state and publish immediately."""
+        if state is not None:
+            self.current_state = state
+        if status_text is not None:
+            self.status_text = status_text
+        if success is not None:
+            self.command_success = success
+        self.publish_status()
+
     def publish_status(self):
         msg = ExtendedStatus()
         msg.node_name = self.get_name()
@@ -126,9 +140,7 @@ class JsonParserNode(Node):
             self.get_logger().error("Failed to parse JSON recipe string.")
             response.success = False
             response.message = "Failed to parse JSON recipe string."
-            self.command_success = False
-            self.status_text = "Failed to parse dynamic JSON recipe"
-            self.publish_status()
+            self._update_node_status(ExtendedStatus.STATE_IDLE, "Failed to parse dynamic JSON recipe", success=False)
             return response
 
         self.get_logger().info("Successfully parsed JSON recipe. Executing...")
@@ -138,15 +150,11 @@ class JsonParserNode(Node):
         if success:
             self.get_logger().info("Returning Success to client.")
             response.message = "Recipe executed successfully."
-            self.command_success = True
-            self.status_text = "Recipe execution complete (Success)"
-            self.publish_status()
+            self._update_node_status(status_text="Recipe execution complete (Success)", success=True)
         else:
             self.get_logger().error("Returning Failure to client.")
             response.message = "Recipe execution failed. Check logs."
-            self.command_success = False
-            self.status_text = "Recipe execution failed"
-            self.publish_status()
+            self._update_node_status(status_text="Recipe execution failed", success=False)
 
         return response
 
@@ -190,55 +198,64 @@ class JsonParserNode(Node):
         )
         return success
 
-    def execute_recipe(self):
-        """Core execution logic."""
+    def execute_recipe(self) -> bool:
+        """Entry point for recipe execution with guaranteed exception safety
+        and IDLE cleanup - an unhandled exception from a step handler is
+        caught here so current_state can never get stuck on BUSY, and is
+        reported as a failed recipe rather than crashing the callback."""
         steps = self.parser.get_recipe_steps()
         if not steps:
             self.get_logger().error("No executable steps found or recipe failed to load.")
-            self.command_success = False
-            self.status_text = "No executable steps in recipe"
-            self.publish_status()
+            self._update_node_status(ExtendedStatus.STATE_IDLE, "No executable steps in recipe", success=False)
             return False
 
+        try:
+            return self._run_steps(steps)
+        except Exception as e:
+            tb = traceback.format_exc()
+            self.get_logger().error(f"Unhandled exception during recipe execution: {e}\n{tb}")
+            self.status_text = f"Recipe aborted due to exception: {e}"
+            self.command_success = False
+            return False
+        finally:
+            self.current_state = ExtendedStatus.STATE_IDLE
+            self.publish_status()
+
+    def _run_steps(self, steps: list) -> bool:
+        """Sequential step execution loop."""
         recipe_name = self.parser.recipe.get('recipe_name', 'Unnamed')
         self.get_logger().info(
             f"[recipe_log] event=start timestamp={time.time():.3f} recipe={recipe_name} steps={len(steps)}"
         )
         self.get_logger().info(f"--- Starting Automated Sequence ({len(steps)} steps) ---")
-        self.current_state = ExtendedStatus.STATE_BUSY
-        self.status_text = f"Executing recipe: {recipe_name}"
-        self.publish_status()
+        self._update_node_status(ExtendedStatus.STATE_BUSY, f"Executing recipe: {recipe_name}", success=True)
 
-        all_success = True
-        i = 0
         for i, step in enumerate(steps):
             self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
-            self.status_text = f"Step {i+1}/{len(steps)}: {step.get('description', '')}"
-            self.publish_status()
+            self._update_node_status(status_text=f"Step {i+1}/{len(steps)}: {step.get('description', '')}")
 
             success = self._dispatch_step(i, step)
 
-            if success:
-                self.get_logger().info(f"Step {i+1} completed successfully.")
-                time.sleep(0.5)
-            else:
+            if not success:
                 self.get_logger().error(f"Failed at step {i+1}: {step.get('action')}")
-                all_success = False
-                break
+                self.status_text = f"Recipe failed at step {i+1}"
+                self.command_success = False
+                self.get_logger().info(
+                    f"[recipe_log] event=end timestamp={time.time():.3f} recipe={recipe_name} result=failure"
+                )
+                return False
 
-        self.current_state = ExtendedStatus.STATE_IDLE
-        self.command_success = all_success
-        if all_success:
-            self.status_text = "Recipe execution complete (Success)"
-        else:
-            self.status_text = f"Recipe failed at step {i+1}"
-        self.publish_status()
+            self.get_logger().info(f"Step {i+1} completed successfully.")
+            if i < len(steps) - 1:
+                time.sleep(self.STEP_SETTLE_DELAY_SEC)
+
+        self.status_text = "Recipe execution complete (Success)"
+        self.command_success = True
         self.get_logger().info(
-            f"[recipe_log] event=end timestamp={time.time():.3f} recipe={recipe_name} "
-            f"result={'success' if all_success else 'failure'}"
+            f"[recipe_log] event=end timestamp={time.time():.3f} recipe={recipe_name} result=success"
         )
         self.get_logger().info("--- All Tasks Completed ---")
-        return all_success
+        return True
 
 def main():
     rclpy.init()

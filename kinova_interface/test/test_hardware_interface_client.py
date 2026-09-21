@@ -15,7 +15,7 @@ from control_msgs.action import GripperCommand
 from kinova_interface.hardware_interface_client import HardwareInterfaceClient
 
 """
-Test with: 
+Test with:
 pytest src/ROS2-middleware/kinova_interface/test/test_hardware_interface_client.py -v
 """
 
@@ -253,7 +253,9 @@ def test_handle_home_arm_success(node):
 
     node.send_home_goal = MagicMock(return_value=True)
     node.arm_movement_finished = MagicMock()
-    node.last_action_successful = True
+    node.arm_movement_finished.wait.return_value = True
+    node.arm_action_successful = True
+    node.arm_action_message = "Arm moved home successfully"
 
     request = HomeArm.Request()
     response = HomeArm.Response()
@@ -276,7 +278,7 @@ def test_handle_home_arm_failure_to_start(node):
     result = node.handle_home_arm(request, response)
 
     assert result.success is False
-    assert result.message == "Failed to initiate home movement"
+    assert result.message == "Failed to initiate home movement (action server unavailable)"
 
 
 # send_joint_goal() / handle_joint_move()
@@ -320,11 +322,14 @@ def test_send_home_goal_matches_send_joint_goal_defaults(node):
 
 def test_handle_joint_move_waits_by_default(node):
     """handle_joint_move should wait for completion when wait_for_completion
-    is True, same blocking pattern as the other arm-move handlers."""
+    is True, via the shared _await_action helper like the other arm-move
+    handlers."""
 
     node.send_joint_goal = MagicMock(return_value=True)
     node.arm_movement_finished = MagicMock()
-    node.last_action_successful = True
+    node.arm_movement_finished.wait.return_value = True
+    node.arm_action_successful = True
+    node.arm_action_message = "Joint move complete"
 
     request = JointMove.Request()
     request.joint_positions = [0.0, 0.0, 1.0, 1.5708, 1.5708, 0.0]
@@ -372,7 +377,8 @@ def test_handle_joint_move_fire_and_forget_catches_fast_rejection(node):
     node.send_joint_goal = MagicMock(return_value=True)
     node.arm_movement_finished = MagicMock()
     node.arm_movement_finished.wait.return_value = True  # finished within the window
-    node.last_action_successful = False
+    node.arm_action_successful = False
+    node.arm_action_message = "Arm movement failed"
 
     request = JointMove.Request()
     request.joint_positions = [0.0, 0.0, 2.3562, 1.5708, 1.5708, 0.0]
@@ -429,7 +435,8 @@ def test_handle_joint_move_relative_adds_delta_to_current(node):
     }
     node.send_joint_goal = MagicMock(return_value=True)
     node.arm_movement_finished = MagicMock()
-    node.last_action_successful = True
+    node.arm_action_successful = True
+    node.arm_action_message = "Joint move complete"
 
     request = JointMove.Request()
     request.joint_positions = [0.0, 0.0, 0.0, 0.0, 0.0, 2.36]
@@ -464,13 +471,16 @@ def test_handle_joint_move_relative_fails_without_joint_state(node):
     assert result.message == "No joint state available for relative joint move"
     node.send_joint_goal.assert_not_called()
 
+
 # handle_move_arm()
 def test_handle_move_arm_success(node):
     """Test successful arm movement service."""
 
     node.send_goal = MagicMock(return_value=True)
     node.arm_movement_finished = MagicMock()
-    node.last_action_successful = True
+    node.arm_movement_finished.wait.return_value = True
+    node.arm_action_successful = True
+    node.arm_action_message = "Arm moved to 0.5, 0.2, 0.3"
 
     request = MoveArm.Request()
     request.target_position.x = 0.5
@@ -501,7 +511,7 @@ def test_handle_move_arm_with_orientation_and_speed(node):
 
     node.send_goal = MagicMock(return_value=True)
     node.arm_movement_finished = MagicMock()
-    node.last_action_successful = True
+    node.arm_action_successful = True
 
     request = MoveArm.Request()
     request.target_position.x = 0.5
@@ -545,7 +555,7 @@ def test_handle_move_arm_failure_to_start(node):
     result = node.handle_move_arm(request, response)
 
     assert result.success is False
-    assert result.message == "Failed to initiate arm movement"
+    assert result.message == "Failed to initiate arm movement (action server unavailable)"
 
 # handle_relative_move()
 def test_handle_relative_move_success(node):
@@ -561,7 +571,10 @@ def test_handle_relative_move_success(node):
     )
 
     node.send_goal = MagicMock(return_value=True)
-    node.last_action_successful = True
+    node.arm_movement_finished = MagicMock()
+    node.arm_movement_finished.wait.return_value = True
+    node.arm_action_successful = True
+    node.arm_action_message = "Relative movement complete"
 
     request = RelativeMove.Request()
     request.vx = 0.5
@@ -604,7 +617,7 @@ def test_handle_relative_move_with_rotation_delta(node):
 
     node.tf_buffer.lookup_transform = MagicMock(return_value=transform)
     node.send_goal = MagicMock(return_value=True)
-    node.last_action_successful = True
+    node.arm_action_successful = True
 
     request = RelativeMove.Request()
     request.vx = 0.0
@@ -644,7 +657,7 @@ def test_handle_relative_move_tf_failure(node):
     result = node.handle_relative_move(request, response)
 
     assert result.success is False
-    assert result.message == "TF unavailable"
+    assert "Relative move TF lookup failed" in result.message
 
 # handle_move_gripper()
 def test_handle_move_gripper_success(node):
@@ -652,7 +665,9 @@ def test_handle_move_gripper_success(node):
 
     node.move_gripper = MagicMock(return_value=True)
     node.gripper_movement_finished = MagicMock()
-    node.last_action_successful = True
+    node.gripper_movement_finished.wait.return_value = True
+    node.gripper_action_successful = True
+    node.gripper_action_message = "Gripper moved to 1.0"
 
     request = MoveGripper.Request()
     request.position = 1.0
@@ -680,7 +695,7 @@ def test_handle_move_gripper_failure_to_start(node):
     result = node.handle_move_gripper(request, response)
 
     assert result.success is False
-    assert result.message == "Failed to initiate gripper movement"
+    assert result.message == "Failed to initiate gripper movement (action server unavailable)"
 
 
 # send_goal()
@@ -713,8 +728,9 @@ def test_send_goal(node):
 
     assert isinstance(goal, MoveGroup.Goal)
     assert goal.request.group_name == "arm"
-    assert goal.request.num_planning_attempts == 10
-    assert goal.request.allowed_planning_time == 5.0
+    # Bumped from 10/5.0s - see HardwareInterfaceClient.NUM_PLANNING_ATTEMPTS.
+    assert goal.request.num_planning_attempts == 20
+    assert goal.request.allowed_planning_time == 10.0
 
     constraint = goal.request.goal_constraints[0]
     position_constraint = constraint.position_constraints[0]
@@ -890,7 +906,7 @@ def test_goal_response_callback_rejected(node):
 
     node.goal_response_callback(future)
 
-    assert node.last_action_successful is False
+    assert node.arm_action_successful is False
     assert node.arm_movement_finished.is_set()
 
 
@@ -936,7 +952,7 @@ def test_result_callback_success(node):
 
     node.result_callback(future)
 
-    assert node.last_action_successful is True
+    assert node.arm_action_successful is True
     assert node.arm_movement_finished.is_set()
     # current_state must reset even with nobody waiting (a fire-and-forget
     # joint move has no finalize_service_status caller to do this instead)
@@ -958,7 +974,7 @@ def test_result_callback_failure(node):
 
     node.result_callback(future)
 
-    assert node.last_action_successful is False
+    assert node.arm_action_successful is False
     assert node.arm_movement_finished.is_set()
     assert node.current_state == ExtendedStatus.STATE_IDLE
     assert node.status_text == "Movement failed"
@@ -977,7 +993,7 @@ def test_gripper_response_callback_rejected(node):
 
     node.gripper_response_callback(future)
 
-    assert node.last_action_successful is False
+    assert node.gripper_action_successful is False
     assert node.gripper_movement_finished.is_set()
 
 
@@ -1015,8 +1031,8 @@ def test_gripper_result_callback(node):
     """Test successful gripper result."""
 
     result = MagicMock()
-    result.position = 0.5
-    result.effort = 1.0
+    result.position = 1.0
+    result.effort = 0.0
     result.stalled = False
     result.reached_goal = True
 
@@ -1025,5 +1041,53 @@ def test_gripper_result_callback(node):
 
     node.gripper_result_callback(future)
 
-    assert node.last_action_successful is True
+    assert node.gripper_action_successful is True
     assert node.gripper_movement_finished.is_set()
+
+
+# _await_action()
+def test_await_action_evaluates_attributes_after_wait(node):
+    """Test that _await_action reads attributes after the wait completes, not before."""
+    node.arm_action_successful = False
+    node.arm_action_message = "Initial stale message"
+
+    def simulate_action_completion(timeout):
+        # Simulate action result callback updating the node attributes while wait is blocked
+        node.arm_action_successful = True
+        node.arm_action_message = "Fresh updated message"
+        return True
+
+    mock_event = MagicMock()
+    mock_event.wait.side_effect = simulate_action_completion
+
+    response = HomeArm.Response()
+    result = node._await_action(
+        mock_event,
+        10.0,
+        'arm_action_successful',
+        'arm_action_message',
+        "Test action",
+        response
+    )
+
+    assert result.success is True
+    assert result.message == "Fresh updated message"
+
+
+def test_await_action_timeout(node):
+    """Test that _await_action properly handles timeout."""
+    mock_event = MagicMock()
+    mock_event.wait.return_value = False
+
+    response = HomeArm.Response()
+    result = node._await_action(
+        mock_event,
+        5.0,
+        'arm_action_successful',
+        'arm_action_message',
+        "Test action",
+        response
+    )
+
+    assert result.success is False
+    assert "timed out after 5.0s" in result.message
