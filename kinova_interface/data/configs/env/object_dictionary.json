@@ -1,12 +1,12 @@
 {
-  "box": {
+  "water_bottle": {
     "pose": {
-      "position": { "x": -0.3255, "y": -0.1235, "z": 0.01 },
+      "position": { "x": -0.3255, "y": -0.1235, "z": 0.075 },
       "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
     },
     "shape": {
-      "type": "BOX",
-      "dimensions": [0.107, 0.075, 0.045]
+      "type": "CYLINDER",
+      "dimensions": [0.25, 0.035]
     }
   },
   "push_block": {

@@ -1,7 +1,7 @@
 {
   "table": {
     "pose": {
-      "position": {"x": 0.045, "y": -0.32, "z": -0.085},
+      "position": {"x": 0.045, "y": -0.32, "z": -0.075},
       "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
     },
     "shape": {
