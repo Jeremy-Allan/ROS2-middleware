@@ -3,7 +3,6 @@ import os
 import time
 import threading
 import rclpy
-import math
 from pathlib import Path
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
@@ -18,6 +17,8 @@ from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallb
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.duration import Duration
 from tf2_ros import Buffer, TransformListener
+
+from kinova_interface.geometry_utils import euler_to_quaternion
 
 # Links allowed to touch an object once it's attached to the gripper, so the
 # fingers actually closing around it doesn't register as a collision.
@@ -157,16 +158,6 @@ class EnvironmentMappingNode(Node):
         }
         return obj
 
-    def euler_to_quaternion(self, roll, pitch, yaw):
-        cy = math.cos(yaw * 0.5); sy = math.sin(yaw * 0.5)
-        cp = math.cos(pitch * 0.5); sp = math.sin(pitch * 0.5)
-        cr = math.cos(roll * 0.5); sr = math.sin(roll * 0.5)
-        qw = cr*cp*cy + sr*sp*sy
-        qx = sr*cp*cy - cr*sp*sy
-        qy = cr*sp*cy + sr*cp*sy
-        qz = cr*cp*sy - sr*sp*cy
-        return {'x': qx, 'y': qy, 'z': qz, 'w': qw}
-    
     def parse_object_data(self, obj_id, obj_data):
         # Parse POSE (position & orientation)
         pose = obj_data.get('pose', {})
@@ -178,8 +169,8 @@ class EnvironmentMappingNode(Node):
             roll = orientation.get('roll', 0.0)
             pitch = orientation.get('pitch', 0.0)
             yaw = orientation.get('yaw', 0.0)
-            quat = self.euler_to_quaternion(roll, pitch, yaw)
-            obj_data['pose']['orientation'] = quat
+            qx, qy, qz, qw = euler_to_quaternion(roll, pitch, yaw)
+            obj_data['pose']['orientation'] = {'x': qx, 'y': qy, 'z': qz, 'w': qw}
         else:
             # Already in quaternion format or invalid
             if not all(k in orientation for k in ('x', 'y', 'z', 'w')):

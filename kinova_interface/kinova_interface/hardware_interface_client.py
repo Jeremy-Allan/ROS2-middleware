@@ -4,7 +4,6 @@ from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 import threading
-import math
 
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import Constraints, PositionConstraint, OrientationConstraint, JointConstraint
@@ -21,6 +20,8 @@ from tf2_ros import Buffer, TransformListener
 
 from kinova_interfaces.msg import ExtendedStatus
 from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
+
+from kinova_interface.geometry_utils import euler_to_quaternion, quaternion_to_euler
 
 
 class HardwareInterfaceClient(Node):
@@ -384,7 +385,7 @@ class HardwareInterfaceClient(Node):
                 # composition gives unintuitive results. Fine for small nudges
                 # from a normal pose, which is the expected use case.
                 q = trans.transform.rotation
-                curr_roll, curr_pitch, curr_yaw = self.quaternion_to_euler(q.x, q.y, q.z, q.w)
+                curr_roll, curr_pitch, curr_yaw = quaternion_to_euler(q.x, q.y, q.z, q.w)
                 target_roll = curr_roll + request.roll_delta
                 target_pitch = curr_pitch + request.pitch_delta
                 target_yaw = curr_yaw + request.yaw_delta
@@ -442,37 +443,6 @@ class HardwareInterfaceClient(Node):
         return self.finalize_service_status(response)
 
     # --- Orientation / Motion Params Helpers ---
-    def euler_to_quaternion(self, roll, pitch, yaw):
-        # Same conversion as environment_mapping_node.py, kept local to this
-        # node rather than shared, both nodes already duplicate small
-        # utility functions like this, not introducing a new pattern here.
-        cy = math.cos(yaw * 0.5); sy = math.sin(yaw * 0.5)
-        cp = math.cos(pitch * 0.5); sp = math.sin(pitch * 0.5)
-        cr = math.cos(roll * 0.5); sr = math.sin(roll * 0.5)
-        qw = cr*cp*cy + sr*sp*sy
-        qx = sr*cp*cy - cr*sp*sy
-        qy = cr*sp*cy + sr*cp*sy
-        qz = cr*cp*sy - sr*sp*cy
-        return qx, qy, qz, qw
-
-    def quaternion_to_euler(self, x, y, z, w):
-        # Standard quaternion to roll/pitch/yaw conversion, used only for
-        # relative_move so a rotation delta can be composed on top of
-        # whatever the arm's current orientation happens to be.
-        sinr_cosp = 2 * (w * x + y * z)
-        cosr_cosp = 1 - 2 * (x * x + y * y)
-        roll = math.atan2(sinr_cosp, cosr_cosp)
-
-        sinp = 2 * (w * y - z * x)
-        sinp = max(-1.0, min(1.0, sinp))
-        pitch = math.asin(sinp)
-
-        siny_cosp = 2 * (w * z + x * y)
-        cosy_cosp = 1 - 2 * (y * y + z * z)
-        yaw = math.atan2(siny_cosp, cosy_cosp)
-
-        return roll, pitch, yaw
-
     def clamp_motion_params(self, motion_params):
         """Clamp velocity/acceleration scale to [0.0, 1.0], warn if a caller sent something outside that range."""
         velocity_scale = motion_params.velocity_scale
@@ -520,7 +490,7 @@ class HardwareInterfaceClient(Node):
         goal_constraints.position_constraints.append(pos_constraint)
 
         if has_orientation:
-            qx, qy, qz, qw = self.euler_to_quaternion(roll, pitch, yaw)
+            qx, qy, qz, qw = euler_to_quaternion(roll, pitch, yaw)
             orient_constraint = OrientationConstraint()
             orient_constraint.header.frame_id = self.BASE_FRAME
             orient_constraint.link_name = self.TOOL_FRAME

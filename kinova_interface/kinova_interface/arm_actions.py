@@ -25,6 +25,8 @@ from kinova_interfaces.srv import (
 from kinova_interfaces.msg import MotionParams
 from std_srvs.srv import Trigger
 
+from kinova_interface.geometry_utils import euler_to_quaternion, quaternion_to_euler
+
 
 class ArmActions:
     """Owns the hardware/environment service clients and the concrete
@@ -270,34 +272,6 @@ class ArmActions:
             return dims[0]
         return 0.0
 
-    def euler_to_quaternion(self, roll, pitch, yaw):
-        # Same conversion as hardware_interface_client.py/environment_mapping_node.py,
-        # kept local rather than shared - both of those already duplicate
-        # this same small helper, not introducing a new pattern here.
-        cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
-        cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
-        cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
-        qw = cr * cp * cy + sr * sp * sy
-        qx = sr * cp * cy - cr * sp * sy
-        qy = cr * sp * cy + sr * cp * sy
-        qz = cr * cp * sy - sr * sp * cy
-        return qx, qy, qz, qw
-
-    def quaternion_to_euler(self, x, y, z, w):
-        # Same conversion as hardware_interface_client.py, kept local for
-        # the same reason as euler_to_quaternion above.
-        sinr_cosp = 2 * (w * x + y * z)
-        cosr_cosp = 1 - 2 * (x * x + y * y)
-        roll = math.atan2(sinr_cosp, cosr_cosp)
-
-        sinp = max(-1.0, min(1.0, 2 * (w * y - z * x)))
-        pitch = math.asin(sinp)
-
-        siny_cosp = 2 * (w * z + x * y)
-        cosy_cosp = 1 - 2 * (y * y + z * z)
-        yaw = math.atan2(siny_cosp, cosy_cosp)
-        return roll, pitch, yaw
-
     # A flat, level wrist (not pointing down) - the one part of a side
     # grasp that's genuinely independent of which object it is.
     _SIDE_GRASP_ROLL = math.pi / 2.0
@@ -341,7 +315,7 @@ class ArmActions:
             yaw_candidates = self._SIDE_GRASP_CYLINDER_YAWS
         else:
             orient = target_info['pose']['orientation']
-            _, _, object_yaw = self.quaternion_to_euler(orient['x'], orient['y'], orient['z'], orient['w'])
+            _, _, object_yaw = quaternion_to_euler(orient['x'], orient['y'], orient['z'], orient['w'])
             yaw_candidates = [object_yaw + offset for offset in self._SIDE_GRASP_YAW_OFFSETS]
 
         candidates = []
@@ -392,7 +366,7 @@ class ArmActions:
         pose_stamped.header.frame_id = 'base_link'
         pose = Pose()
         pose.position.x, pose.position.y, pose.position.z = float(x), float(y), float(z)
-        qx, qy, qz, qw = self.euler_to_quaternion(roll, pitch, yaw)
+        qx, qy, qz, qw = euler_to_quaternion(roll, pitch, yaw)
         pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = qx, qy, qz, qw
         pose_stamped.pose = pose
         req.ik_request.pose_stamped = pose_stamped
