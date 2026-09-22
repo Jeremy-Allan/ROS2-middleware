@@ -5,17 +5,20 @@ import time
 import os
 import json
 import traceback
-from geometry_msgs.msg import Quaternion
 from ament_index_python.packages import get_package_share_directory
-from kinova_interfaces.srv import GetRelativeMovement, GetObjectInfo, ExecuteRecipe, HomeArm, MoveArm, MoveGripper, RelativeMove, AttachObject, DetachObject, UpdateObjectPose
+#Services
+from kinova_interfaces.srv import ExecuteRecipe
 from kinova_interfaces.msg import ExtendedStatus
+from std_srvs.srv import Trigger
+
+from kinova_interface.helpers.arm_actions import ArmActions
 
 class JsonParser:
     """Helper class to handle JSON loading."""
     def __init__(self, node_context):
         self.recipe = None
         self.node = node_context # Reference to the ROS 2 node for logging
-    
+
     def load_recipe_from_file(self, recipe_path):
         try:
             with open(recipe_path, 'r') as f:
@@ -39,50 +42,30 @@ class JsonParser:
         return self.recipe.get('steps', [])
 
 class JsonParserNode(Node):
-    """ROS 2 Node that orchestrates tasks based on a JSON recipe."""
+    """ROS 2 Node that orchestrates tasks based on a JSON recipe.
+
+    The actual arm actions (what 'home', 'pickup', etc. do, and which
+    hardware/environment services they call) live in ArmActions
+    (arm_actions.py). This node only owns recipe loading, the step-by-step
+    execution loop, and telemetry/service plumbing."""
 
     STEP_SETTLE_DELAY_SEC = 0.5
-    SERVER_WAIT_TIMEOUT_SEC = 5.0
-    DEFAULT_SERVICE_TIMEOUT_SEC = 10.0
-    ARM_SERVICE_TIMEOUT_SEC = 35.0
-    GRIPPER_SERVICE_TIMEOUT_SEC = 12.0
-
-    DEFAULT_OPEN_POSITION = 0.0
-    DEFAULT_CLOSE_POSITION = 0.8
-    DEFAULT_PRE_OFFSET = 0.0
-    DEFAULT_PLACE_OFFSET = 0.1
 
     def __init__(self):
         super().__init__('json_parser_node')
-        
+
+        # 1. Callback Groups
         # Reentrant group for general service clients to allow multiple responses
         self.cb_group = ReentrantCallbackGroup()
         # Mutually exclusive group for the execution sequence to ensure one recipe at a time
         self.exec_cb_group = MutuallyExclusiveCallbackGroup()
 
-        # Hardware Interface Service Clients
-        self.home_client = self.create_client(HomeArm, '/kinova_hardware_client/home_arm', callback_group=self.cb_group)
-        self.move_arm_client = self.create_client(MoveArm, '/kinova_hardware_client/move_arm', callback_group=self.cb_group)
-        self.move_gripper_client = self.create_client(MoveGripper, '/kinova_hardware_client/move_gripper', callback_group=self.cb_group)
-        self.relative_move_client = self.create_client(RelativeMove, '/kinova_hardware_client/relative_move', callback_group=self.cb_group)
+        # 2. Arm actions: owns the hardware/environment service clients and
+        # the dictionary of named action handlers ('home', 'pickup', etc.)
+        self.arm_actions = ArmActions(self)
 
-        # Environment Mapping Service Clients
-        self.relative_client = self.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=self.cb_group)
-        self.info_client = self.create_client(GetObjectInfo, '/get_object_info', callback_group=self.cb_group)
-        self.attach_client = self.create_client(AttachObject, '/attach_object', callback_group=self.cb_group)
-        self.detach_client = self.create_client(DetachObject, '/detach_object', callback_group=self.cb_group)
-        self.update_pose_client = self.create_client(UpdateObjectPose, '/update_object_pose', callback_group=self.cb_group)
-
-        # Initialize Json Parser & arm action maps
+        # 3. Initialize the Parser
         self.parser = JsonParser(self)
-        self._action_handlers = {
-            'home': self._handle_home,
-            'move_arm': self._handle_move_arm,
-            'relative_move': self._handle_relative_move,
-            'gripper': self._handle_gripper,
-            'pickup': self._handle_pickup,
-            'dropoff': self._handle_dropoff,
-        }
 
         # Telemetry Setup
         self.status_pub = self.create_publisher(ExtendedStatus, '/status/node_report', 10)
@@ -91,13 +74,17 @@ class JsonParserNode(Node):
         self.status_text = "JSON Parser Online & Ready"
         self.command_success = True
 
-        # Service to execute recipes dynamically
+        # 4. Create Service to execute recipes dynamically
+        # Put this in the exec_cb_group so dynamic recipes don't overlap with static ones
         self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
+        self.reset_srv = self.create_service(Trigger, '/reset_environment', self.reset_environment_callback, callback_group=self.exec_cb_group)
 
-        # Configure recipe parameter and startup timer only once everything is constructed
+        self.get_logger().info("JSON Parser Node Online.")
+
+        # 5. Declare and get the recipe parameter
         self.declare_parameter('recipe', 'none')
         recipe_file = self.get_parameter('recipe').get_parameter_value().string_value
-        
+
         recipe_path = None
         if recipe_file and recipe_file.lower() != 'none':
             if os.path.isabs(recipe_file):
@@ -112,26 +99,13 @@ class JsonParserNode(Node):
                     base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
                     recipe_path = os.path.join(base_path, 'recipes', recipe_file)
 
+        # 6. If a static recipe was provided, execute it on startup using a one-shot Timer
         if recipe_path:
             self.get_logger().info(f"Loading static recipe from {recipe_path}")
             if self.parser.load_recipe_from_file(recipe_path):
                 self.startup_timer = self.create_timer(2.0, self.startup_timer_callback, callback_group=self.exec_cb_group)
             else:
                 self.get_logger().error(f"Failed to load recipe from {recipe_path}")
-
-        self.get_logger().info("JSON Parser Node Online.")
-
-    def wait_for_future(self, future, service_name, timeout_sec=None):
-        """Safely wait for an async service call future to complete without deadlocking the executor."""
-        if timeout_sec is None:
-            timeout_sec = self.DEFAULT_SERVICE_TIMEOUT_SEC
-        start = time.time()
-        while rclpy.ok() and not future.done():
-            if time.time() - start > timeout_sec:
-                self.get_logger().error(f"Timed out waiting for {service_name}")
-                return None
-            time.sleep(0.01)
-        return future.result() if future.done() else None
 
     def _update_node_status(self, state=None, status_text=None, success=None):
         """Helper to update internal telemetry state and publish immediately."""
@@ -173,420 +147,62 @@ class JsonParserNode(Node):
         success = self.execute_recipe()
 
         response.success = success
-        response.message = self.status_text
         if success:
             self.get_logger().info("Returning Success to client.")
+            response.message = "Recipe executed successfully."
+            self._update_node_status(status_text="Recipe execution complete (Success)", success=True)
         else:
-            self.get_logger().error(f"Returning Failure to client: {self.status_text}")
+            self.get_logger().error("Returning Failure to client.")
+            response.message = "Recipe execution failed. Check logs."
+            self._update_node_status(status_text="Recipe execution failed", success=False)
 
         return response
 
-    def get_static_object_coords(self, target_name):
-        """Return a dict with x,y,z for the object, or None on failure."""
-        info = self.get_object_info(target_name)
-        if info is None:
-            return None
-        pos = info['pose']['position']
-        return {'x': pos['x'], 'y': pos['y'], 'z': pos['z']}
-
-    def get_object_info(self, target_name):
-        """Query the environment mapping node for full object info (pose + shape)."""
-        if not self.info_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
-            self.get_logger().error("Get Object Info service not available")
-            return None
-        req = GetObjectInfo.Request()
-        req.object_id = target_name
-
-        future = self.info_client.call_async(req)
-        response = self.wait_for_future(future, '/get_object_info')
-
-        if response and response.success:
-            pos = response.pose.position
-            orient = response.pose.orientation
-            shape = response.shape
-            return {
-                'pose': {
-                    'position': {'x': pos.x, 'y': pos.y, 'z': pos.z},
-                    'orientation': {'x': orient.x, 'y': orient.y, 'z': orient.z, 'w': orient.w}
-                },
-                'shape': {
-                    'type': shape.type,
-                    'dimensions': list(shape.dimensions)
-                }
-            }
+    def reset_environment_callback(self, request, response):
+        """Reset objects/obstacles back to their configured defaults and
+        clear held-object tracking, without a full middleware restart. In
+        the same exec_cb_group as recipe execution, so it can't run
+        concurrently with (or interrupt) an in-progress recipe."""
+        self.get_logger().info("Received environment reset request.")
+        success, message = self.arm_actions.reset_environment()
+        response.success = success
+        response.message = message
+        if success:
+            self.get_logger().info(f"Environment reset: {message}")
         else:
-            self.get_logger().error(f"Failed to get object info for {target_name}: {response.message if response else 'no response'}")
-            return None
+            self.get_logger().error(f"Environment reset failed: {message}")
+        return response
 
-    def get_relative_movement_vector(self, movement_name):
-        if not self.relative_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
-            self.get_logger().error("Get Relative Movement Service not available")
-            return None
-        req = GetRelativeMovement.Request()
-        req.move_id = movement_name
-        
-        # Async call + safe wait loop
-        future = self.relative_client.call_async(req)
-        response = self.wait_for_future(future, '/get_relative_movement')
-        
-        if response and response.success:
-            return {'x': response.x, 'y': response.y, 'z': response.z}
-        else:
-            self.get_logger().error(f"Failed to get movement vector for {movement_name}: {response.message if response else 'no response'}")
-            return None
+    def _dispatch_step(self, index, step):
+        """Look up and run the handler for one recipe step, logging enough to
+        reconstruct what was attempted and what happened for the LLM safety research."""
+        action = step.get('action')
+        params = step.get('parameters', {})
+        timestamp = time.time()
 
-    def call_home_service(self) -> tuple[bool, str]:
-        if not self.home_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
-            msg = "Home Arm service not available"
-            self.get_logger().error(msg)
-            return False, msg
+        handler = self.arm_actions.handlers.get(action)
+        if handler is None:
+            self.get_logger().error(
+                f"[recipe_log] step={index+1} timestamp={timestamp:.3f} action={action} "
+                f"parameters={params} accepted=False result=unknown_action"
+            )
+            return False
 
-        req = HomeArm.Request()
-        future = self.home_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/home_arm', timeout_sec=self.ARM_SERVICE_TIMEOUT_SEC)
-
-        if response is None:
-            msg = "Timed out waiting for Home Arm service response"
-            self.get_logger().error(msg)
-            return False, msg
-        if response.success:
-            return True, response.message or "Homed arm successfully"
-        self.get_logger().error(f"Failed to move Home: {response.message}")
-        return False, response.message or "Home Arm returned failure"
-
-    def call_move_service(self, x: float, y: float, z: float) -> tuple[bool, str]:
-        if not self.move_arm_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
-            msg = "Move Arm service not available"
-            self.get_logger().error(msg)
-            return False, msg
-
-        req = MoveArm.Request()
-        req.x = x
-        req.y = y
-        req.z = z
-
-        future = self.move_arm_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/move_arm', timeout_sec=self.ARM_SERVICE_TIMEOUT_SEC)
-
-        if response is None:
-            msg = f"Timed out waiting for Move Arm service to ({x}, {y}, {z})"
-            self.get_logger().error(msg)
-            return False, msg
-        if response.success:
-            return True, response.message or f"Moved to ({x}, {y}, {z})"
-        self.get_logger().error(f"Failed to move to ({x}, {y}, {z}): {response.message}")
-        return False, response.message or f"Move to ({x}, {y}, {z}) failed"
-
-    def call_relative_move_service(self, vx: float, vy: float, vz: float) -> tuple[bool, str]:
-        if not self.relative_move_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
-            msg = "Relative Move service not available"
-            self.get_logger().error(msg)
-            return False, msg
-
-        req = RelativeMove.Request()
-        req.vx = vx
-        req.vy = vy
-        req.vz = vz
-
-        future = self.relative_move_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/relative_move', timeout_sec=self.ARM_SERVICE_TIMEOUT_SEC)
-
-        if response is None:
-            msg = f"Timed out waiting for Relative Move service to ({vx}, {vy}, {vz})"
-            self.get_logger().error(msg)
-            return False, msg
-        if response.success:
-            return True, response.message or f"Moved relative ({vx}, {vy}, {vz})"
-        self.get_logger().error(f"Failed relative move ({vx}, {vy}, {vz}): {response.message}")
-        return False, response.message or f"Relative move ({vx}, {vy}, {vz}) failed"
-
-    def call_move_gripper_service(self, position: float) -> tuple[bool, str]:
-        if not self.move_gripper_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
-            msg = "Move Gripper service not available"
-            self.get_logger().error(msg)
-            return False, msg
-
-        req = MoveGripper.Request()
-        req.position = position
-
-        future = self.move_gripper_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/move_gripper', timeout_sec=self.GRIPPER_SERVICE_TIMEOUT_SEC)
-
-        if response is None:
-            msg = f"Timed out waiting for Move Gripper service to {position}"
-            self.get_logger().error(msg)
-            return False, msg
-        if response.success:
-            return True, response.message or f"Moved gripper to {position}"
-        self.get_logger().error(f"Failed to move gripper to {position}: {response.message}")
-        return False, response.message or f"Move gripper to {position} failed"
-
-    def attach_object(self, obj_id: str) -> tuple[bool, str]:
-        """Remove object from planning scene (allow collision) via the environment mapping node."""
-        if not self.attach_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
-            msg = "Attach service not available"
-            self.get_logger().error(msg)
-            return False, msg
-
-        req = AttachObject.Request()
-        req.object_id = obj_id
-        future = self.attach_client.call_async(req)
-        response = self.wait_for_future(future, '/attach_object')
-
-        if response is None:
-            msg = f"Timed out waiting for attach service for '{obj_id}'"
-            self.get_logger().error(msg)
-            return False, msg
-        if response.success:
-            self.get_logger().info(f"Attached object '{obj_id}' (removed from scene)")
-            return True, response.message or f"Attached '{obj_id}'"
-        self.get_logger().error(f"Failed to attach '{obj_id}': {response.message}")
-        return False, response.message or f"Failed to attach '{obj_id}'"
-
-    def detach_object(self, obj_id: str) -> tuple[bool, str]:
-        """Add object back to planning scene via the environment mapping node."""
-        if not self.detach_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
-            msg = "Detach service not available"
-            self.get_logger().error(msg)
-            return False, msg
-
-        req = DetachObject.Request()
-        req.object_id = obj_id
-        future = self.detach_client.call_async(req)
-        response = self.wait_for_future(future, '/detach_object')
-
-        if response is None:
-            msg = f"Timed out waiting for detach service for '{obj_id}'"
-            self.get_logger().error(msg)
-            return False, msg
-        if response.success:
-            self.get_logger().info(f"Detached object '{obj_id}' (added back to scene)")
-            return True, response.message or f"Detached '{obj_id}'"
-        self.get_logger().error(f"Failed to detach '{obj_id}': {response.message}")
-        return False, response.message or f"Failed to detach '{obj_id}'"
-
-    def update_object_pose(self, obj_id: str, x: float, y: float, z: float, orientation=None) -> tuple[bool, str]:
-        if not self.update_pose_client.wait_for_service(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
-            msg = "Update Object Pose service not available"
-            self.get_logger().error(msg)
-            return False, msg
-
-        req = UpdateObjectPose.Request()
-        req.object_id = obj_id
-        req.pose.position.x = x
-        req.pose.position.y = y
-        req.pose.position.z = z
-
-        if orientation:
-            q = Quaternion()
-            q.x = orientation['x']
-            q.y = orientation['y']
-            q.z = orientation['z']
-            q.w = orientation['w']
-            req.pose.orientation = q
-        else:
-            req.pose.orientation.x = 0.0
-            req.pose.orientation.y = 0.0
-            req.pose.orientation.z = 0.0
-            req.pose.orientation.w = 1.0
-
-        future = self.update_pose_client.call_async(req)
-        response = self.wait_for_future(future, '/update_object_pose')
-
-        if response is None:
-            msg = f"Timed out waiting for update pose service for '{obj_id}'"
-            self.get_logger().error(msg)
-            return False, msg
-        if response.success:
-            return True, response.message or f"Updated pose for '{obj_id}'"
-        self.get_logger().error(f"Failed to update pose for {obj_id}: {response.message}")
-        return False, response.message or f"Failed to update pose for '{obj_id}'"
-
-    # Arm Action Handlers
-    
-    def _handle_home(self, params: dict) -> tuple[bool, str]:
-        """
-        Execute the 'home' action to move the robot arm to its predefined home pose.
-
-        JSON parameters:
-            None required.
-        """
-        return self.call_home_service()
-
-    def _handle_move_arm(self, params: dict) -> tuple[bool, str]:
-        """
-        Execute the 'move_arm' action to move the end-effector to the coordinates of a named target.
-
-        JSON parameters:
-            target (str, required): Name of the target object/landmark in the environment.
-        """
-        target_name = params.get('target')
-        if not target_name:
-            return False, "Missing 'target' parameter for move_arm"
-        coords = self.get_static_object_coords(target_name)
-        if not coords:
-            return False, f"Could not resolve coordinates for target '{target_name}'"
-        ok, msg = self.call_move_service(coords['x'], coords['y'], coords['z'])
-        if not ok:
-            return False, f"Move to '{target_name}' failed: {msg}"
-        return True, f"Moved arm to '{target_name}'"
-
-    def _handle_relative_move(self, params: dict) -> tuple[bool, str]:
-        """
-        Execute the 'relative_move' action using a named 3D translation vector.
-
-        JSON parameters:
-            vector (str, required): Name of the relative vector registered in the environment.
-        """
-        vector_name = params.get('vector')
-        if not vector_name:
-            return False, "Missing 'vector' parameter for relative_move"
-        vector = self.get_relative_movement_vector(vector_name)
-        if not vector:
-            return False, f"Could not resolve movement vector for '{vector_name}'"
-        ok, msg = self.call_relative_move_service(vector['x'], vector['y'], vector['z'])
-        if not ok:
-            return False, f"Relative move '{vector_name}' failed: {msg}"
-        return True, f"Executed relative move '{vector_name}'"
-
-    def _handle_gripper(self, params: dict) -> tuple[bool, str]:
-        """
-        Execute the 'gripper' action to move the gripper to a specified position.
-
-        JSON parameters:
-            position (float, required): Target gripper position (0.0 = fully open, ~0.8-1.0 = fully closed).
-        """
-        if 'position' not in params:
-            return False, "Missing 'position' parameter for gripper"
-        try:
-            position = float(params['position'])
-        except (ValueError, TypeError) as e:
-            return False, f"Invalid gripper position '{params.get('position')}': {e}"
-        ok, msg = self.call_move_gripper_service(position)
-        if not ok:
-            return False, f"Move gripper to {position} failed: {msg}"
-        return True, f"Moved gripper to {position}"
-
-    def _handle_pickup(self, params: dict) -> tuple[bool, str]:
-        """
-        Execute the composite 'pickup' action sequence:
-          1. Open gripper to `open_position`.
-          2. (Optional) Hover at `pre_offset` above target.
-          3. Descend to target coordinates.
-          4. Close gripper to `close_position`.
-          5. Attach object in planning scene (allow collision).
-
-        JSON parameters:
-            target (str, required): Name of the target object to pick up.
-            open_position (float, optional, default=0.0): Gripper open position.
-            close_position (float, optional, default=0.8): Gripper grasp position.
-            pre_offset (float, optional, default=0.0): Z-axis hover offset before descending.
-        """
-        # TODO(pulkit): add step 6 (optional) retreat back to hover position.
-        target_name = params.get('target')
-        if not target_name:
-            return False, "Missing 'target' parameter for pickup"
-
-        try:
-            open_pos = float(params.get('open_position', self.DEFAULT_OPEN_POSITION))
-            close_pos = float(params.get('close_position', self.DEFAULT_CLOSE_POSITION))
-            pre_offset = float(params.get('pre_offset', self.DEFAULT_PRE_OFFSET))
-        except (ValueError, TypeError) as e:
-            return False, f"Invalid numeric parameter in pickup: {e}"
-
-        coords = self.get_static_object_coords(target_name)
-        if not coords:
-            return False, f"Could not resolve coordinates for '{target_name}'"
-
-        # Open gripper
-        ok, msg = self.call_move_gripper_service(open_pos)
-        if not ok:
-            return False, f"Failed to open gripper for pickup: {msg}"
-
-        # Optional pre-approach hover above target
-        if pre_offset > 0.0:
-            ok, msg = self.call_move_service(coords['x'], coords['y'], coords['z'] + pre_offset)
-            if not ok:
-                return False, f"Failed pre-approach move for '{target_name}': {msg}"
-
-        # Descend to object position
-        ok, msg = self.call_move_service(coords['x'], coords['y'], coords['z'])
-        if not ok:
-            return False, f"Failed to move to '{target_name}' position: {msg}"
-
-        # Close gripper
-        ok, msg = self.call_move_gripper_service(close_pos)
-        if not ok:
-            return False, f"Failed to close gripper on '{target_name}': {msg}"
-
-        # Attach object in planning scene
-        ok, msg = self.attach_object(target_name)
-        if not ok:
-            return False, f"Failed to attach '{target_name}' in planning scene: {msg}"
-
-        return True, f"Picked up '{target_name}' successfully"
-
-    def _handle_dropoff(self, params: dict) -> tuple[bool, str]:
-        """
-        Execute the composite 'dropoff' action sequence:
-          1. Move end-effector to destination coordinates + `place_offset` in Z.
-          2. Open gripper to `open_position`.
-          3. If `target` specified: update object pose in environment and detach in planning scene.
-
-        JSON parameters:
-            destination (str, required): Name of destination location/surface.
-            target (str, optional): Name of object being placed to update pose and restore in planning scene.
-            open_position (float, optional, default=0.0): Gripper open position to release object.
-            place_offset (float, optional, default=0.1): Z-axis hover offset above destination.
-        """
-        # TODO(pulkit): make the same as _handle_pickup but in the opposite direction
-        target_name = params.get('target')
-        destination_name = params.get('destination')
-        if not destination_name:
-            return False, "dropoff action requires 'destination' parameter"
-
-        try:
-            open_pos = float(params.get('open_position', self.DEFAULT_OPEN_POSITION))
-            place_offset = float(params.get('place_offset', self.DEFAULT_PLACE_OFFSET))
-        except (ValueError, TypeError) as e:
-            return False, f"Invalid numeric parameter in dropoff: {e}"
-
-        dest_coords = self.get_static_object_coords(destination_name)
-        if not dest_coords:
-            return False, f"Could not resolve destination '{destination_name}'"
-
-        px = dest_coords['x']
-        py = dest_coords['y']
-        pz = dest_coords['z'] + place_offset
-
-        # Move to offset position above destination
-        ok, msg = self.call_move_service(px, py, pz)
-        if not ok:
-            return False, f"Failed to move above '{destination_name}': {msg}"
-
-        # Open gripper to release
-        ok, msg = self.call_move_gripper_service(open_pos)
-        if not ok:
-            return False, f"Failed to open gripper at '{destination_name}': {msg}"
-
-        # Update pose and detach object if target was specified
-        if target_name:
-            obj_info = self.get_object_info(target_name)
-            orient = obj_info['pose']['orientation'] if obj_info else None
-            ok, msg = self.update_object_pose(target_name, dest_coords['x'], dest_coords['y'], dest_coords['z'], orient)
-            if not ok:
-                return False, f"Failed to update pose for '{target_name}' at '{destination_name}': {msg}. Detach aborted to prevent planning scene corruption."
-
-            ok, msg = self.detach_object(target_name)
-            if not ok:
-                return False, f"Failed to detach '{target_name}' in planning scene: {msg}"
-
-            return True, f"Placed '{target_name}' at '{destination_name}' successfully"
-
-        return True, f"Executed dropoff move and opened gripper at '{destination_name}' successfully"
+        self.get_logger().info(
+            f"[recipe_log] step={index+1} timestamp={timestamp:.3f} action={action} "
+            f"parameters={params} accepted=True"
+        )
+        success = handler(params)
+        self.get_logger().info(
+            f"[recipe_log] step={index+1} action={action} result={'success' if success else 'failure'}"
+        )
+        return success
 
     def execute_recipe(self) -> bool:
-        """Entry point for recipe execution with guaranteed exception safety and IDLE cleanup."""
+        """Entry point for recipe execution with guaranteed exception safety
+        and IDLE cleanup - an unhandled exception from a step handler is
+        caught here so current_state can never get stuck on BUSY, and is
+        reported as a failed recipe rather than crashing the callback."""
         steps = self.parser.get_recipe_steps()
         if not steps:
             self.get_logger().error("No executable steps found or recipe failed to load.")
@@ -608,48 +224,46 @@ class JsonParserNode(Node):
     def _run_steps(self, steps: list) -> bool:
         """Sequential step execution loop."""
         recipe_name = self.parser.recipe.get('recipe_name', 'Unnamed')
-        self.get_logger().info(f"--- Starting Automated Sequence: '{recipe_name}' ({len(steps)} steps) ---")
+        self.get_logger().info(
+            f"[recipe_log] event=start timestamp={time.time():.3f} recipe={recipe_name} steps={len(steps)}"
+        )
+        self.get_logger().info(f"--- Starting Automated Sequence ({len(steps)} steps) ---")
         self._update_node_status(ExtendedStatus.STATE_BUSY, f"Executing recipe: {recipe_name}", success=True)
 
-        for i, step in enumerate(steps, start=1):
-            action = step.get('action')
-            desc = step.get('description', f"Step {i}")
-            params = step.get('parameters', {})
+        for i, step in enumerate(steps):
+            self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
+            self._update_node_status(status_text=f"Step {i+1}/{len(steps)}: {step.get('description', '')}")
 
-            self.get_logger().info(f"[Step {i}/{len(steps)}] {desc} (action: '{action}')")
-            self._update_node_status(ExtendedStatus.STATE_BUSY, f"Step {i}/{len(steps)}: {desc}")
+            success = self._dispatch_step(i, step)
 
-            handler = self._action_handlers.get(action)
-            if not handler:
-                err = f"Unknown/unsupported action '{action}' at step {i}"
-                self.get_logger().error(err)
-                self.status_text = err
+            if not success:
+                self.get_logger().error(f"Failed at step {i+1}: {step.get('action')}")
+                self.status_text = f"Recipe failed at step {i+1}"
                 self.command_success = False
+                self.get_logger().info(
+                    f"[recipe_log] event=end timestamp={time.time():.3f} recipe={recipe_name} result=failure"
+                )
                 return False
 
-            step_success, msg = handler(params)
-            if not step_success:
-                self.get_logger().error(f"Failed at step {i} ({action}): {msg}")
-                self.status_text = f"Recipe failed at step {i}: {msg}"
-                self.command_success = False
-                return False
-
-            self.get_logger().info(f"Step {i} completed successfully: {msg}")
-            if i < len(steps):
+            self.get_logger().info(f"Step {i+1} completed successfully.")
+            if i < len(steps) - 1:
                 time.sleep(self.STEP_SETTLE_DELAY_SEC)
 
         self.status_text = "Recipe execution complete (Success)"
         self.command_success = True
-        self.get_logger().info("--- All Tasks Completed Successfully ---")
+        self.get_logger().info(
+            f"[recipe_log] event=end timestamp={time.time():.3f} recipe={recipe_name} result=success"
+        )
+        self.get_logger().info("--- All Tasks Completed ---")
         return True
 
 def main():
     rclpy.init()
     node = JsonParserNode()
-    
+
     executor = rclpy.executors.MultiThreadedExecutor(num_threads=10) # TODO (pulkit) change the hardcoded threads numbers
     executor.add_node(node)
-    
+
     try:
         executor.spin()
     except KeyboardInterrupt:

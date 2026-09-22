@@ -1,6 +1,11 @@
 float64 vx
 float64 vy
 float64 vz
+bool has_orientation
+float64 roll_delta
+float64 pitch_delta
+float64 yaw_delta
+kinova_interfaces/MotionParams motion_params
 ---
 bool success
 string message

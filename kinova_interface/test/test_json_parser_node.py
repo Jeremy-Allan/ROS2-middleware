@@ -5,20 +5,19 @@ from unittest.mock import MagicMock, patch
 
 from kinova_interface.json_parser_node import JsonParser, JsonParserNode
 
-from kinova_interfaces.srv import (
-    GetObjectInfo,
-    GetRelativeMovement,
-    HomeArm,
-    MoveArm,
-    MoveGripper,
-    RelativeMove,
-)
 from kinova_interfaces.msg import ExtendedStatus
 
 
 """
-Test with: 
+Test with:
 pytest src/ROS2-middleware/kinova_interface/test/test_json_parser_node.py -v
+
+Note: these tests cover JsonParserNode's own responsibility - loading a
+recipe and running its steps through whatever handler is registered for
+each step's action. What each action actually does (which hardware/
+environment services it calls) is ArmActions' responsibility, covered by
+test_arm_actions.py; that's why steps here are exercised via
+node.arm_actions.handlers rather than mocking individual service calls.
 """
 
 # Fixtures
@@ -90,35 +89,18 @@ def test_parser_no_recipe(parser):
 
 # Node Initialisation
 def test_node_initialises(node):
-    """Test that the node and its clients are created."""
+    """Test that the node, its arm actions, and its own services are created."""
 
     assert node.parser is not None
-    assert node.home_client is not None
-    assert node.move_arm_client is not None
-    assert node.move_gripper_client is not None
-    assert node.relative_move_client is not None
-    assert node.info_client is not None
-    assert node.relative_client is not None
-    assert node.attach_client is not None
-    assert node.detach_client is not None
-    assert node.update_pose_client is not None
     assert node.status_pub is not None
     assert node.execute_srv is not None
+    assert node.reset_srv is not None
 
-
-# wait_for_future()
-def test_wait_for_future(node):
-    """Test that wait_for_future returns the service response."""
-
-    future = MagicMock()
-    response = MagicMock()
-
-    future.done.return_value = True
-    future.result.return_value = response
-
-    result = node.wait_for_future(future, "/test")
-
-    assert result == response
+    assert node.arm_actions is not None
+    assert set(node.arm_actions.handlers.keys()) == {
+        'home', 'move_arm', 'relative_move', 'gripper', 'pickup', 'dropoff',
+        'pour', 'thrust', 'push', 'throw'
+    }
 
 
 # publish_status()
@@ -143,208 +125,10 @@ def test_publish_status(node):
     assert msg.last_command_valid is True
 
 
-# get_static_object_coords()
-def test_get_static_object_coords(node):
-    """Test getting object coordinates."""
-
-    node.info_client.wait_for_service = MagicMock(
-        return_value=True
-    )
-
-    response = GetObjectInfo.Response()
-    response.success = True
-    response.pose.position.x = 1.0
-    response.pose.position.y = 2.0
-    response.pose.position.z = 3.0
-
-    future = MagicMock()
-    future.done.return_value = True
-    future.result.return_value = response
-
-    node.info_client.call_async = MagicMock(
-        return_value=future
-    )
-
-    result = node.get_static_object_coords("cube")
-
-    assert result == {
-        "x": 1.0,
-        "y": 2.0,
-        "z": 3.0
-    }
-
-    request = node.info_client.call_async.call_args[0][0]
-    assert request.object_id == "cube"
-
-
-def test_get_static_object_coords_unavailable(node):
-    """Test coordinate service unavailable."""
-
-    node.info_client.wait_for_service = MagicMock(
-        return_value=False
-    )
-
-    assert node.get_static_object_coords("cube") is None
-
-
-#get_relative_movement_vector()
-def test_get_relative_movement_vector(node):
-    """Test getting a relative movement vector."""
-
-    node.relative_client.wait_for_service = MagicMock(
-        return_value=True
-    )
-
-    response = GetRelativeMovement.Response()
-    response.success = True
-    response.x = 0.1
-    response.y = 0.2
-    response.z = 0.3
-
-    future = MagicMock()
-    future.done.return_value = True
-    future.result.return_value = response
-
-    node.relative_client.call_async = MagicMock(
-        return_value=future
-    )
-
-    result = node.get_relative_movement_vector("forward")
-
-    assert result == {
-        "x": 0.1,
-        "y": 0.2,
-        "z": 0.3
-    }
-
-
-# call_home_service()
-def test_call_home_service(node):
-    """Test the home service."""
-
-    node.home_client.wait_for_service = MagicMock(
-        return_value=True
-    )
-
-    response = HomeArm.Response()
-    response.success = True
-    response.message = "Homed"
-
-    future = MagicMock()
-    future.done.return_value = True
-    future.result.return_value = response
-
-    node.home_client.call_async = MagicMock(
-        return_value=future
-    )
-
-    success, message = node.call_home_service()
-
-    assert success is True
-    assert message == "Homed"
-
-
-# call_move_service()
-def test_call_move_service(node):
-    """Test the move arm service."""
-
-    node.move_arm_client.wait_for_service = MagicMock(
-        return_value=True
-    )
-
-    response = MoveArm.Response()
-    response.success = True
-    response.message = "Moved"
-
-    future = MagicMock()
-    future.done.return_value = True
-    future.result.return_value = response
-
-    node.move_arm_client.call_async = MagicMock(
-        return_value=future
-    )
-
-    success, message = node.call_move_service(1.0, 2.0, 3.0)
-
-    assert success is True
-    assert message == "Moved"
-
-    request = node.move_arm_client.call_async.call_args[0][0]
-
-    assert request.x == 1.0
-    assert request.y == 2.0
-    assert request.z == 3.0
-
-
-#call_relative_move_service()
-def test_call_relative_move_service(node):
-    """Test relative movement service."""
-
-    node.relative_move_client.wait_for_service = MagicMock(
-        return_value=True
-    )
-
-    response = RelativeMove.Response()
-    response.success = True
-    response.message = "Moved"
-
-    future = MagicMock()
-    future.done.return_value = True
-    future.result.return_value = response
-
-    node.relative_move_client.call_async = MagicMock(
-        return_value=future
-    )
-
-    success, message = node.call_relative_move_service(
-        0.1,
-        0.2,
-        0.3
-    )
-
-    assert success is True
-    assert message == "Moved"
-
-    request = node.relative_move_client.call_async.call_args[0][0]
-
-    assert request.vx == 0.1
-    assert request.vy == 0.2
-    assert request.vz == 0.3
-
-
-#call_move_gripper_service()
-def test_call_move_gripper_service(node):
-    """Test gripper service."""
-
-    node.move_gripper_client.wait_for_service = MagicMock(
-        return_value=True
-    )
-
-    response = MoveGripper.Response()
-    response.success = True
-    response.message = "Gripper moved"
-
-    future = MagicMock()
-    future.done.return_value = True
-    future.result.return_value = response
-
-    node.move_gripper_client.call_async = MagicMock(
-        return_value=future
-    )
-
-    success, message = node.call_move_gripper_service(0.5)
-
-    assert success is True
-    assert message == "Gripper moved"
-
-    request = node.move_gripper_client.call_async.call_args[0][0]
-
-    assert request.position == 0.5
-
-
-# execute_recipe()
+# execute_recipe() / _dispatch_step()
 def test_execute_recipe(node):
-    """Test executing a recipe containing several action types."""
+    """Test executing a recipe runs each step's action through the registered
+    handler, in order, with that step's parameters."""
 
     node.parser.recipe = {
         "recipe_name": "Test Recipe",
@@ -357,12 +141,6 @@ def test_execute_recipe(node):
                 }
             },
             {
-                "action": "relative_move",
-                "parameters": {
-                    "vector": "forward"
-                }
-            },
-            {
                 "action": "gripper",
                 "parameters": {
                     "position": 0.5
@@ -371,37 +149,11 @@ def test_execute_recipe(node):
         ]
     }
 
-    node.call_home_service = MagicMock(
-        return_value=(True, "Success")
-    )
-
-    node.get_static_object_coords = MagicMock(
-        return_value={
-            "x": 1.0,
-            "y": 2.0,
-            "z": 3.0
-        }
-    )
-
-    node.call_move_service = MagicMock(
-        return_value=(True, "Success")
-    )
-
-    node.get_relative_movement_vector = MagicMock(
-        return_value={
-            "x": 0.1,
-            "y": 0.2,
-            "z": 0.3
-        }
-    )
-
-    node.call_relative_move_service = MagicMock(
-        return_value=(True, "Success")
-    )
-
-    node.call_move_gripper_service = MagicMock(
-        return_value=(True, "Success")
-    )
+    node.arm_actions.handlers = {
+        'home': MagicMock(return_value=True),
+        'move_arm': MagicMock(return_value=True),
+        'gripper': MagicMock(return_value=True),
+    }
 
     node.publish_status = MagicMock()
 
@@ -410,12 +162,9 @@ def test_execute_recipe(node):
 
     assert result is True
 
-    node.call_home_service.assert_called_once()
-    node.call_move_service.assert_called_once_with(1.0, 2.0, 3.0)
-    node.call_relative_move_service.assert_called_once_with(
-        0.1, 0.2, 0.3
-    )
-    node.call_move_gripper_service.assert_called_once_with(0.5)
+    node.arm_actions.handlers['home'].assert_called_once_with({})
+    node.arm_actions.handlers['move_arm'].assert_called_once_with({"target": "cube"})
+    node.arm_actions.handlers['gripper'].assert_called_once_with({"position": 0.5})
 
 
 def test_execute_recipe_no_steps(node):
@@ -441,7 +190,6 @@ def test_execute_recipe_callback(node):
         ]
     })
 
-    node.status_text = "Recipe executed successfully."
     node.execute_recipe = MagicMock(
         return_value=True
     )
@@ -489,3 +237,103 @@ def test_startup_timer_callback(node):
     node.startup_timer.cancel.assert_called_once()
     node.execute_recipe.assert_called_once()
 
+
+# _dispatch_step() / execute_recipe() all_success regression
+def test_execute_recipe_step_failure_sets_all_success_false(node):
+    """Regression test: a step failure must fail the whole recipe, not
+    just break the loop silently (the bug 4.2 in the implementation plan fixes)."""
+
+    node.parser.recipe = {
+        "recipe_name": "Test",
+        "steps": [
+            {"action": "pickup", "parameters": {"target": "red_cube"}}
+        ]
+    }
+
+    node.arm_actions.handlers = {
+        'pickup': MagicMock(return_value=False),
+    }
+    node.publish_status = MagicMock()
+
+    with patch("kinova_interface.json_parser_node.time.sleep"):
+        result = node.execute_recipe()
+
+    assert result is False
+    assert node.command_success is False
+
+
+def test_execute_recipe_unknown_action_fails(node):
+    """An action with no registered handler should fail the step, not crash."""
+
+    node.parser.recipe = {
+        "recipe_name": "Test",
+        "steps": [
+            {"action": "not_a_real_action", "parameters": {}}
+        ]
+    }
+    node.publish_status = MagicMock()
+
+    with patch("kinova_interface.json_parser_node.time.sleep"):
+        result = node.execute_recipe()
+
+    assert result is False
+
+
+def test_execute_recipe_stops_at_first_failure(node):
+    """A failing step must stop the recipe - later steps should not run."""
+
+    node.parser.recipe = {
+        "recipe_name": "Test",
+        "steps": [
+            {"action": "home"},
+            {"action": "move_arm", "parameters": {"target": "cube"}},
+        ]
+    }
+
+    node.arm_actions.handlers = {
+        'home': MagicMock(return_value=False),
+        'move_arm': MagicMock(return_value=True),
+    }
+    node.publish_status = MagicMock()
+
+    with patch("kinova_interface.json_parser_node.time.sleep"):
+        result = node.execute_recipe()
+
+    assert result is False
+    node.arm_actions.handlers['move_arm'].assert_not_called()
+
+
+# reset_environment_callback()
+def test_reset_environment_callback_success(node):
+    """The service handler should delegate to arm_actions.reset_environment()
+    and reflect its result."""
+
+    request = MagicMock()
+    response = MagicMock()
+
+    node.arm_actions.reset_environment = MagicMock(
+        return_value=(True, "Environment reset: 3 object(s), 1 obstacle(s) restored to configured defaults")
+    )
+
+    result = node.reset_environment_callback(request, response)
+
+    assert result == response
+    assert response.success is True
+    assert "restored to configured defaults" in response.message
+
+
+def test_reset_environment_callback_failure(node):
+    """A failed reset should still return a response, not raise."""
+
+    request = MagicMock()
+    response = MagicMock()
+
+    node.arm_actions.reset_environment = MagicMock(
+        return_value=(False, "Environment reset service not available")
+    )
+
+    result = node.reset_environment_callback(request, response)
+
+    assert result == response
+    assert response.success is False
+    assert response.message == "Environment reset service not available"

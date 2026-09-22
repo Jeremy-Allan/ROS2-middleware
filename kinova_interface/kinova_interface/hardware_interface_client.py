@@ -6,45 +6,66 @@ from rclpy.executors import MultiThreadedExecutor
 import threading
 
 from moveit_msgs.action import MoveGroup
-from moveit_msgs.msg import Constraints, PositionConstraint, JointConstraint
+from moveit_msgs.msg import Constraints, PositionConstraint, OrientationConstraint, JointConstraint
 from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose
 from control_msgs.action import GripperCommand
+
+# Current joint positions, for relative joint moves (e.g. 'pour's tilt)
+from sensor_msgs.msg import JointState
+
 from example_interfaces.msg import Bool
 from controller_manager_msgs.srv import ListControllers
 from tf2_ros import Buffer, TransformListener
 
 from kinova_interfaces.msg import ExtendedStatus
-from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove
+from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
+
+from kinova_interface.helpers.geometry_utils import euler_to_quaternion, quaternion_to_euler
+from kinova_interface.helpers.frame_names import BASE_FRAME, TOOL_FRAME
 
 
 class HardwareInterfaceClient(Node):
     ACTION_TIMEOUT_SEC = 30.0
     GRIPPER_TIMEOUT_SEC = 10.0
     SERVER_WAIT_TIMEOUT_SEC = 5.0
-
-    BASE_FRAME = 'base_link'
-    TOOL_FRAME = 'tool_frame'
     PLANNING_GROUP = 'arm'
-    NUM_PLANNING_ATTEMPTS = 10
-    ALLOWED_PLANNING_TIME_SEC = 5.0
+    # A tight combined position+orientation constraint reached in one big
+    # jump from a very different starting configuration (e.g. 'pickup' going
+    # straight from home) is a much harder search problem than the same pose
+    # reached through several small incremental moves - bumped from 10/5.0s
+    # after exactly this case (a forced pickup orientation) failed with
+    # generic error 99999 despite being a confirmed-reachable, collision-free
+    # pose (manually verified in RViz).
+    NUM_PLANNING_ATTEMPTS = 20
+    ALLOWED_PLANNING_TIME_SEC = 10.0
     SPHERE_TOLERANCE_RADIUS = 0.01
 
     HOME_JOINT_NAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+    # Home's fixed joint configuration - also the base pose 'throw' starts
+    # its wind-up/fling from, reoriented at joint_1 to face the throw
+    # direction and offset at joint_3 (the elbow) for the swing.
     HOME_JOINT_POSITIONS = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
     HOME_JOINT_TOLERANCE = 0.01
     # TODO: make these ^^ configurable
 
+    # A rejected/invalid goal (e.g. an unreachable combined joint state)
+    # typically fails within milliseconds, well before a real motion could
+    # possibly finish - so a short bounded wait here can catch that kind of
+    # fast rejection in the fire-and-forget path without turning into a
+    # real wait for a genuine, slow motion in progress.
+    FIRE_AND_FORGET_REJECTION_WINDOW_SEC = 0.5
+
     def __init__(self):
         super().__init__('kinova_hardware_client')
         self.get_logger().info('Kinova Hardware Client Online - Waiting for Service Requests...')
-        
+
         # Use a ReentrantCallbackGroup to allow service handlers and action callbacks to run concurrently
         self.callback_group = ReentrantCallbackGroup()
 
         # Action Clients (The "Skills")
         self.arm_client = ActionClient(
-            self, MoveGroup, 'move_action', 
+            self, MoveGroup, 'move_action',
             callback_group=self.callback_group
         )
         self.gripper_client = ActionClient(
@@ -55,6 +76,18 @@ class HardwareInterfaceClient(Node):
         # TF Buffer and Listener
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+
+        # Latest joint positions (name -> position), for relative joint
+        # moves (e.g. 'pour's tilt, a delta on joint_6 alone) - None until
+        # the first /joint_states message arrives.
+        self.latest_joint_positions = None
+        self.joint_state_sub = self.create_subscription(
+            JointState,
+            '/joint_states',
+            self._on_joint_state,
+            10,
+            callback_group=self.callback_group
+        )
 
         # Fault Monitoring and Recovery
         self.fault_sub = self.create_subscription(
@@ -93,11 +126,12 @@ class HardwareInterfaceClient(Node):
         self.status_text = "Hardware Interface Client Ready"
         self.command_success = True
 
-        # ROS 2 Services
+        # ROS 2 Services (The "API")
         self.home_arm = self.create_service(HomeArm, '~/home_arm', self.handle_home_arm, callback_group=self.callback_group)
         self.move_arm_srv = self.create_service(MoveArm, '~/move_arm', self.handle_move_arm, callback_group=self.callback_group)
         self.move_gripper_srv = self.create_service(MoveGripper, '~/move_gripper', self.handle_move_gripper, callback_group=self.callback_group)
         self.relative_move_srv = self.create_service(RelativeMove, '~/relative_move', self.handle_relative_move, callback_group=self.callback_group)
+        self.joint_move_srv = self.create_service(JointMove, '~/joint_move', self.handle_joint_move, callback_group=self.callback_group)
 
     # --- Telemetry Status Publisher ---
     def publish_status(self):
@@ -108,6 +142,9 @@ class HardwareInterfaceClient(Node):
         msg.last_command_valid = self.command_success
         self.status_pub.publish(msg)
 
+    def _on_joint_state(self, msg):
+        self.latest_joint_positions = dict(zip(msg.name, msg.position))
+
     # --- Fault Controller Health Check & Helper ---
     def check_fault_controller_health(self):
         """Timer callback to check if the fault_controller is active on the controller_manager."""
@@ -117,7 +154,8 @@ class HardwareInterfaceClient(Node):
                 throttle_duration_sec=10.0
             )
             return
-        
+
+        # Uses srv_type.Request() dynamically to avoid IDE/static analysis unresolved reference warnings
         req = self.list_controllers_client.srv_type.Request()
         future = self.list_controllers_client.call_async(req)
         future.add_done_callback(self.list_controllers_callback)
@@ -133,7 +171,7 @@ class HardwareInterfaceClient(Node):
                     if controller.state == 'active':
                         fault_ctrl_active = True
                     break
-            
+
             if fault_ctrl_found and not fault_ctrl_active:
                 if not self.fault_controller_warning_active:
                     self.fault_controller_warning_active = True
@@ -206,7 +244,7 @@ class HardwareInterfaceClient(Node):
         self.status_text = "Sending arm to home position"
         self.publish_status()
 
-        if self.send_home_goal():
+        if self.send_home_goal(motion_params=request.motion_params):
             self._await_action(
                 self.arm_movement_finished,
                 self.ACTION_TIMEOUT_SEC,
@@ -221,16 +259,83 @@ class HardwareInterfaceClient(Node):
 
         return self.finalize_service_status(response)
 
+    def handle_joint_move(self, request, response):
+        """Move to a joint-space target - absolute by default, or relative
+        to the current joint state (from the latest /joint_states message)
+        if request.relative is True. Relative mode is for a delta on a
+        single joint (e.g. 'pour's tilt, joint_6 alone) without needing to
+        know or recompute the other joints' current values.
+
+        If wait_for_completion is False, returns once either the goal is
+        accepted and stays that way for FIRE_AND_FORGET_REJECTION_WINDOW_SEC,
+        or it fails/succeeds within that window - whichever comes first.
+        This lets a caller (e.g. 'throw's fling) do something else, like
+        releasing the gripper, partway through a genuinely still-in-progress
+        motion, while still catching a fast rejection instead of treating it
+        as a success. A rejection arriving after the window would still be
+        missed - this narrows that gap, it doesn't close it entirely."""
+        joint_positions = list(request.joint_positions)
+
+        if request.relative:
+            if self.latest_joint_positions is None:
+                response.success = False
+                response.message = "No joint state available for relative joint move"
+                return self.finalize_service_status(response)
+            joint_names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+            try:
+                current = [self.latest_joint_positions[name] for name in joint_names]
+            except KeyError as e:
+                response.success = False
+                response.message = f"Missing joint {e} in latest joint state"
+                return self.finalize_service_status(response)
+            joint_positions = [current[i] + joint_positions[i] for i in range(6)]
+
+        self.get_logger().info(f"Service Call: Joint Move to {joint_positions}")
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = f"Moving to joint targets {joint_positions}..."
+        self.publish_status()
+
+        if not self.send_joint_goal(joint_positions, motion_params=request.motion_params):
+            response.success = False
+            response.message = "Failed to initiate joint move"
+            return self.finalize_service_status(response)
+
+        if not request.wait_for_completion:
+            if self.arm_movement_finished.wait(timeout=self.FIRE_AND_FORGET_REJECTION_WINDOW_SEC):
+                response.success = self.arm_action_successful
+                response.message = self.arm_action_message
+                return self.finalize_service_status(response)
+            response.success = True
+            response.message = "Joint move goal accepted (not waiting for completion)"
+            return response
+
+        self._await_action(
+            self.arm_movement_finished,
+            self.ACTION_TIMEOUT_SEC,
+            'arm_action_successful',
+            'arm_action_message',
+            f"Joint move to {joint_positions}",
+            response
+        )
+        return self.finalize_service_status(response)
+
     def handle_move_arm(self, request, response):
-        x = request.x
-        y = request.y
-        z = request.z
+        x = request.target_position.x
+        y = request.target_position.y
+        z = request.target_position.z
         self.get_logger().info(f"Service Call: Move Arm to {x}, {y}, {z}")
         self.current_state = ExtendedStatus.STATE_BUSY
         self.status_text = f"Moving arm to {x}, {y}, {z}..."
         self.publish_status()
 
-        if self.send_goal(x, y, z):
+        if self.send_goal(
+            x, y, z,
+            has_orientation=request.has_orientation,
+            roll=request.roll,
+            pitch=request.pitch,
+            yaw=request.yaw,
+            motion_params=request.motion_params,
+        ):
             self._await_action(
                 self.arm_movement_finished,
                 self.ACTION_TIMEOUT_SEC,
@@ -257,19 +362,43 @@ class HardwareInterfaceClient(Node):
         try:
             # Look up current pose of the tool frame
             now = rclpy.time.Time()
-            trans = self.tf_buffer.lookup_transform(self.BASE_FRAME, self.TOOL_FRAME, now, timeout=rclpy.duration.Duration(seconds=1.0))
-            
+            trans = self.tf_buffer.lookup_transform(BASE_FRAME, TOOL_FRAME, now, timeout=rclpy.duration.Duration(seconds=1.0))
+
             curr_x = trans.transform.translation.x
             curr_y = trans.transform.translation.y
             curr_z = trans.transform.translation.z
-            
+
             target_x = curr_x + vx
             target_y = curr_y + vy
             target_z = curr_z + vz
-            
+
             self.get_logger().info(f"Calculated target: {target_x:.3f}, {target_y:.3f}, {target_z:.3f}")
-            
-            if self.send_goal(target_x, target_y, target_z):
+
+            has_orientation = request.has_orientation
+            target_roll = target_pitch = target_yaw = 0.0
+            if has_orientation:
+                # quaternion_to_euler uses asin() for pitch, capped at +-90deg.
+                # If the arm is already near that boundary (e.g. right after
+                # tilted_for_pour), roll/yaw become coupled and this delta
+                # composition gives unintuitive results. Fine for small nudges
+                # from a normal pose, which is the expected use case.
+                q = trans.transform.rotation
+                curr_roll, curr_pitch, curr_yaw = quaternion_to_euler(q.x, q.y, q.z, q.w)
+                target_roll = curr_roll + request.roll_delta
+                target_pitch = curr_pitch + request.pitch_delta
+                target_yaw = curr_yaw + request.yaw_delta
+                self.get_logger().info(
+                    f"Calculated target orientation (rpy): {target_roll}, {target_pitch}, {target_yaw}"
+                )
+
+            if self.send_goal(
+                target_x, target_y, target_z,
+                has_orientation=has_orientation,
+                roll=target_roll,
+                pitch=target_pitch,
+                yaw=target_yaw,
+                motion_params=request.motion_params,
+            ):
                 self._await_action(
                     self.arm_movement_finished,
                     self.ACTION_TIMEOUT_SEC,
@@ -281,12 +410,12 @@ class HardwareInterfaceClient(Node):
             else:
                 response.success = False
                 response.message = "Failed to initiate relative movement (action server unavailable)"
-                
+
         except Exception as e:
             self.get_logger().error(f"Could not calculate relative move: {e}")
             response.success = False
             response.message = f"Relative move TF lookup failed: {e}"
-            
+
         return self.finalize_service_status(response)
 
     def handle_move_gripper(self, request, response):
@@ -311,8 +440,24 @@ class HardwareInterfaceClient(Node):
 
         return self.finalize_service_status(response)
 
+    # --- Orientation / Motion Params Helpers ---
+    def clamp_motion_params(self, motion_params):
+        """Clamp velocity/acceleration scale to [0.0, 1.0], warn if a caller sent something outside that range."""
+        velocity_scale = motion_params.velocity_scale
+        acceleration_scale = motion_params.acceleration_scale
+
+        if velocity_scale < 0.0 or velocity_scale > 1.0:
+            self.get_logger().warn(f"velocity_scale {velocity_scale} out of range, clamping to [0.0, 1.0]")
+            velocity_scale = max(0.0, min(1.0, velocity_scale))
+
+        if acceleration_scale < 0.0 or acceleration_scale > 1.0:
+            self.get_logger().warn(f"acceleration_scale {acceleration_scale} out of range, clamping to [0.0, 1.0]")
+            acceleration_scale = max(0.0, min(1.0, acceleration_scale))
+
+        return velocity_scale, acceleration_scale
+
     # --- Action Client Methods ---
-    def send_goal(self, x, y, z):
+    def send_goal(self, x, y, z, has_orientation=False, roll=0.0, pitch=0.0, yaw=0.0, motion_params=None):
         if not self.arm_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error('Arm server not available')
             return False
@@ -323,9 +468,9 @@ class HardwareInterfaceClient(Node):
         goal_msg.request.allowed_planning_time = self.ALLOWED_PLANNING_TIME_SEC
 
         pos_constraint = PositionConstraint()
-        pos_constraint.header.frame_id = self.BASE_FRAME
-        pos_constraint.link_name = self.TOOL_FRAME
-        
+        pos_constraint.header.frame_id = BASE_FRAME
+        pos_constraint.link_name = TOOL_FRAME
+
         sphere = SolidPrimitive()
         sphere.type = SolidPrimitive.SPHERE
         sphere.dimensions = [self.SPHERE_TOLERANCE_RADIUS]
@@ -341,8 +486,31 @@ class HardwareInterfaceClient(Node):
 
         goal_constraints = Constraints()
         goal_constraints.position_constraints.append(pos_constraint)
+
+        if has_orientation:
+            qx, qy, qz, qw = euler_to_quaternion(roll, pitch, yaw)
+            orient_constraint = OrientationConstraint()
+            orient_constraint.header.frame_id = BASE_FRAME
+            orient_constraint.link_name = TOOL_FRAME
+            orient_constraint.orientation.x = qx
+            orient_constraint.orientation.y = qy
+            orient_constraint.orientation.z = qz
+            orient_constraint.orientation.w = qw
+            orient_constraint.absolute_x_axis_tolerance = 0.1
+            orient_constraint.absolute_y_axis_tolerance = 0.1
+            orient_constraint.absolute_z_axis_tolerance = 0.1
+            orient_constraint.weight = 1.0
+            goal_constraints.orientation_constraints.append(orient_constraint)
+
         goal_msg.request.goal_constraints.append(goal_constraints)
-        
+
+        if motion_params is not None:
+            velocity_scale, acceleration_scale = self.clamp_motion_params(motion_params)
+            if velocity_scale > 0.0:
+                goal_msg.request.max_velocity_scaling_factor = velocity_scale
+            if acceleration_scale > 0.0:
+                goal_msg.request.max_acceleration_scaling_factor = acceleration_scale
+
         self.arm_movement_finished.clear()
         future = self.arm_client.send_goal_async(
             goal_msg,
@@ -351,9 +519,15 @@ class HardwareInterfaceClient(Node):
         future.add_done_callback(self.goal_response_callback)
         return True
 
-    def send_home_goal(self):
+    def send_home_goal(self, motion_params=None):
+        return self.send_joint_goal(self.HOME_JOINT_POSITIONS, motion_params=motion_params)
+
+    def send_joint_goal(self, joint_positions, motion_params=None):
+        """Plan and execute a move to an absolute target for each of
+        joint_1..joint_6, the same JointConstraint-based approach send_home_goal
+        already used, just parameterized instead of hardcoded to home."""
         if not self.arm_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
-            self.get_logger().error('Arm server not available (Home Goal)')
+            self.get_logger().error('Arm server not available (Joint Move)')
             return False
 
         goal_msg = MoveGroup.Goal()
@@ -362,7 +536,7 @@ class HardwareInterfaceClient(Node):
         goal_msg.request.allowed_planning_time = self.ALLOWED_PLANNING_TIME_SEC
 
         constraints = []
-        for name, pos in zip(self.HOME_JOINT_NAMES, self.HOME_JOINT_POSITIONS):
+        for name, pos in zip(self.HOME_JOINT_NAMES, joint_positions):
             jc = JointConstraint()
             jc.joint_name = name
             jc.position = pos
@@ -374,6 +548,13 @@ class HardwareInterfaceClient(Node):
         goal_constraints = Constraints()
         goal_constraints.joint_constraints = constraints
         goal_msg.request.goal_constraints.append(goal_constraints)
+
+        if motion_params is not None:
+            velocity_scale, acceleration_scale = self.clamp_motion_params(motion_params)
+            if velocity_scale > 0.0:
+                goal_msg.request.max_velocity_scaling_factor = velocity_scale
+            if acceleration_scale > 0.0:
+                goal_msg.request.max_acceleration_scaling_factor = acceleration_scale
 
         self.arm_movement_finished.clear()
         future = self.arm_client.send_goal_async(
@@ -387,10 +568,10 @@ class HardwareInterfaceClient(Node):
         if not self.gripper_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error('Gripper server not available')
             return False
-        
+
         goal = GripperCommand.Goal()
         goal.command.position = float(position)
-        
+
         self.gripper_movement_finished.clear()
         future = self.gripper_client.send_goal_async(
             goal,
@@ -409,7 +590,7 @@ class HardwareInterfaceClient(Node):
                 self.arm_action_message = 'Goal rejected by MoveIt Action Server'
                 self.arm_movement_finished.set()
                 return
-            
+
             self.get_logger().info('Goal accepted! Moving...')
             result_future = goal_handle.get_result_async()
             result_future.add_done_callback(self.result_callback)
@@ -427,7 +608,7 @@ class HardwareInterfaceClient(Node):
         try:
             result = future.result().result
             error_code = result.error_code.val
-            
+
             if error_code == result.error_code.SUCCESS:
                 self.get_logger().info('Movement complete!')
                 self.arm_action_successful = True
@@ -461,6 +642,14 @@ class HardwareInterfaceClient(Node):
             self.arm_action_successful = False
             self.arm_action_message = f"Action result processing error: {e}"
         finally:
+            # Reset state here (not just in finalize_service_status, which only
+            # runs for a caller that waited) so a fire-and-forget joint move
+            # (e.g. 'throw's fling) doesn't leave current_state stuck on BUSY
+            # once it actually finishes with nobody waiting on it.
+            if not self.is_faulted:
+                self.current_state = ExtendedStatus.STATE_IDLE
+                self.status_text = "Movement complete!" if self.arm_action_successful else "Movement failed"
+                self.publish_status()
             self.arm_movement_finished.set()
 
     def gripper_response_callback(self, future):
@@ -508,11 +697,11 @@ class HardwareInterfaceClient(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = HardwareInterfaceClient()
-    
+
     # Use MultiThreadedExecutor to allow concurrent callback execution
     executor = MultiThreadedExecutor(num_threads=10) # TODO (pulkit) change the hardcoded threads numbers
     executor.add_node(node)
-    
+
     try:
         executor.spin()
     except KeyboardInterrupt:

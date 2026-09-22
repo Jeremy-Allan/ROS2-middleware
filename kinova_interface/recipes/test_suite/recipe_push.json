@@ -1,0 +1,8 @@
+{
+  "recipe_name": "Push - Water Bottle Forward",
+  "description": "Slide the water bottle forward by sustained contact, without ever grasping or lifting it",
+  "steps": [
+    { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
+    { "step_id": 2, "action": "push", "parameters": { "target": "water_bottle", "direction": "forward" }, "description": "Push the water bottle forward (default 0.2m), extending joint_2/joint_3 from a verified contact pose" }
+  ]
+}

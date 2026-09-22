@@ -10,6 +10,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetObjectCoordinates.srv"
   "srv/GetRobotParameters.srv"
   "srv/GetRelativeMovement.srv"
+  "srv/GetOrientationPreset.srv"
   "srv/GetObjectInfo.srv"
   "srv/AttachObject.srv"
   "srv/DetachObject.srv"
@@ -20,8 +21,10 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/RelativeMove.srv"
   "srv/HomeArm.srv"
   "srv/UpdateObjectPose.srv"
+  "srv/JointMove.srv"
   "msg/ExtendedStatus.msg"
   "msg/SystemSummary.msg"
+  "msg/MotionParams.msg"
   DEPENDENCIES geometry_msgs shape_msgs
 )
 

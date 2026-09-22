@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from std_srvs.srv import Trigger
 from example_interfaces.msg import Bool
 from kinova_interfaces.msg import ExtendedStatus
-from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove
+from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
 
 from moveit_msgs.action import MoveGroup
 from control_msgs.action import GripperCommand
@@ -15,7 +15,7 @@ from control_msgs.action import GripperCommand
 from kinova_interface.hardware_interface_client import HardwareInterfaceClient
 
 """
-Test with: 
+Test with:
 pytest src/ROS2-middleware/kinova_interface/test/test_hardware_interface_client.py -v
 """
 
@@ -280,6 +280,198 @@ def test_handle_home_arm_failure_to_start(node):
     assert result.success is False
     assert result.message == "Failed to initiate home movement (action server unavailable)"
 
+
+# send_joint_goal() / handle_joint_move()
+def test_send_joint_goal_custom_positions(node):
+    """send_joint_goal should build the same kind of joint-constrained goal
+    as send_home_goal, for arbitrary target positions."""
+
+    node.arm_client.wait_for_server.return_value = True
+    fake_future = MagicMock()
+    node.arm_client.send_goal_async.return_value = fake_future
+
+    positions = [0.5, 0.0, 1.0, 1.5708, 1.5708, 0.0]
+    result = node.send_joint_goal(positions)
+
+    assert result is True
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    constraints = goal.request.goal_constraints[0].joint_constraints
+
+    assert len(constraints) == 6
+    assert constraints[0].joint_name == "joint_1"
+    assert constraints[0].position == 0.5
+    assert constraints[2].joint_name == "joint_3"
+    assert constraints[2].position == 1.0
+
+
+def test_send_home_goal_matches_send_joint_goal_defaults(node):
+    """send_home_goal should just be send_joint_goal with home's fixed
+    positions - refactored from its own inline copy of the same logic."""
+
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    node.send_home_goal()
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    positions = [jc.position for jc in goal.request.goal_constraints[0].joint_constraints]
+
+    assert positions == node.HOME_JOINT_POSITIONS
+
+
+def test_handle_joint_move_waits_by_default(node):
+    """handle_joint_move should wait for completion when wait_for_completion
+    is True, via the shared _await_action helper like the other arm-move
+    handlers."""
+
+    node.send_joint_goal = MagicMock(return_value=True)
+    node.arm_movement_finished = MagicMock()
+    node.arm_movement_finished.wait.return_value = True
+    node.arm_action_successful = True
+    node.arm_action_message = "Joint move complete"
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0, 0.0, 1.0, 1.5708, 1.5708, 0.0]
+    request.wait_for_completion = True
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is True
+    assert result.message == "Joint move complete"
+    node.arm_movement_finished.wait.assert_called_once()
+
+
+def test_handle_joint_move_fire_and_forget_still_in_progress(node):
+    """With wait_for_completion False, if the motion is still going after
+    the short rejection-catching window, handle_joint_move should return
+    without waiting further or touching current_state (the arm is still
+    genuinely moving at that point)."""
+
+    node.send_joint_goal = MagicMock(return_value=True)
+    node.arm_movement_finished = MagicMock()
+    node.arm_movement_finished.wait.return_value = False  # still in progress
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0, 0.0, 0.5, 1.5708, 1.5708, 0.0]
+    request.wait_for_completion = False
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is True
+    assert result.message == "Joint move goal accepted (not waiting for completion)"
+    node.arm_movement_finished.wait.assert_called_once_with(
+        timeout=node.FIRE_AND_FORGET_REJECTION_WINDOW_SEC
+    )
+    assert node.current_state == ExtendedStatus.STATE_BUSY
+
+
+def test_handle_joint_move_fire_and_forget_catches_fast_rejection(node):
+    """With wait_for_completion False, a rejection that arrives within the
+    short catching window (e.g. an invalid combined joint state, which
+    fails within milliseconds) should be reported as a real failure -
+    not silently treated as accepted."""
+
+    node.send_joint_goal = MagicMock(return_value=True)
+    node.arm_movement_finished = MagicMock()
+    node.arm_movement_finished.wait.return_value = True  # finished within the window
+    node.arm_action_successful = False
+    node.arm_action_message = "Arm movement failed"
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0, 0.0, 2.3562, 1.5708, 1.5708, 0.0]
+    request.wait_for_completion = False
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is False
+    assert result.message == "Arm movement failed"
+
+
+def test_handle_joint_move_failure_to_start(node):
+    """Test joint move when the action cannot be started at all."""
+
+    node.send_joint_goal = MagicMock(return_value=False)
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0] * 6
+    request.wait_for_completion = True
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is False
+    assert result.message == "Failed to initiate joint move"
+
+
+def test_on_joint_state_caches_latest_positions(node):
+    """_on_joint_state should cache the latest name->position mapping,
+    for relative joint moves to read current values from."""
+    from sensor_msgs.msg import JointState
+
+    msg = JointState()
+    msg.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+    msg.position = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
+
+    node._on_joint_state(msg)
+
+    assert node.latest_joint_positions == {
+        'joint_1': 0.1, 'joint_2': 0.2, 'joint_3': 0.3,
+        'joint_4': 0.4, 'joint_5': 0.5, 'joint_6': 0.6,
+    }
+
+
+def test_handle_joint_move_relative_adds_delta_to_current(node):
+    """A relative joint move should resolve to an absolute target of
+    current + delta before actually moving, e.g. 'pour's tilt: a delta on
+    joint_6 alone, without disturbing the other five joints."""
+
+    node.latest_joint_positions = {
+        'joint_1': 0.1, 'joint_2': 0.2, 'joint_3': 0.3,
+        'joint_4': 0.4, 'joint_5': 0.5, 'joint_6': 0.6,
+    }
+    node.send_joint_goal = MagicMock(return_value=True)
+    node.arm_movement_finished = MagicMock()
+    node.arm_action_successful = True
+    node.arm_action_message = "Joint move complete"
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0, 0.0, 0.0, 0.0, 0.0, 2.36]
+    request.wait_for_completion = True
+    request.relative = True
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is True
+    node.send_joint_goal.assert_called_once()
+    resolved_positions = node.send_joint_goal.call_args[0][0]
+    assert resolved_positions == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5, 0.6 + 2.36])
+
+
+def test_handle_joint_move_relative_fails_without_joint_state(node):
+    """A relative joint move should fail cleanly (not crash or silently
+    treat deltas as absolutes) if no /joint_states message has arrived yet."""
+
+    node.latest_joint_positions = None
+    node.send_joint_goal = MagicMock()
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0, 0.0, 0.0, 0.0, 0.0, 2.36]
+    request.wait_for_completion = True
+    request.relative = True
+    response = JointMove.Response()
+
+    result = node.handle_joint_move(request, response)
+
+    assert result.success is False
+    assert result.message == "No joint state available for relative joint move"
+    node.send_joint_goal.assert_not_called()
+
+
 # handle_move_arm()
 def test_handle_move_arm_success(node):
     """Test successful arm movement service."""
@@ -291,9 +483,9 @@ def test_handle_move_arm_success(node):
     node.arm_action_message = "Arm moved to 0.5, 0.2, 0.3"
 
     request = MoveArm.Request()
-    request.x = 0.5
-    request.y = 0.2
-    request.z = 0.3
+    request.target_position.x = 0.5
+    request.target_position.y = 0.2
+    request.target_position.z = 0.3
 
     response = MoveArm.Response()
 
@@ -305,7 +497,46 @@ def test_handle_move_arm_success(node):
     node.send_goal.assert_called_once_with(
         0.5,
         0.2,
-        0.3
+        0.3,
+        has_orientation=False,
+        roll=0.0,
+        pitch=0.0,
+        yaw=0.0,
+        motion_params=request.motion_params,
+    )
+
+
+def test_handle_move_arm_with_orientation_and_speed(node):
+    """Test arm movement carries orientation and speed through to send_goal."""
+
+    node.send_goal = MagicMock(return_value=True)
+    node.arm_movement_finished = MagicMock()
+    node.arm_action_successful = True
+
+    request = MoveArm.Request()
+    request.target_position.x = 0.5
+    request.target_position.y = 0.2
+    request.target_position.z = 0.3
+    request.has_orientation = True
+    request.roll = 0.1
+    request.pitch = 1.57
+    request.yaw = 0.0
+    request.motion_params.velocity_scale = 0.5
+    request.motion_params.acceleration_scale = 0.3
+
+    response = MoveArm.Response()
+
+    node.handle_move_arm(request, response)
+
+    node.send_goal.assert_called_once_with(
+        0.5,
+        0.2,
+        0.3,
+        has_orientation=True,
+        roll=0.1,
+        pitch=1.57,
+        yaw=0.0,
+        motion_params=request.motion_params,
     )
 
 
@@ -315,9 +546,9 @@ def test_handle_move_arm_failure_to_start(node):
     node.send_goal = MagicMock(return_value=False)
 
     request = MoveArm.Request()
-    request.x = 0.5
-    request.y = 0.2
-    request.z = 0.3
+    request.target_position.x = 0.5
+    request.target_position.y = 0.2
+    request.target_position.z = 0.3
 
     response = MoveArm.Response()
 
@@ -360,8 +591,53 @@ def test_handle_relative_move_success(node):
     node.send_goal.assert_called_once_with(
         1.5,
         2.5,
-        3.5
+        3.5,
+        has_orientation=False,
+        roll=0.0,
+        pitch=0.0,
+        yaw=0.0,
+        motion_params=request.motion_params,
     )
+
+
+def test_handle_relative_move_with_rotation_delta(node):
+    """Test relative_move composes a rotation delta onto the arm's current orientation."""
+
+    import math
+
+    transform = MagicMock()
+    transform.transform.translation.x = 1.0
+    transform.transform.translation.y = 2.0
+    transform.transform.translation.z = 3.0
+    # Identity orientation (no current rotation)
+    transform.transform.rotation.x = 0.0
+    transform.transform.rotation.y = 0.0
+    transform.transform.rotation.z = 0.0
+    transform.transform.rotation.w = 1.0
+
+    node.tf_buffer.lookup_transform = MagicMock(return_value=transform)
+    node.send_goal = MagicMock(return_value=True)
+    node.arm_action_successful = True
+
+    request = RelativeMove.Request()
+    request.vx = 0.0
+    request.vy = 0.0
+    request.vz = 0.0
+    request.has_orientation = True
+    request.pitch_delta = 1.5708  # 90 degrees, starting from identity
+
+    response = RelativeMove.Response()
+
+    node.handle_relative_move(request, response)
+
+    node.send_goal.assert_called_once()
+    call_kwargs = node.send_goal.call_args.kwargs
+    assert call_kwargs["has_orientation"] is True
+    # Starting orientation is identity (roll=pitch=yaw=0), delta is
+    # applied on top, so target pitch should be ~ the delta itself.
+    assert math.isclose(call_kwargs["pitch"], 1.5708, abs_tol=1e-4)
+    assert math.isclose(call_kwargs["roll"], 0.0, abs_tol=1e-4)
+    assert math.isclose(call_kwargs["yaw"], 0.0, abs_tol=1e-4)
 
 
 def test_handle_relative_move_tf_failure(node):
@@ -452,8 +728,9 @@ def test_send_goal(node):
 
     assert isinstance(goal, MoveGroup.Goal)
     assert goal.request.group_name == "arm"
-    assert goal.request.num_planning_attempts == 10
-    assert goal.request.allowed_planning_time == 5.0
+    # Bumped from 10/5.0s - see HardwareInterfaceClient.NUM_PLANNING_ATTEMPTS.
+    assert goal.request.num_planning_attempts == 20
+    assert goal.request.allowed_planning_time == 10.0
 
     constraint = goal.request.goal_constraints[0]
     position_constraint = constraint.position_constraints[0]
@@ -465,6 +742,85 @@ def test_send_goal(node):
     assert pose.position.x == 1.0
     assert pose.position.y == 2.0
     assert pose.position.z == 3.0
+
+
+def test_send_goal_no_orientation_by_default(node):
+    """Backward compatibility: default call adds no orientation constraint."""
+
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    node.send_goal(1.0, 2.0, 3.0)
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    constraint = goal.request.goal_constraints[0]
+
+    assert len(constraint.orientation_constraints) == 0
+    # No motion_params passed, no scaling fields should be touched (stay at default 0.0)
+    assert goal.request.max_velocity_scaling_factor == 0.0
+
+
+def test_send_goal_with_orientation(node):
+    """has_orientation=True should add a real OrientationConstraint on tool_frame."""
+
+    import math
+
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    node.send_goal(1.0, 2.0, 3.0, has_orientation=True, roll=0.0, pitch=math.pi / 2, yaw=0.0)
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    constraint = goal.request.goal_constraints[0]
+
+    assert len(constraint.orientation_constraints) == 1
+    orient = constraint.orientation_constraints[0]
+    assert orient.link_name == "tool_frame"
+    # 90 degree pitch, verified against the known reference value from
+    # the standalone math check: (0, 0, 0.7071, 0.7071) for 90deg yaw is
+    # the analogous known case, this checks pitch instead.
+    assert math.isclose(orient.orientation.y, math.sin(math.pi / 4), abs_tol=1e-4)
+    assert math.isclose(orient.orientation.w, math.cos(math.pi / 4), abs_tol=1e-4)
+
+
+def test_send_goal_applies_speed_scaling(node):
+    """A valid motion_params should set MoveIt's scaling factors."""
+
+    from kinova_interfaces.msg import MotionParams
+
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    params = MotionParams()
+    params.velocity_scale = 0.5
+    params.acceleration_scale = 0.3
+
+    node.send_goal(1.0, 2.0, 3.0, motion_params=params)
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    assert goal.request.max_velocity_scaling_factor == 0.5
+    assert goal.request.max_acceleration_scaling_factor == 0.3
+
+
+def test_send_goal_clamps_out_of_range_speed(node):
+    """Values outside [0.0, 1.0] must be clamped, not passed through raw."""
+
+    from kinova_interfaces.msg import MotionParams
+
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    params = MotionParams()
+    params.velocity_scale = 5.0
+    params.acceleration_scale = -1.0
+
+    node.send_goal(1.0, 2.0, 3.0, motion_params=params)
+
+    goal = node.arm_client.send_goal_async.call_args[0][0]
+    assert goal.request.max_velocity_scaling_factor == 1.0
+    # -1.0 clamps to 0.0, which per the "0.0 means use default" contract
+    # means the field is left untouched (never set), not set to 0.0 explicitly.
+    assert goal.request.max_acceleration_scaling_factor == 0.0
 
 
 def test_send_home_goal_server_unavailable(node):
@@ -598,6 +954,10 @@ def test_result_callback_success(node):
 
     assert node.arm_action_successful is True
     assert node.arm_movement_finished.is_set()
+    # current_state must reset even with nobody waiting (a fire-and-forget
+    # joint move has no finalize_service_status caller to do this instead)
+    assert node.current_state == ExtendedStatus.STATE_IDLE
+    node.status_pub.publish.assert_called_once()
 
 
 def test_result_callback_failure(node):
@@ -616,6 +976,8 @@ def test_result_callback_failure(node):
 
     assert node.arm_action_successful is False
     assert node.arm_movement_finished.is_set()
+    assert node.current_state == ExtendedStatus.STATE_IDLE
+    assert node.status_text == "Movement failed"
 
     node.handle_moveit_failure.assert_called_once()
 

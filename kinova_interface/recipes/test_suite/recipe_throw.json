@@ -1,0 +1,9 @@
+{
+  "recipe_name": "Throw - Water Bottle Forward",
+  "description": "Pick up the water bottle, rotate to face forward, wind up, then one continuous fling releasing exactly at the captured release point",
+  "steps": [
+    { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "water_bottle" }, "description": "Pick up the water bottle" },
+    { "step_id": 3, "action": "throw", "parameters": { "target": "water_bottle", "direction": "forward" }, "description": "Rotate to face forward, wind up, then fling - releasing on joint_5's real crossing, not a timed delay" }
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "recipe_name": "Orientation and Speed Demo",
+  "description": "Demonstrates the optional orientation preset and speed parameters on relative_move and home. Uses relative_move from home rather than move_arm to a table-level object position, a full tilted_for_pour tilt right at table height is not reachable, the arm would have to intersect the table, so this lifts first and tilts at a safe height instead.",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Start at home"
+    },
+    {
+      "step_id": 2,
+      "action": "relative_move",
+      "parameters": {
+        "vector": "move_upwards",
+        "orientation": "tilted_for_pour",
+        "speed": 0.3
+      },
+      "description": "Lift and tilt for pouring, at 30 percent speed"
+    },
+    {
+      "step_id": 3,
+      "action": "home",
+      "parameters": {
+        "speed": 0.5
+      },
+      "description": "Return home at 50 percent speed"
+    }
+  ]
+}

@@ -1,12 +1,22 @@
 {
-  "red_cube": {
+  "water_bottle": {
     "pose": {
-      "position": { "x": -0.3255, "y": -0.1235, "z": 0.01 },
+      "position": { "x": -0.3255, "y": -0.1235, "z": 0.075 },
+      "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
+    },
+    "shape": {
+      "type": "CYLINDER",
+      "dimensions": [0.25, 0.035]
+    }
+  },
+  "push_block": {
+    "pose": {
+      "position": { "x": 0.25, "y": -0.05, "z": 0.01 },
       "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
     },
     "shape": {
       "type": "BOX",
-      "dimensions": [0.05, 0.05, 0.05]
+      "dimensions": [0.06, 0.06, 0.03]
     }
   },
   "blue_cube": {

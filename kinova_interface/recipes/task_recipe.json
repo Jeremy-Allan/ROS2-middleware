@@ -18,9 +18,9 @@
       "step_id": 3,
       "action": "move_arm",
       "parameters": {
-        "target": "red_cube"
+        "target": "water_bottle"
       },
-      "description": "Navigate to the red cube"
+      "description": "Navigate to the water bottle"
     },
     {
       "step_id": 4,
