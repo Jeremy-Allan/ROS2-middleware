@@ -6,7 +6,7 @@ from unittest.mock import MagicMock, patch
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-from kinova_interface.arm_actions import ArmActions
+from kinova_interface.helpers.arm_actions import ArmActions
 
 from kinova_interfaces.srv import (
     GetObjectInfo,
@@ -910,7 +910,7 @@ def test_pour_without_destination_or_direction_pours_in_place(actions):
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
-    with patch("kinova_interface.arm_actions.time.sleep"):
+    with patch("kinova_interface.helpers.arm_actions.time.sleep"):
         result = actions.handlers['pour']({"target": "red_cube"})
 
     assert result is True
@@ -932,7 +932,7 @@ def test_pour_in_place_still_lifts_and_tilts(actions):
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
-    with patch("kinova_interface.arm_actions.time.sleep") as mock_sleep:
+    with patch("kinova_interface.helpers.arm_actions.time.sleep") as mock_sleep:
         result = actions.handlers['pour']({"target": "red_cube", "tilt_angle": 2.0, "duration": 1.0})
 
     assert result is True
@@ -962,7 +962,7 @@ def test_pour_lifts_transits_tilts_and_returns(actions):
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
-    with patch("kinova_interface.arm_actions.time.sleep") as mock_sleep:
+    with patch("kinova_interface.helpers.arm_actions.time.sleep") as mock_sleep:
         result = actions.handlers['pour']({
             "target": "red_cube", "destination": "delivery_tray",
             "lift_height": 0.14, "tilt_angle": 2.36, "duration": 2.0
@@ -1024,7 +1024,7 @@ def test_pour_fails_if_tilt_fails(actions):
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value=None)
 
-    with patch("kinova_interface.arm_actions.time.sleep") as mock_sleep:
+    with patch("kinova_interface.helpers.arm_actions.time.sleep") as mock_sleep:
         result = actions.handlers['pour']({"target": "red_cube", "direction": "forward"})
 
     assert result is False
@@ -1825,7 +1825,7 @@ def test_wait_for_joint_crossing_detects_decreasing_crossing(actions):
     def side_effect(*a, **k):
         actions.latest_joint_positions = {'joint_5': -1.0}
 
-    with patch("kinova_interface.arm_actions.time.sleep", side_effect=side_effect):
+    with patch("kinova_interface.helpers.arm_actions.time.sleep", side_effect=side_effect):
         result = actions.wait_for_joint_crossing('joint_5', -0.5, 0.4, timeout=1.0)
 
     assert result is True

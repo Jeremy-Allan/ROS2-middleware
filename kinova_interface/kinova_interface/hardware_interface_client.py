@@ -21,8 +21,8 @@ from tf2_ros import Buffer, TransformListener
 from kinova_interfaces.msg import ExtendedStatus
 from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
 
-from kinova_interface.geometry_utils import euler_to_quaternion, quaternion_to_euler
-from kinova_interface.frame_names import BASE_FRAME, TOOL_FRAME
+from kinova_interface.helpers.geometry_utils import euler_to_quaternion, quaternion_to_euler
+from kinova_interface.helpers.frame_names import BASE_FRAME, TOOL_FRAME
 
 
 class HardwareInterfaceClient(Node):

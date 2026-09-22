@@ -11,7 +11,7 @@ from kinova_interfaces.srv import ExecuteRecipe
 from kinova_interfaces.msg import ExtendedStatus
 from std_srvs.srv import Trigger
 
-from kinova_interface.arm_actions import ArmActions
+from kinova_interface.helpers.arm_actions import ArmActions
 
 class JsonParser:
     """Helper class to handle JSON loading."""

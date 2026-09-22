@@ -25,8 +25,8 @@ from kinova_interfaces.srv import (
 from kinova_interfaces.msg import MotionParams
 from std_srvs.srv import Trigger
 
-from kinova_interface.geometry_utils import euler_to_quaternion, quaternion_to_euler
-from kinova_interface.frame_names import BASE_FRAME, TOOL_FRAME
+from kinova_interface.helpers.geometry_utils import euler_to_quaternion, quaternion_to_euler
+from kinova_interface.helpers.frame_names import BASE_FRAME, TOOL_FRAME
 
 
 class ArmActions:

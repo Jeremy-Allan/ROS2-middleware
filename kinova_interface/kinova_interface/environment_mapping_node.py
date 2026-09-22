@@ -18,8 +18,8 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.duration import Duration
 from tf2_ros import Buffer, TransformListener
 
-from kinova_interface.geometry_utils import euler_to_quaternion
-from kinova_interface.frame_names import BASE_FRAME, TOOL_FRAME
+from kinova_interface.helpers.geometry_utils import euler_to_quaternion
+from kinova_interface.helpers.frame_names import BASE_FRAME, TOOL_FRAME
 
 # Links allowed to touch an object once it's attached to the gripper, so the
 # fingers actually closing around it doesn't register as a collision.
