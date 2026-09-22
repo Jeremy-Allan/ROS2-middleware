@@ -1,6 +1,6 @@
 {
   "recipe_name": "Stacking Demo",
-  "description": "Picks up the box and stacks it on the blue cube, exercising dropoff's two-stage descent and computed stacking height instead of dropping onto a flat destination like the tray",
+  "description": "Picks up the water bottle and stacks it on the blue cube, exercising dropoff's two-stage descent and computed stacking height instead of dropping onto a flat destination like the tray",
   "steps": [
     {
       "step_id": 1,
@@ -11,19 +11,19 @@
       "step_id": 2,
       "action": "pickup",
       "parameters": {
-        "target": "box"
+        "target": "water_bottle"
       },
-      "description": "Pick up the box"
+      "description": "Pick up the water bottle"
     },
     {
       "step_id": 3,
       "action": "dropoff",
       "parameters": {
-        "target": "box",
+        "target": "water_bottle",
         "destination": "blue_cube",
         "place_offset": 0.1
       },
-      "description": "Stack the box on top of the blue cube"
+      "description": "Stack the water bottle on top of the blue cube"
     },
     {
       "step_id": 4,

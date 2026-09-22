@@ -1,8 +1,8 @@
 {
-  "recipe_name": "Pickup - Box",
-  "description": "Simple pickup test: home, then pick up the box",
+  "recipe_name": "Pickup - Water Bottle",
+  "description": "Simple pickup test: home, then pick up the water bottle",
   "steps": [
     { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
-    { "step_id": 2, "action": "pickup", "parameters": { "target": "box" }, "description": "Pick up the box" }
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "water_bottle" }, "description": "Pick up the water bottle" }
   ]
 }

@@ -1,5 +1,5 @@
 {
-  "recipe_name": "Pick and Drop Routine (Blue then Box, No Intermediate Home)",
+  "recipe_name": "Pick and Drop Routine (Blue then Water Bottle, No Intermediate Home)",
   "steps": [
     {
       "step_id": 1,
@@ -29,20 +29,20 @@
       "step_id": 4,
       "action": "pickup",
       "parameters": {
-        "target": "box",
+        "target": "water_bottle",
         "pre_offset": 0.1
       },
-      "description": "Pick up the box"
+      "description": "Pick up the water bottle"
     },
     {
       "step_id": 5,
       "action": "dropoff",
       "parameters": {
-        "target": "box",
+        "target": "water_bottle",
         "destination": "delivery_tray",
         "place_offset": 0.1
       },
-      "description": "Place box on delivery tray"
+      "description": "Place water bottle on delivery tray"
     },
     {
       "step_id": 6,
