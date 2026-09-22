@@ -19,11 +19,12 @@ from rclpy.duration import Duration
 from tf2_ros import Buffer, TransformListener
 
 from kinova_interface.geometry_utils import euler_to_quaternion
+from kinova_interface.frame_names import BASE_FRAME, TOOL_FRAME
 
 # Links allowed to touch an object once it's attached to the gripper, so the
 # fingers actually closing around it doesn't register as a collision.
 GRIPPER_TOUCH_LINKS = [
-    "tool_frame", "gripper_base_link",
+    TOOL_FRAME, "gripper_base_link",
     "left_finger_dist_link", "left_finger_prox_link",
     "right_finger_dist_link", "right_finger_prox_link",
 ]
@@ -351,7 +352,7 @@ class EnvironmentMappingNode(Node):
 
         try:
             transform = self.tf_buffer.lookup_transform(
-                'tool_frame', 'base_link', rclpy.time.Time(), timeout=Duration(seconds=2.0))
+                TOOL_FRAME, BASE_FRAME, rclpy.time.Time(), timeout=Duration(seconds=2.0))
         except Exception as e:
             self.get_logger().error(f"Could not look up tool_frame to attach '{obj_id}': {e}")
             response.success = False
@@ -468,10 +469,10 @@ class EnvironmentMappingNode(Node):
         collision_obj = self.build_collision_object(obj_id, attached_obj_data)
         if collision_obj is None:
             return False
-        collision_obj.header.frame_id = "tool_frame"
+        collision_obj.header.frame_id = TOOL_FRAME
 
         attached = AttachedCollisionObject()
-        attached.link_name = "tool_frame"
+        attached.link_name = TOOL_FRAME
         attached.object = collision_obj
         attached.touch_links = GRIPPER_TOUCH_LINKS
 
@@ -496,7 +497,7 @@ class EnvironmentMappingNode(Node):
             return False
 
         detach_marker = AttachedCollisionObject()
-        detach_marker.link_name = "tool_frame"
+        detach_marker.link_name = TOOL_FRAME
         detach_marker.object.id = obj_id
         detach_marker.object.operation = CollisionObject.REMOVE
 
@@ -552,7 +553,7 @@ class EnvironmentMappingNode(Node):
     def build_collision_object(self, obj_id, obj_data):
         
         collision_obj = CollisionObject()
-        collision_obj.header.frame_id = "base_link"
+        collision_obj.header.frame_id = BASE_FRAME
         collision_obj.id = obj_id
 
         #Shape
@@ -615,7 +616,7 @@ class EnvironmentMappingNode(Node):
             scene.robot_state.is_diff = True
             for obj_id in self.attached_objects:
                 detach_marker = AttachedCollisionObject()
-                detach_marker.link_name = "tool_frame"
+                detach_marker.link_name = TOOL_FRAME
                 detach_marker.object.id = obj_id
                 detach_marker.object.operation = CollisionObject.REMOVE
                 scene.robot_state.attached_collision_objects.append(detach_marker)

@@ -22,15 +22,13 @@ from kinova_interfaces.msg import ExtendedStatus
 from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
 
 from kinova_interface.geometry_utils import euler_to_quaternion, quaternion_to_euler
+from kinova_interface.frame_names import BASE_FRAME, TOOL_FRAME
 
 
 class HardwareInterfaceClient(Node):
     ACTION_TIMEOUT_SEC = 30.0
     GRIPPER_TIMEOUT_SEC = 10.0
     SERVER_WAIT_TIMEOUT_SEC = 5.0
-
-    BASE_FRAME = 'base_link'
-    TOOL_FRAME = 'tool_frame'
     PLANNING_GROUP = 'arm'
     # A tight combined position+orientation constraint reached in one big
     # jump from a very different starting configuration (e.g. 'pickup' going
@@ -364,7 +362,7 @@ class HardwareInterfaceClient(Node):
         try:
             # Look up current pose of the tool frame
             now = rclpy.time.Time()
-            trans = self.tf_buffer.lookup_transform(self.BASE_FRAME, self.TOOL_FRAME, now, timeout=rclpy.duration.Duration(seconds=1.0))
+            trans = self.tf_buffer.lookup_transform(BASE_FRAME, TOOL_FRAME, now, timeout=rclpy.duration.Duration(seconds=1.0))
 
             curr_x = trans.transform.translation.x
             curr_y = trans.transform.translation.y
@@ -470,8 +468,8 @@ class HardwareInterfaceClient(Node):
         goal_msg.request.allowed_planning_time = self.ALLOWED_PLANNING_TIME_SEC
 
         pos_constraint = PositionConstraint()
-        pos_constraint.header.frame_id = self.BASE_FRAME
-        pos_constraint.link_name = self.TOOL_FRAME
+        pos_constraint.header.frame_id = BASE_FRAME
+        pos_constraint.link_name = TOOL_FRAME
 
         sphere = SolidPrimitive()
         sphere.type = SolidPrimitive.SPHERE
@@ -492,8 +490,8 @@ class HardwareInterfaceClient(Node):
         if has_orientation:
             qx, qy, qz, qw = euler_to_quaternion(roll, pitch, yaw)
             orient_constraint = OrientationConstraint()
-            orient_constraint.header.frame_id = self.BASE_FRAME
-            orient_constraint.link_name = self.TOOL_FRAME
+            orient_constraint.header.frame_id = BASE_FRAME
+            orient_constraint.link_name = TOOL_FRAME
             orient_constraint.orientation.x = qx
             orient_constraint.orientation.y = qy
             orient_constraint.orientation.z = qz

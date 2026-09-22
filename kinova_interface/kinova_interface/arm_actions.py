@@ -26,6 +26,7 @@ from kinova_interfaces.msg import MotionParams
 from std_srvs.srv import Trigger
 
 from kinova_interface.geometry_utils import euler_to_quaternion, quaternion_to_euler
+from kinova_interface.frame_names import BASE_FRAME, TOOL_FRAME
 
 
 class ArmActions:
@@ -33,7 +34,18 @@ class ArmActions:
     implementation of every named recipe action (home, move_arm,
     relative_move, gripper, pickup, dropoff). Exposes `handlers`, a dict of
     action name -> callable(params) -> bool, for JsonParserNode to dispatch
-    recipe steps against without needing to know how each action works."""
+    recipe steps against without needing to know how each action works.
+
+    TODO: this class has grown into ~1700 lines/36 methods covering four
+    fairly distinct responsibilities - low-level hardware/environment service
+    call wrappers (call_move_service, attach_object, ...), IK/kinematics
+    solving (find_ik_solution, solve_planar_reach,
+    _find_max_planar_reach_distance, ...), config/data lookups
+    (get_object_info, resolve_orientation, ...), and the high-level per-action
+    handlers (_handle_pour, _handle_throw, ...). Worth splitting into
+    separate files along those lines, but it's a large, call-site-touching
+    change that needs the full test suite re-verified on real hardware
+    again, so deferred rather than done alongside smaller cleanups."""
 
     def __init__(self, node):
         self.node = node
@@ -363,7 +375,7 @@ class ArmActions:
         req.ik_request.timeout.sec = 1
 
         pose_stamped = PoseStamped()
-        pose_stamped.header.frame_id = 'base_link'
+        pose_stamped.header.frame_id = BASE_FRAME
         pose = Pose()
         pose.position.x, pose.position.y, pose.position.z = float(x), float(y), float(z)
         qx, qy, qz, qw = euler_to_quaternion(roll, pitch, yaw)
@@ -476,8 +488,8 @@ class ArmActions:
             self.get_logger().error("Compute FK service not available")
             return None
         req = GetPositionFK.Request()
-        req.header.frame_id = 'base_link'
-        req.fk_link_names = ['tool_frame']
+        req.header.frame_id = BASE_FRAME
+        req.fk_link_names = [TOOL_FRAME]
         state = RobotState()
         js = JointState()
         js.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
