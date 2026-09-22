@@ -68,6 +68,11 @@ def node(ros_context, tmp_path):
     ), \
     patch.object(
         EnvironmentMappingNode,
+        "load_orientation_presets",
+        return_value={}
+    ), \
+    patch.object(
+        EnvironmentMappingNode,
         "publish_planning_scene"
     ):
 
@@ -90,6 +95,7 @@ def test_node_initialises(node):
 
     assert node.static_objects is not None
     assert node.relative_movements is not None
+    assert node.orientation_presets is not None
     assert node.obstacles is not None
 
     assert node.current_state == ExtendedStatus.STATE_IDLE
@@ -343,12 +349,9 @@ def test_get_robot_parameters_callback(node):
 
 
 # get_robot_parameters_callback() table bounds
-# Note: these two don't use the 'node' fixture - it constructs a real
-# EnvironmentMappingNode via patch.object() on methods ('load_obstacles',
-# 'load_coordinate_dictionary') that don't exist on the current class
-# (pre-existing drift, not introduced here), so the fixture itself can't
-# currently run. Calling the callback directly against a minimal stand-in
-# keeps this test isolated from that.
+# Note: these two don't use the 'node' fixture - calling the callback
+# directly against a minimal FakeNode stand-in keeps the test isolated from
+# everything else a real node construction pulls in (services, TF, etc).
 def test_get_robot_parameters_callback_table_bounds():
     """get_robot_parameters_callback should report the table's footprint
     from its own obstacle definition, when configured as a BOX."""
@@ -527,7 +530,8 @@ def test_publish_planning_scene_success(node):
 
 # reset_environment_callback()
 # Note: isolated from the 'node' fixture for the same reason as the table
-# bounds tests above - the fixture can't currently construct a real node.
+# bounds tests above - a minimal FakeNode stand-in keeps this test isolated
+# from everything else a real node construction pulls in.
 def test_reset_environment_callback_success():
     """reset_environment_callback should reload objects/obstacles from disk
     and republish the scene from them."""
@@ -541,6 +545,7 @@ def test_reset_environment_callback_success():
         command_success = None
         status_text = None
         publish_status = MagicMock()
+        get_logger = MagicMock(return_value=MagicMock())
 
     request = Trigger.Request()
     response = Trigger.Response()
@@ -567,6 +572,7 @@ def test_reset_environment_callback_scene_apply_failure():
         command_success = None
         status_text = None
         publish_status = MagicMock()
+        get_logger = MagicMock(return_value=MagicMock())
 
     request = Trigger.Request()
     response = Trigger.Response()
