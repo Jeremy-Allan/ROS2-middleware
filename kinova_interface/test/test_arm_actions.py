@@ -562,13 +562,41 @@ def test_compute_side_grasp_candidates_for_box(actions):
     assert yaws == pytest.approx([0.0, math.pi / 2.0, -math.pi / 2.0, math.pi])
 
 
-def test_compute_side_grasp_candidates_rejects_non_box(actions):
-    """Only BOX shapes are supported currently - fail cleanly (empty list),
-    not guess, for anything else."""
+def test_compute_side_grasp_candidates_for_cylinder(actions):
+    """A CYLINDER is radially symmetric - unlike BOX's 4 face-aligned
+    offsets, candidates should span 8 evenly spaced absolute yaws around
+    the full circle, not tied to the object's own (otherwise meaningless,
+    for a symmetric shape) registered orientation."""
+
+    target_info = {
+        "pose": {
+            "position": {"x": -0.3255, "y": -0.1235, "z": 0.075},
+            # A non-zero registered orientation should have no effect on
+            # a cylinder's candidates - it's symmetric, there's no "face".
+            "orientation": {"x": 0.0, "y": 0.0, "z": 0.7071, "w": 0.7071}  # yaw ~90 deg
+        },
+        "shape": {"type": SolidPrimitive.CYLINDER, "dimensions": [0.25, 0.035]}
+    }
+
+    candidates = actions.compute_side_grasp_candidates(target_info)
+
+    assert len(candidates) >= 8
+    for cand in candidates[:8]:
+        assert cand[0:3] == (-0.3255, -0.1235, 0.075)
+        assert cand[3] == pytest.approx(math.pi / 2.0)  # flat roll
+        assert cand[4] == 0.0
+    yaws = [c[5] for c in candidates[:8]]
+    expected = [math.radians(a) for a in range(0, 360, 45)]
+    assert yaws == pytest.approx(expected)
+
+
+def test_compute_side_grasp_candidates_rejects_unsupported_shape(actions):
+    """Only BOX/CYLINDER shapes are supported currently - fail cleanly
+    (empty list), not guess, for anything else."""
 
     target_info = {
         "pose": {"position": {"x": 0.0, "y": 0.0, "z": 0.0}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
-        "shape": {"type": SolidPrimitive.CYLINDER, "dimensions": [0.03, 0.1]}
+        "shape": {"type": SolidPrimitive.SPHERE, "dimensions": [0.03]}
     }
 
     assert actions.compute_side_grasp_candidates(target_info) == []

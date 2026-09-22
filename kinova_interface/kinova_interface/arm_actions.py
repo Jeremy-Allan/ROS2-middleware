@@ -107,6 +107,20 @@ class ArmActions:
         # fallback for dropoff's own release-height calculation.
         self.held_object = None
 
+    # Client-side wait_for_future timeouts for the real arm-moving calls
+    # below (home/move/relative_move/joint_move) - must exceed
+    # HardwareInterfaceClient.ACTION_TIMEOUT_SEC (30.0s), since that's how
+    # long the server itself can legitimately block before responding
+    # while a real trajectory executes. wait_for_future's own 10.0s
+    # default is far too short for this on real hardware (fine on fake
+    # hardware, where moves complete near-instantly) - using it here
+    # was reporting a false "timed out/no response" failure for any real
+    # move that legitimately took longer than 10s, even ones that would
+    # have gone on to succeed a few seconds later.
+    _ARM_ACTION_TIMEOUT_SEC = 35.0
+    # Same idea, matching HardwareInterfaceClient.GRIPPER_TIMEOUT_SEC (10.0s).
+    _GRIPPER_ACTION_TIMEOUT_SEC = 15.0
+
     def wait_for_future(self, future, service_name, timeout_sec=10.0):
         """Safely wait for an async service call future to complete without deadlocking the executor."""
         start = time.time()
@@ -294,14 +308,22 @@ class ArmActions:
     # every candidate is verified for real (see verify_grasp_pose) rather
     # than trusted from geometry alone.
     _SIDE_GRASP_YAW_OFFSETS = [0.0, math.pi / 2.0, -math.pi / 2.0, math.pi]
+    # A CYLINDER is radially symmetric - there's no "face" to align with the
+    # way BOX's 4 offsets (above) align with its own registered frame, every
+    # angle around its circumference is an equally valid grasp. 8 evenly
+    # spaced absolute yaws (not relative to the object's own yaw, which has
+    # no real meaning for a symmetric shape) gives verify_grasp_pose a much
+    # wider net to find one the arm can actually reach - important since
+    # cylinders (bottles, cups) need this to work reliably for pouring.
+    _SIDE_GRASP_CYLINDER_YAWS = [math.radians(a) for a in range(0, 360, 45)]
     # Small position nudges tried only if the object's exact center doesn't
     # verify at any of the yaw offsets above - meters, along each world axis.
     _SIDE_GRASP_POSITION_OFFSETS = [0.02, -0.02, 0.04, -0.04]
 
     def compute_side_grasp_candidates(self, target_info):
-        """Generate candidate flat, side-on grasp poses for a BOX-shaped
-        object from its own registered shape and pose - not a fixed preset
-        calibrated to one specific object/position (see
+        """Generate candidate flat, side-on grasp poses for a BOX or
+        CYLINDER object from its own registered shape and pose - not a
+        fixed preset calibrated to one specific object/position (see
         docs/pour-motion-reference.md for why that didn't generalize).
         Each candidate still needs verifying (verify_grasp_pose) before
         being trusted - this generates plausible options, it doesn't
@@ -309,26 +331,31 @@ class ArmActions:
         Returns a list of (x, y, z, roll, pitch, yaw) tuples, cheapest/most
         likely first; [] if the shape isn't supported."""
         shape = target_info['shape']
-        if shape['type'] != SolidPrimitive.BOX:
-            self.get_logger().error(f"Side grasp only supports BOX shapes currently (got shape type {shape['type']})")
+        if shape['type'] not in (SolidPrimitive.BOX, SolidPrimitive.CYLINDER):
+            self.get_logger().error(f"Side grasp only supports BOX/CYLINDER shapes currently (got shape type {shape['type']})")
             return []
 
         pos = target_info['pose']['position']
-        orient = target_info['pose']['orientation']
-        _, _, object_yaw = self.quaternion_to_euler(orient['x'], orient['y'], orient['z'], orient['w'])
+
+        if shape['type'] == SolidPrimitive.CYLINDER:
+            yaw_candidates = self._SIDE_GRASP_CYLINDER_YAWS
+        else:
+            orient = target_info['pose']['orientation']
+            _, _, object_yaw = self.quaternion_to_euler(orient['x'], orient['y'], orient['z'], orient['w'])
+            yaw_candidates = [object_yaw + offset for offset in self._SIDE_GRASP_YAW_OFFSETS]
 
         candidates = []
         # Pass 1: the object's exact center, at each candidate yaw - the
         # cheapest and most likely to work.
-        for yaw_offset in self._SIDE_GRASP_YAW_OFFSETS:
-            candidates.append((pos['x'], pos['y'], pos['z'], self._SIDE_GRASP_ROLL, 0.0, object_yaw + yaw_offset))
+        for yaw in yaw_candidates:
+            candidates.append((pos['x'], pos['y'], pos['z'], self._SIDE_GRASP_ROLL, 0.0, yaw))
 
         # Pass 2: only if none of those verify - small offsets along each
         # world axis, at every candidate yaw again.
         for offset in self._SIDE_GRASP_POSITION_OFFSETS:
-            for yaw_offset in self._SIDE_GRASP_YAW_OFFSETS:
-                candidates.append((pos['x'] + offset, pos['y'], pos['z'], self._SIDE_GRASP_ROLL, 0.0, object_yaw + yaw_offset))
-                candidates.append((pos['x'], pos['y'] + offset, pos['z'], self._SIDE_GRASP_ROLL, 0.0, object_yaw + yaw_offset))
+            for yaw in yaw_candidates:
+                candidates.append((pos['x'] + offset, pos['y'], pos['z'], self._SIDE_GRASP_ROLL, 0.0, yaw))
+                candidates.append((pos['x'], pos['y'] + offset, pos['z'], self._SIDE_GRASP_ROLL, 0.0, yaw))
 
         return candidates
 
@@ -634,7 +661,7 @@ class ArmActions:
         req.motion_params = motion_params if motion_params is not None else MotionParams()
         # Async call + safe wait loop
         future = self.home_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/home_arm')
+        response = self.wait_for_future(future, '/kinova_hardware_client/home_arm', self._ARM_ACTION_TIMEOUT_SEC)
 
         if response and response.success:
             return {'success': response.success, 'message': response.message}
@@ -658,7 +685,7 @@ class ArmActions:
 
         # Async call + safe wait loop
         future = self.move_arm_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/move_arm')
+        response = self.wait_for_future(future, '/kinova_hardware_client/move_arm', self._ARM_ACTION_TIMEOUT_SEC)
 
         if response and response.success:
             return {'success': response.success, 'message': response.message}
@@ -682,7 +709,7 @@ class ArmActions:
 
         # Async call + safe wait loop
         future = self.relative_move_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/relative_move')
+        response = self.wait_for_future(future, '/kinova_hardware_client/relative_move', self._ARM_ACTION_TIMEOUT_SEC)
 
         if response and response.success:
             return {'success': response.success, 'message': response.message}
@@ -698,7 +725,7 @@ class ArmActions:
         req.position = position
         # Async call + safe wait loop
         future = self.move_gripper_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/move_gripper')
+        response = self.wait_for_future(future, '/kinova_hardware_client/move_gripper', self._GRIPPER_ACTION_TIMEOUT_SEC)
 
         if response and response.success:
             return {'success': response.success, 'message': response.message}
@@ -732,7 +759,7 @@ class ArmActions:
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
         future = self.joint_move_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/joint_move')
+        response = self.wait_for_future(future, '/kinova_hardware_client/joint_move', self._ARM_ACTION_TIMEOUT_SEC)
 
         if response and response.success:
             return {'success': response.success, 'message': response.message}
@@ -901,8 +928,8 @@ class ArmActions:
         caveat as 'push').
 
         'grasp_style': 'side' switches to a flat, side-on grasp instead -
-        computed from the object's own shape/pose (BOX only currently),
-        not a fixed preset for one specific object, and each candidate
+        computed from the object's own shape/pose (BOX or CYLINDER
+        currently), not a fixed preset for one specific object, and each candidate
         pose is verified reachable/collision-free (via /compute_ik) before
         being trusted, rather than assumed correct from geometry alone.
         See compute_side_grasp_candidates/verify_grasp_pose and
