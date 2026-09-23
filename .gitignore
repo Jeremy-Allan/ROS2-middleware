@@ -1,7 +1,10 @@
-# ROS 2 build artifacts and logs
 .idea/
+.vscode/
+tmp/
+# ROS 2 build artifacts and logs
 build/
 install/
 log/
 middleware_logs/
+
 __pycache__/
