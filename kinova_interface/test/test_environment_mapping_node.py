@@ -4,7 +4,7 @@ import pytest
 
 from unittest.mock import MagicMock, patch
 
-from kinova_interface.environment_mapping_node import EnvironmentMappingNode
+from kinova_interface.nodes.environment_mapping_node import EnvironmentMappingNode
 
 from kinova_interfaces.srv import (
     GetObjectCoordinates,
@@ -211,7 +211,7 @@ def test_load_obstacles_dictionary(node, tmp_path):
     }
 
     with patch(
-        "kinova_interface.environment_mapping_node.get_package_share_directory",
+        "kinova_interface.nodes.environment_mapping_node.get_package_share_directory",
         return_value=str(tmp_path)
     ):
 
@@ -230,7 +230,7 @@ def test_load_obstacles_dictionary(node, tmp_path):
 def test_load_obstacles_dictionary_invalid_json(node, tmp_path):
 
     with patch(
-        "kinova_interface.environment_mapping_node.get_package_share_directory",
+        "kinova_interface.nodes.environment_mapping_node.get_package_share_directory",
         return_value=str(tmp_path)
     ):
 
@@ -507,7 +507,7 @@ def test_publish_planning_scene_success(node):
     )
 
     with patch(
-        "kinova_interface.environment_mapping_node.time.sleep"
+        "kinova_interface.nodes.environment_mapping_node.time.sleep"
     ):
 
         node.publish_planning_scene()

@@ -3,7 +3,7 @@ import rclpy
 
 from unittest.mock import MagicMock, patch
 
-from kinova_interface.telemetry_node import TelemetryNode
+from kinova_interface.nodes.telemetry_node import TelemetryNode
 
 from kinova_interfaces.msg import ExtendedStatus, SystemSummary
 from std_srvs.srv import Trigger
@@ -156,7 +156,7 @@ def test_activate_fault_controller(node):
     """Test that activate_fault_controller starts the worker thread."""
 
     with patch(
-        "kinova_interface.telemetry_node.threading.Thread"
+        "kinova_interface.nodes.telemetry_node.threading.Thread"
     ) as mock_thread:
 
         node.activate_fault_controller()

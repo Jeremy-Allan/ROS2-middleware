@@ -11,7 +11,7 @@ from kinova_interfaces.srv import ExecuteRecipe
 from kinova_interfaces.msg import ExtendedStatus
 from std_srvs.srv import Trigger
 
-from kinova_interface.helpers.arm_actions import ArmActions
+from kinova_interface.actions.arm_actions import ArmActions
 
 class JsonParser:
     """Helper class to handle JSON loading."""
@@ -96,7 +96,8 @@ class JsonParserNode(Node):
                 except Exception as e:
                     # Fallback for local development
                     self.get_logger().warning(f"Could not find package share directory, falling back to local path: {e}")
-                    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    # nodes/ -> kinova_interface/ (python pkg) -> kinova_interface/ (ROS pkg, holds recipes/)
+                    base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                     recipe_path = os.path.join(base_path, 'recipes', recipe_file)
 
         # 6. If a static recipe was provided, execute it on startup using a one-shot Timer
