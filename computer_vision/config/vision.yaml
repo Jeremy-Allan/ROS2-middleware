@@ -3,7 +3,7 @@
 vision_snapshot_node:
   ros__parameters:
     # --- scene ---
-    workspace: [-0.23, 0.17, -0.30, 0.15]   # x_min, x_max, y_min, y_max in base_frame
+    workspace: [-0.40, 0.40, -0.40, 0.40]   # x_min, x_max, y_min, y_max in base_frame
     table_z: 0.008                       # rough; the plane fit refines it
     plane_band: 0.08
     min_height: 0.006
