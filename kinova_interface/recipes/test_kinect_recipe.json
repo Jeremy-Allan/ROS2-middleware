@@ -1,0 +1,24 @@
+{
+  "recipe_name": "Pick and Place on Yellow Objects",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Start at home"
+    },
+    {
+      "step_id": 2,
+      "action": "pickup",
+      "parameters": {
+        "target": "red_object",
+        "pre_offset": 0.1
+      },
+      "description": "Pick up the red object"
+    },
+    {
+      "step_id": 3,
+      "action": "home",
+      "description": "Return to home"
+    }
+  ]
+}
