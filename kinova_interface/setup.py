@@ -16,12 +16,13 @@ setup(
         (os.path.join('share', package_name, 'data', 'configs', 'env'), glob('data/configs/env/*.json')),
         (os.path.join('share', package_name, 'recipes'), glob(os.path.join('recipes', '*.json'))),
         (os.path.join('share', package_name, 'recipes', 'test_suite'), glob(os.path.join('recipes', 'test_suite', '*.json'))),
+        (os.path.join('lib', package_name), ['scripts/run_recipe.py']),
     ],
     
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='jeremyallan',
-    maintainer_email='jeremyallan@todo.todo',
+    maintainer_email='jeremyallan@todo.todo', # TODO: update to correct email
     description='Kinova Kortex ROS2 Middleware Interface',
     license='Apache License 2.0',
     tests_require=['pytest'],
