@@ -3,7 +3,7 @@
   "description": "Pick up the water bottle, carry it above the delivery tray, tilt to pour, then return level",
   "steps": [
     { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
-    { "step_id": 2, "action": "pickup", "parameters": { "target": "water_bottle" }, "description": "Pick up the water bottle" },
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "water_bottle", "grasp_style": "side" }, "description": "Pick up the water bottle with a level side grasp" },
     { "step_id": 3, "action": "pour", "parameters": { "target": "water_bottle", "destination": "delivery_tray" }, "description": "Carry the bottle above the tray, tilt to pour, then return level" }
   ]
 }
