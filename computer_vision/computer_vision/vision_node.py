@@ -1023,6 +1023,38 @@ class VisionSnapshotNode(Node):
             'shape': {'type': stype, 'dimensions': [round(float(x), 4) for x in sdims]},
             '_bbox': c['bbox'], '_geom': c['geom'],
         }
+    def _make_table_object(self):
+        """Build a MoveIt-friendly BOX from the fitted table plane.
+
+        Placed with its TOP at the *highest* plane point over the workspace so
+        it never sits below the real surface - conservative in the safe
+        direction. Axis-aligned; the fitted tilt is absorbed by using max()
+        over the workspace corners rather than rotating the box.
+        """
+        if self.plane is None:
+            return None
+        a, b, c = self.plane
+        x0, x1, y0, y1 = self.workspace
+        thickness = 0.05
+        top_z = max(a * x + b * y + c for x in (x0, x1) for y in (y0, y1))
+        cx, cy = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+        return {
+            'label': 'table', 'color': 'unknown', 'label_source': 'vision',
+            'confidence': 1.0,
+            'description': f'auto-fit table plane (top z={top_z:+.3f})',
+            'geometry_source': 'plane',
+            'graspable': False, 'height_clipped': False,
+            'last_seen': time.time(), 'missed': 0, 'stale': False,
+            'pose': {
+                'position': {'x': cx, 'y': cy, 'z': top_z - thickness / 2.0},
+                'orientation': {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0},
+            },
+            'shape': {
+                'type': 'BOX',
+                'dimensions': [x1 - x0, y1 - y0, thickness],
+            },
+            '_geom': 'plane',
+        }
 
     # ------------------------------------------------ service plumbing
 
@@ -1198,6 +1230,9 @@ class VisionSnapshotNode(Node):
             report['notes'].append(f'attached (untouched): {attached}')
         self.stabilise_labels(cands, prev)
         named = self.assign_ids([self._build_object(c) for c in cands], prev)
+        table = self._make_table_object()
+        if table is not None:
+            named['table_fit'] = table
         if remove_missing:
             self.carry_unseen(named, prev, attached, report)
         self.publish_debug(color, named, dets)
