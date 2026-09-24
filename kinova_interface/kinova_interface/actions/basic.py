@@ -1,13 +1,19 @@
 """The simple one-call recipe actions: 'home', 'move_arm', 'relative_move', 'gripper'."""
+from typing import TYPE_CHECKING
+
+# Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
+# because arm_actions imports this module and that would be circular.
+if TYPE_CHECKING:
+    from kinova_interface.actions.arm_actions import ArmActions
 
 
-def home(ctx, params):
+def home(ctx: 'ArmActions', params: dict) -> bool:
     motion_params = ctx.build_motion_params(params.get('speed'))
     result = ctx.call_home_service(motion_params)
     return result is not None and result['success']
 
 
-def move_arm(ctx, params):
+def move_arm(ctx: 'ArmActions', params: dict) -> bool:
     target_name = params['target']
     coords = ctx.get_static_object_coords(target_name)
     if not coords:
@@ -24,7 +30,7 @@ def move_arm(ctx, params):
     return result is not None and result['success']
 
 
-def relative_move(ctx, params):
+def relative_move(ctx: 'ArmActions', params: dict) -> bool:
     vector_name = params['vector']
     vector = ctx.get_relative_movement_vector(vector_name)
     if not vector:
@@ -41,7 +47,7 @@ def relative_move(ctx, params):
     return result is not None and result['success']
 
 
-def gripper(ctx, params):
+def gripper(ctx: 'ArmActions', params: dict) -> bool:
     gripper = float(params['position'])
     result = ctx.call_move_gripper_service(gripper)
     return result is not None and result['success']

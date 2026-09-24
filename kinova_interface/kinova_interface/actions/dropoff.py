@@ -1,8 +1,15 @@
 """'dropoff' recipe action."""
+from typing import TYPE_CHECKING
+
 from kinova_interface.utils.geometry import object_half_height
 
+# Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
+# because arm_actions imports this module and that would be circular.
+if TYPE_CHECKING:
+    from kinova_interface.actions.arm_actions import ArmActions
 
-def run(ctx, params):
+
+def run(ctx: 'ArmActions', params: dict) -> bool:
     # Fall back to the object we actually know is held if the recipe
     # step didn't name one - the release-height math below needs the
     # held object's height to avoid releasing into the destination.

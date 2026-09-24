@@ -1,11 +1,17 @@
 """'thrust' recipe action (single-plane reach, see docs/push-motion-reference.md)."""
 import math
+from typing import TYPE_CHECKING
 
 from kinova_interface.actions.pour import POUR_DEFAULT_LIFT_HEIGHT
 from kinova_interface.utils.geometry import resolve_direction_offset
 
+# Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
+# because arm_actions imports this module and that would be circular.
+if TYPE_CHECKING:
+    from kinova_interface.actions.arm_actions import ArmActions
 
-def run(ctx, params):
+
+def run(ctx: 'ArmActions', params: dict) -> bool:
     """Raise a held object and thrust it toward a destination -
     reuses the exact same single-plane mechanism as 'push' (see
     docs/push-motion-reference.md): joint_1 fixed per stage, wrist

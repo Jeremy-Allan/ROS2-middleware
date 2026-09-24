@@ -1,8 +1,14 @@
 """'pour' recipe action (see docs/pour-motion-reference.md)."""
 import math
 import time
+from typing import TYPE_CHECKING
 
 from kinova_interface.utils.geometry import resolve_direction_offset
+
+# Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
+# because arm_actions imports this module and that would be circular.
+if TYPE_CHECKING:
+    from kinova_interface.actions.arm_actions import ArmActions
 
 
 # Default tilt: matches the ~135 degree joint_6 delta captured in the
@@ -10,7 +16,7 @@ from kinova_interface.utils.geometry import resolve_direction_offset
 POUR_DEFAULT_TILT_ANGLE = math.radians(135)
 POUR_DEFAULT_LIFT_HEIGHT = 0.14  # meters; demo measured ~0.137m
 
-def run(ctx, params):
+def run(ctx: 'ArmActions', params: dict) -> bool:
     """Lift a held object and tip it to pour, then return level -
     directly above wherever it currently is by default, or above a
     'destination'/'direction' first if one is given. Assumes 'target'

@@ -1,9 +1,15 @@
 """'pickup' recipe action, plus its side-grasp candidate generation."""
 import math
+from typing import TYPE_CHECKING
 
 from shape_msgs.msg import SolidPrimitive
 
 from kinova_interface.utils.geometry import quaternion_to_euler
+
+# Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
+# because arm_actions imports this module and that would be circular.
+if TYPE_CHECKING:
+    from kinova_interface.actions.arm_actions import ArmActions
 
 
 # A flat, level wrist (not pointing down) - the one part of a side
@@ -28,7 +34,7 @@ SIDE_GRASP_CYLINDER_YAWS = [math.radians(a) for a in range(0, 360, 45)]
 # verify at any of the yaw offsets above - meters, along each world axis.
 SIDE_GRASP_POSITION_OFFSETS = [0.02, -0.02, 0.04, -0.04]
 
-def compute_side_grasp_candidates(ctx, target_info):
+def compute_side_grasp_candidates(ctx: 'ArmActions', target_info):
     """Generate candidate flat, side-on grasp poses for a BOX or
     CYLINDER object from its own registered shape and pose - not a
     fixed preset calibrated to one specific object/position (see
@@ -68,7 +74,7 @@ def compute_side_grasp_candidates(ctx, target_info):
     return candidates
 
 
-def run(ctx, params):
+def run(ctx: 'ArmActions', params: dict) -> bool:
     """Default behaviour is unchanged: unconstrained orientation at the
     object's registered center (forcing one can make an
     otherwise-reachable approach infeasible for the planner, same

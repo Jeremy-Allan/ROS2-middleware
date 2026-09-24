@@ -1,7 +1,13 @@
 """'throw' recipe action (see docs/throw-motion-reference.md)."""
 import math
+from typing import TYPE_CHECKING
 
 from kinova_interface.utils.geometry import resolve_direction_offset
+
+# Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
+# because arm_actions imports this module and that would be circular.
+if TYPE_CHECKING:
+    from kinova_interface.actions.arm_actions import ArmActions
 
 
 # A captured, fixed joint_2..6 shape (see docs/throw-motion-reference.md)
@@ -17,7 +23,7 @@ THROW_FLING_POSE = [math.radians(v) for v in [32.63, -34.26, 80.71, -63.25, 0.0]
 # this is where the gripper should open.
 THROW_RELEASE_JOINT5 = math.radians(-42.7)
 
-def run(ctx, params):
+def run(ctx: 'ArmActions', params: dict) -> bool:
     """A genuine joint-space throw, captured from a manual RViz
     demonstration (see docs/throw-motion-reference.md): rotate to
     face the throw direction (joint_1 only, current shoulder/elbow/
