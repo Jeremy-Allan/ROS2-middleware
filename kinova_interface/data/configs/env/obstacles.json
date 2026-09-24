@@ -1,22 +1,22 @@
 {
-  "table": {
+  "small_wall": {
     "pose": {
-      "position": {"x": 0.045, "y": -0.32, "z": -0.075},
+      "position": {"x": -100.1665, "y": -0.0855, "z": 0.052},
       "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
     },
     "shape": {
       "type": "BOX",
-      "dimensions": [1.93, 1.9, 0.05]
+      "dimensions": [0.03, 0.3, 0.2]
     }
   },
 "table": {
     "pose": {
-      "position": {"x": 0.045, "y": -0.32, "z": -0.075},
+      "position": {"x": 0.0, "y": -0.0, "z": -0.075},
       "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
     },
     "shape": {
       "type": "BOX",
-      "dimensions": [1.93, 0.64, 0.05]
+      "dimensions": [1.4, 1.4, 0.05]
     }
   }
 }

@@ -1,16 +1,16 @@
 calibration:
-  calibration_name: kinect_eye_on_base
+  calibration_name: kinect_eye_on_base 
 
   robot_base_frame: base_link
   robot_effector_frame: tool_frame
-  tracking_base_frame: kinect2_link          # <-- CHANGE from kinect2_rgb_optical_frame
+  tracking_base_frame: kinect2_link   #for kinect "kinect2_link is base frame containing kinect2_rgb_optical_frame / kinect2_ir_optical_frame"
   tracking_marker_frame: marker_0
 
   cam_base_topic: /kinect2/hd/image_color_rect
   marker_dict: 6X6_250
   marker_size: 0.095
 
-  # (static_tf_* entries stay as-is; only used when use_static_transform=true)
+  # (static_tf_ is only used when use_static_transform=true)
   static_tf_parent_frame: base_link
   static_tf_child_frame: kinect2_link
   static_tf_x: 0.2
