@@ -153,9 +153,9 @@ class JsonParserNode(Node):
             response.message = "Recipe executed successfully."
             self._update_node_status(status_text="Recipe execution complete (Success)", success=True)
         else:
-            self.get_logger().error("Returning Failure to client.")
-            response.message = "Recipe execution failed. Check logs."
-            self._update_node_status(status_text="Recipe execution failed", success=False)
+            self.get_logger().error(f"Returning Failure to client: {self.status_text}")
+            response.message = self.status_text
+            self._update_node_status(success=False)
 
         return response
 
@@ -239,7 +239,7 @@ class JsonParserNode(Node):
 
             if not success:
                 self.get_logger().error(f"Failed at step {i+1}: {step.get('action')}")
-                self.status_text = f"Recipe failed at step {i+1}"
+                self.status_text = f"Recipe failed at step {i+1} ({step.get('action')})"
                 self.command_success = False
                 self.get_logger().info(
                     f"[recipe_log] event=end timestamp={time.time():.3f} recipe={recipe_name} result=failure"

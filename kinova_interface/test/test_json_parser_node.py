@@ -337,3 +337,25 @@ def test_reset_environment_callback_failure(node):
     assert result == response
     assert response.success is False
     assert response.message == "Environment reset service not available"
+
+
+# failure messages
+def test_execute_recipe_callback_names_failing_step(node):
+    """The /execute_recipe response should name the failing step and action,
+    not a generic 'check logs' message."""
+
+    node.arm_actions.handlers = {'pickup': MagicMock(return_value=False)}
+    node.publish_status = MagicMock()
+
+    request = MagicMock()
+    request.recipe_json = json.dumps({
+        "recipe_name": "Test",
+        "steps": [{"action": "pickup", "parameters": {"target": "red_cube"}}]
+    })
+    response = MagicMock()
+
+    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
+        node.execute_recipe_callback(request, response)
+
+    assert response.success is False
+    assert response.message == "Recipe failed at step 1 (pickup)"
