@@ -3,24 +3,24 @@
 vision_snapshot_node:
   ros__parameters:
     # --- scene ---
-    workspace: [-0.40, 0.40, -0.40, 0.40]   # x_min, x_max, y_min, y_max in base_frame
-    table_z: 0.008                       # rough; the plane fit refines it
-    plane_band: 0.08
-    min_height: 0.006
-    max_height: 0.30
+    workspace: [-0.40, 0.40, -0.40, 0.40]       # x_min, x_max, y_min, y_max in base_frame
+    table_z: 0.008            # rough, the plane fit refines it
+    plane_band: 0.08 
+    min_height: 0.006         # height above the plane / table to keep as a cluster (lower if thin objects not picked up, raise if table is being picked up)
+    max_height: 0.30 
 
     # --- clustering ---
-    cluster_eps: 0.018
-    cluster_min_points: 200
-    merge_gap: 0.02                          # merges clusters split by depth dropouts
-    drop_border_clusters: true
+    cluster_eps: 0.018        # maximum distance between points in the same cluster (if two clusters smaller than this, they are considered neighbours and merged)
+    cluster_min_points: 200   # min amount of points to be considered a cluster )
+    merge_gap: 0.02              #merges clusters split by depth dropouts
+    drop_border_clusters: true 
 
     # --- snapshot ---
-    num_frames: 8
-    save_dir: ''                             # e.g. /home/you/vision_snaps to record .npz frames
+    num_frames: 8 # how many frames to use for a snapshot (more = more stable, but slower)
+    save_dir: ''                             # e.g. /home/you/vision_snapshots to record .npz frames
 
     # --- stability across snapshots ---
     unknown_margin: 0.005
     id_match_dist: 0.08
     label_flip_conf: 0.6
-    grace_snapshots: 2
+    grace_snapshots: 2 #if object is missing for x many snapshots, it is considered stale and removed

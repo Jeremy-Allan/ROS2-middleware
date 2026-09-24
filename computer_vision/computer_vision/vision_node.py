@@ -83,7 +83,7 @@ DEFAULTS = {
     'id_match_dist': 0.08,
     'label_flip_conf': 0.6,
     'grace_snapshots': 2,
-    'carried_conf_floor': 0.25,   # below this, a carried label is dropped
+    'carried_conf_floor': 0.25,  
     # --- yolo.yaml ---
     'yolo_model': '',
     'yolo_device': '',
