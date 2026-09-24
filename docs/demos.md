@@ -7,7 +7,7 @@ Short screen recordings of each feature in action, for anyone who'd rather watch
 | Feature | What it shows | Link |
 |---|---|---|
 | Full pipeline, natural language to motion | All three terminals running, a typed command resulting in real arm movement | (add link) |
-| Running a pick-and-place recipe directly | `recipe_l4_pick_and_place.json` end to end, no LLM involved | (add link) |
+| Running a pick-and-place recipe directly | `recipe_pickup.json` then `recipe_dropoff.json` end to end, no LLM involved | (add link) |
 | Switching LLM providers | Editing `llm_config.json` from Ollama to a cloud provider | (add link) |
 | Telemetry and fault recovery | Simulated fault, `/system/status` flips to FAULT, `/system/reset_fault` clears it | (add link) |
 | Editing the coordinate dictionary | Adding a new named object and asking for it in plain English | (add link) |

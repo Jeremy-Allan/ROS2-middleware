@@ -76,9 +76,10 @@ Or, with the stack already running and no `recipe:=` given, trigger a recipe fro
 source /opt/ros/humble/setup.bash
 source ~/workspace/ros2_kortex_ws/install/setup.bash
 
-RECIPE=$(cat ~/workspace/ros2_kortex_ws/src/ROS2-middleware/kinova_interface/recipes/task_recipe.json)
-ros2 service call /execute_recipe kinova_interfaces/srv/ExecuteRecipe "{recipe_json: '$RECIPE'}"
+ros2 run kinova_interface run_recipe.py ~/workspace/ros2_kortex_ws/src/ROS2-middleware/kinova_interface/recipes/test_suite/recipe_pickup.json
 ```
+
+It prints `success=...` and `message=...`; on failure the message names the failing step and action (for example `Recipe failed at step 2 (pickup)`); the node's logs have the detailed reason.
 
 The service returns once the whole recipe has finished executing, it blocks for the full sequence, not just the first step. For a long recipe this call can take a while to return; that's expected, not a hang.
 

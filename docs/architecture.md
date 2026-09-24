@@ -33,7 +33,8 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 ## Middleware node deep dive
 
 **`hardware_interface_client.py`, the only node that touches the robot:**
-- Exposes four services under its private namespace: `/kinova_hardware_client/home_arm`, `move_arm`, `move_gripper`, `relative_move`.
+- Exposes five services under its private namespace: `/kinova_hardware_client/home_arm`, `move_arm`, `move_gripper`, `relative_move`, `joint_move`.
+- The only node that *executes* motion. Other code may query MoveIt (IK, FK, state validity, planning scene), but every arm or gripper movement goes through this node.
 - Internally a client of two ROS 2 actions: `move_action` (MoveIt 2's `MoveGroup`, for Cartesian moves and the fixed joint-space `home` pose) and `/gen3_lite_2f_gripper_controller/gripper_cmd` (direct gripper control, bypassing MoveIt entirely).
 - Movement calls block synchronously on a `threading.Event()` until the action's result callback fires, which is what makes each recipe step wait for the robot to actually finish.
 - Subscribes to `/fault_controller/is_faulted` to know instantly if the arm enters a hardware fault state.
@@ -43,10 +44,11 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 - Exposes `/get_coordinates`, `/get_object_info`, `/get_relative_movement`, `/get_orientation_preset`, `/get_robot_parameters`, all pure lookups against the in-memory data.
 - Separately pushes every entry in `obstacles.json` into MoveIt's planning scene once `/apply_planning_scene` becomes available.
 
-**`json_parser_node.py`, orchestration only:**
-- Never talks to MoveIt or the gripper directly, only ever calls the services the other two nodes expose.
-- Can get a recipe two ways: a static file via the `recipe` launch parameter, or a dynamic JSON string via the `/execute_recipe` service, which is exactly what the proxy calls at runtime.
-- Iterates recipe steps in order, dispatching on `action`, stopping at the first failure.
+**`json_parser_node.py`, orchestration:**
+- Loads a recipe two ways: a static file via the `recipe` launch parameter, or a dynamic JSON string via the `/execute_recipe` service, which is exactly what the proxy calls at runtime.
+- Iterates recipe steps in order, stopping at the first failure.
+- Dispatches each step to an action in `kinova_interface/actions/` (see the layout below). Actions call the hardware and environment nodes' services, and query MoveIt services directly (`/compute_ik`, `/compute_fk`, `/check_state_validity`, `/get_planning_scene`, `/apply_planning_scene`), but never execute motion themselves.
+- On failure, `/execute_recipe` returns the failing step and action (for example `Recipe failed at step 2 (pickup)`). For why it failed, check the node's logs.
 
 **`telemetry_node.py`, pure aggregation:**
 - Subscribes to `/status/node_report`, publishes an aggregated `/system/status` every 0.5s using a worst-case-wins rule across all tracked nodes.
@@ -72,7 +74,8 @@ The proxy's own components (`llm_proxy.py`, the LLM adapters, `ros2_bridge_ws`, 
 | `GetRelativeMovement` | `move_id` (string) | `x`, `y`, `z`, `success`, `message` |
 | `GetOrientationPreset` | `preset_name` (string) | `roll`, `pitch`, `yaw`, `success`, `message` |
 | `GetRobotParameters` | (none) | `object_list[]`, `movement_names[]`, `orientation_names[]` |
-| `ExecuteRecipe` | `recipe_json` (string) | `success`, `message` |
+| `JointMove` | `joint_positions[]` (float64), `wait_for_completion` (bool), `relative` (bool), `motion_params` (`MotionParams`) | `success`, `message` |
+| `ExecuteRecipe` | `recipe_json` (string) | `success`, `message` (the failing step and action on failure) |
 
 `has_orientation` defaults to `false`, so existing callers that never set it get identical behavior to before this field existed, no orientation constraint applied, MoveIt picks whatever orientation it wants. `MoveArm`'s request fields changed shape (`x`/`y`/`z` became `target_position`), a breaking change to the wire format, not additive.
 
@@ -111,7 +114,11 @@ ROS2-middleware/
   docs/                          this documentation
   kinova_interface/
     data/configs/env/            object_dictionary.json, relative_movement.json, orientation_presets.json, obstacles.json
-    kinova_interface/             the four node source files
+    kinova_interface/             the Python package
+      nodes/                      the four ROS nodes (entry points)
+      actions/                    one module per recipe action (pickup.py, pour.py, ...) + arm_actions.py, their shared service clients/helpers
+      utils/                      shared pure helpers: robot.py (frame, joint and link names), geometry.py (math), ros.py (service-call helpers)
+    scripts/run_recipe.py         send a recipe file to /execute_recipe (ros2 run kinova_interface run_recipe.py <file>)
     launch/robot.launch.py
     recipes/                      task_recipe.json, test_suite/
   kinova_interfaces/
