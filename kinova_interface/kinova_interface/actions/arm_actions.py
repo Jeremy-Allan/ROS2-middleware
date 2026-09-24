@@ -2,7 +2,6 @@ import math
 import time
 from functools import partial
 
-import rclpy
 from geometry_msgs.msg import Quaternion, Pose, PoseStamped
 from sensor_msgs.msg import JointState
 from moveit_msgs.srv import GetPositionIK, ApplyPlanningScene, GetPositionFK, GetStateValidity, GetPlanningScene
@@ -27,7 +26,8 @@ from std_srvs.srv import Trigger
 
 from kinova_interface.actions import basic, pickup, dropoff, pour, thrust, push, throw
 from kinova_interface.utils.geometry import euler_to_quaternion, resolve_direction_offset
-from kinova_interface.utils.frames import BASE_FRAME, TOOL_FRAME
+from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES
+from kinova_interface.utils.ros import call_service, wait_for_future
 
 
 class ArmActions:
@@ -129,13 +129,7 @@ class ArmActions:
 
     def wait_for_future(self, future, service_name, timeout_sec=10.0):
         """Safely wait for an async service call future to complete without deadlocking the executor."""
-        start = time.time()
-        while rclpy.ok() and not future.done():
-            if time.time() - start > timeout_sec:
-                self.get_logger().error(f"Timed out waiting for {service_name}")
-                return None
-            time.sleep(0.01)
-        return future.result() if future.done() else None
+        return wait_for_future(future, service_name, self.get_logger(), timeout_sec)
 
     def _on_joint_state(self, msg):
         self.latest_joint_positions = dict(zip(msg.name, msg.position))
@@ -181,14 +175,10 @@ class ArmActions:
 
     def get_object_info(self, target_name):
         """Query the environment mapping node for full object info (pose + shape)."""
-        if not self.info_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Get Object Info service not available")
-            return None
         req = GetObjectInfo.Request()
         req.object_id = target_name
 
-        future = self.info_client.call_async(req)
-        response = self.wait_for_future(future, '/get_object_info')
+        response = call_service(self.info_client, req, '/get_object_info', self.get_logger())
 
         if response and response.success:
             pos = response.pose.position
@@ -209,15 +199,10 @@ class ArmActions:
             return None
 
     def get_relative_movement_vector(self, movement_name):
-        if not self.relative_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Get Relative Movement Service not available")
-            return None
         req = GetRelativeMovement.Request()
         req.move_id = movement_name
 
-        # Async call + safe wait loop
-        future = self.relative_client.call_async(req)
-        response = self.wait_for_future(future, '/get_relative_movement')
+        response = call_service(self.relative_client, req, '/get_relative_movement', self.get_logger())
 
         if response and response.success:
             return {'x': response.x, 'y': response.y, 'z': response.z}
@@ -226,14 +211,10 @@ class ArmActions:
             return None
 
     def get_orientation_preset(self, preset_name):
-        if not self.orientation_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Get Orientation Preset service not available")
-            return None
         req = GetOrientationPreset.Request()
         req.preset_name = preset_name
 
-        future = self.orientation_client.call_async(req)
-        response = self.wait_for_future(future, '/get_orientation_preset')
+        response = call_service(self.orientation_client, req, '/get_orientation_preset', self.get_logger())
 
         if response and response.success:
             return {'roll': response.roll, 'pitch': response.pitch, 'yaw': response.yaw}
@@ -283,10 +264,6 @@ class ArmActions:
         branch. Seeding from a very different configuration (e.g. home)
         is what caused a real, physically-reachable pose to report
         NO_IK_SOLUTION during testing - see docs/pour-motion-reference.md."""
-        if not self.compute_ik_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Compute IK service not available")
-            return None
-
         req = GetPositionIK.Request()
         req.ik_request.group_name = 'arm'
         req.ik_request.avoid_collisions = True
@@ -304,19 +281,18 @@ class ArmActions:
         if seed_joint_positions is not None:
             seed_state = RobotState()
             seed_js = JointState()
-            seed_js.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+            seed_js.name = list(JOINT_NAMES)
             seed_js.position = [float(p) for p in seed_joint_positions]
             seed_state.joint_state = seed_js
             req.ik_request.robot_state = seed_state
 
-        future = self.compute_ik_client.call_async(req)
-        response = self.wait_for_future(future, '/compute_ik')
+        response = call_service(self.compute_ik_client, req, '/compute_ik', self.get_logger())
         if response is None or response.error_code.val != response.error_code.SUCCESS:
             return None
 
         names = list(response.solution.joint_state.name)
         positions = list(response.solution.joint_state.position)
-        return [positions[names.index(f'joint_{i}')] for i in range(1, 7)]
+        return [positions[names.index(name)] for name in JOINT_NAMES]
 
     def verify_grasp_pose(self, x, y, z, roll, pitch, yaw):
         """True/False convenience wrapper around find_ik_solution, for
@@ -350,13 +326,9 @@ class ArmActions:
         succeeded - callers are responsible for reverting (allowed=False)
         once done, in a 'finally' block, so a mid-push failure doesn't
         leave it permanently collision-exempt."""
-        if not self.get_planning_scene_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Get Planning Scene service not available")
-            return False
         req = GetPlanningScene.Request()
         req.components.components = PlanningSceneComponents.ALLOWED_COLLISION_MATRIX
-        future = self.get_planning_scene_client.call_async(req)
-        response = self.wait_for_future(future, '/get_planning_scene')
+        response = call_service(self.get_planning_scene_client, req, '/get_planning_scene', self.get_logger())
         if response is None:
             self.get_logger().error("Failed to fetch current planning scene ACM")
             return False
@@ -388,13 +360,9 @@ class ArmActions:
         scene.is_diff = True
         scene.allowed_collision_matrix = new_acm
 
-        if not self.apply_planning_scene_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Apply Planning Scene service not available")
-            return False
         apply_req = ApplyPlanningScene.Request()
         apply_req.scene = scene
-        apply_future = self.apply_planning_scene_client.call_async(apply_req)
-        apply_response = self.wait_for_future(apply_future, '/apply_planning_scene')
+        apply_response = call_service(self.apply_planning_scene_client, apply_req, '/apply_planning_scene', self.get_logger())
         return apply_response is not None and apply_response.success
 
     def compute_fk(self, joint_positions):
@@ -402,21 +370,17 @@ class ArmActions:
         in base_link, or None on failure. Used by solve_planar_reach to
         numerically search a 2-DOF reach, rather than relying on a
         general 6-DOF IK search (see that method's docstring for why)."""
-        if not self.compute_fk_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Compute FK service not available")
-            return None
         req = GetPositionFK.Request()
         req.header.frame_id = BASE_FRAME
         req.fk_link_names = [TOOL_FRAME]
         state = RobotState()
         js = JointState()
-        js.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+        js.name = list(JOINT_NAMES)
         js.position = [float(p) for p in joint_positions]
         state.joint_state = js
         req.robot_state = state
 
-        future = self.compute_fk_client.call_async(req)
-        response = self.wait_for_future(future, '/compute_fk')
+        response = call_service(self.compute_fk_client, req, '/compute_fk', self.get_logger())
         if response is None or response.error_code.val != response.error_code.SUCCESS:
             return None
         p = response.pose_stamped[0].pose.position
@@ -428,20 +392,16 @@ class ArmActions:
         state, with none of the ambiguity find_ik_solution has (that
         searches for *some* joint state satisfying a Cartesian pose;
         this checks one specific, already-known state)."""
-        if not self.check_state_validity_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Check State Validity service not available")
-            return False
         req = GetStateValidity.Request()
         req.group_name = 'arm'
         state = RobotState()
         js = JointState()
-        js.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
+        js.name = list(JOINT_NAMES)
         js.position = [float(p) for p in joint_positions]
         state.joint_state = js
         req.robot_state = state
 
-        future = self.check_state_validity_client.call_async(req)
-        response = self.wait_for_future(future, '/check_state_validity')
+        response = call_service(self.check_state_validity_client, req, '/check_state_validity', self.get_logger())
         return response is not None and response.valid
 
     # Wrist held level/neutral for a single-plane reach (push, and
@@ -518,15 +478,9 @@ class ArmActions:
         return shoulder, elbow, achieved, error
 
     def call_home_service(self, motion_params=None):
-        if not self.home_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Home Arm Service not available")
-            return None
-
         req = HomeArm.Request()
         req.motion_params = motion_params if motion_params is not None else MotionParams()
-        # Async call + safe wait loop
-        future = self.home_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/home_arm', self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.home_client, req, '/kinova_hardware_client/home_arm', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
 
         if response and response.success:
             return {'success': response.success, 'message': response.message}
@@ -535,9 +489,6 @@ class ArmActions:
             return None
 
     def call_move_service(self, x, y, z, has_orientation=False, roll=0.0, pitch=0.0, yaw=0.0, motion_params=None):
-        if not self.move_arm_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Move Arm Service not available")
-            return None
         req = MoveArm.Request()
         req.target_position.x = x
         req.target_position.y = y
@@ -548,9 +499,7 @@ class ArmActions:
         req.yaw = yaw
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
-        # Async call + safe wait loop
-        future = self.move_arm_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/move_arm', self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.move_arm_client, req, '/kinova_hardware_client/move_arm', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
 
         if response and response.success:
             return {'success': response.success, 'message': response.message}
@@ -559,9 +508,6 @@ class ArmActions:
             return None
 
     def call_relative_move_service(self, vx, vy, vz, has_orientation=False, roll_delta=0.0, pitch_delta=0.0, yaw_delta=0.0, motion_params=None):
-        if not self.relative_move_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Relative Move Service not available")
-            return None
         req = RelativeMove.Request()
         req.vx = vx
         req.vy = vy
@@ -572,9 +518,7 @@ class ArmActions:
         req.yaw_delta = yaw_delta
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
-        # Async call + safe wait loop
-        future = self.relative_move_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/relative_move', self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.relative_move_client, req, '/kinova_hardware_client/relative_move', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
 
         if response and response.success:
             return {'success': response.success, 'message': response.message}
@@ -583,14 +527,9 @@ class ArmActions:
             return None
 
     def call_move_gripper_service(self, position):
-        if not self.move_gripper_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Move Gripper service not available")
-            return None
         req = MoveGripper.Request()
         req.position = position
-        # Async call + safe wait loop
-        future = self.move_gripper_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/move_gripper', self._GRIPPER_ACTION_TIMEOUT_SEC)
+        response = call_service(self.move_gripper_client, req, '/kinova_hardware_client/move_gripper', self.get_logger(), timeout_sec=self._GRIPPER_ACTION_TIMEOUT_SEC)
 
         if response and response.success:
             return {'success': response.success, 'message': response.message}
@@ -614,17 +553,13 @@ class ArmActions:
         call_joint_move_service_async instead, which doesn't wait for
         anything at all - see that method's docstring for why this
         distinction turned out to matter in practice."""
-        if not self.joint_move_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Joint Move service not available")
-            return None
         req = JointMove.Request()
         req.joint_positions = [float(p) for p in joint_positions]
         req.wait_for_completion = wait_for_completion
         req.relative = relative
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
-        future = self.joint_move_client.call_async(req)
-        response = self.wait_for_future(future, '/kinova_hardware_client/joint_move', self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.joint_move_client, req, '/kinova_hardware_client/joint_move', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
 
         if response and response.success:
             return {'success': response.success, 'message': response.message}
@@ -663,13 +598,9 @@ class ArmActions:
 
     def attach_object(self, obj_id):
         """Remove object from planning scene (allow collision) via the environment mapping node."""
-        if not self.attach_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Attach service not available")
-            return False
         req = AttachObject.Request()
         req.object_id = obj_id
-        future = self.attach_client.call_async(req)
-        response = self.wait_for_future(future, '/attach_object')
+        response = call_service(self.attach_client, req, '/attach_object', self.get_logger())
         if response and response.success:
             self.get_logger().info(f"Attached object '{obj_id}' (removed from scene)")
             return True
@@ -679,13 +610,9 @@ class ArmActions:
 
     def detach_object(self, obj_id):
         """Add object back to planning scene via the environment mapping node."""
-        if not self.detach_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Detach service not available")
-            return False
         req = DetachObject.Request()
         req.object_id = obj_id
-        future = self.detach_client.call_async(req)
-        response = self.wait_for_future(future, '/detach_object')
+        response = call_service(self.detach_client, req, '/detach_object', self.get_logger())
         if response and response.success:
             self.get_logger().info(f"Detached object '{obj_id}' (added back to scene)")
             return True
@@ -694,10 +621,6 @@ class ArmActions:
             return False
 
     def update_object_pose(self, obj_id, x, y, z, orientation=None):
-        if not self.update_pose_client.wait_for_service(timeout_sec=5.0):
-            self.get_logger().error("Update Object Pose service not available")
-            return False
-
         req = UpdateObjectPose.Request()
         req.object_id = obj_id
         req.pose.position.x = x
@@ -718,8 +641,7 @@ class ArmActions:
             req.pose.orientation.z = 0.0
             req.pose.orientation.w = 1.0
 
-        future = self.update_pose_client.call_async(req)
-        response = self.wait_for_future(future, '/update_object_pose')
+        response = call_service(self.update_pose_client, req, '/update_object_pose', self.get_logger())
         if response and response.success:
             return True
         else:

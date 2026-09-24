@@ -22,7 +22,7 @@ from kinova_interfaces.msg import ExtendedStatus
 from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
 
 from kinova_interface.utils.geometry import euler_to_quaternion, quaternion_to_euler
-from kinova_interface.utils.frames import BASE_FRAME, TOOL_FRAME
+from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES
 
 
 class HardwareInterfaceClient(Node):
@@ -41,7 +41,6 @@ class HardwareInterfaceClient(Node):
     ALLOWED_PLANNING_TIME_SEC = 10.0
     SPHERE_TOLERANCE_RADIUS = 0.01
 
-    HOME_JOINT_NAMES = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
     # Home's fixed joint configuration - also the base pose 'throw' starts
     # its wind-up/fling from, reoriented at joint_1 to face the throw
     # direction and offset at joint_3 (the elbow) for the swing.
@@ -281,9 +280,8 @@ class HardwareInterfaceClient(Node):
                 response.success = False
                 response.message = "No joint state available for relative joint move"
                 return self.finalize_service_status(response)
-            joint_names = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
             try:
-                current = [self.latest_joint_positions[name] for name in joint_names]
+                current = [self.latest_joint_positions[name] for name in JOINT_NAMES]
             except KeyError as e:
                 response.success = False
                 response.message = f"Missing joint {e} in latest joint state"
@@ -536,7 +534,7 @@ class HardwareInterfaceClient(Node):
         goal_msg.request.allowed_planning_time = self.ALLOWED_PLANNING_TIME_SEC
 
         constraints = []
-        for name, pos in zip(self.HOME_JOINT_NAMES, joint_positions):
+        for name, pos in zip(JOINT_NAMES, joint_positions):
             jc = JointConstraint()
             jc.joint_name = name
             jc.position = pos

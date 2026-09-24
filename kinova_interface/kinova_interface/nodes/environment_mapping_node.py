@@ -11,23 +11,14 @@ from std_srvs.srv import Trigger
 from moveit_msgs.msg import PlanningScene, CollisionObject, AttachedCollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
 from shape_msgs.msg import SolidPrimitive
-from geometry_msgs.msg import Pose, Quaternion
+from geometry_msgs.msg import Pose
 from kinova_interfaces.msg import ExtendedStatus
-from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.duration import Duration
 from tf2_ros import Buffer, TransformListener
 
 from kinova_interface.utils.geometry import euler_to_quaternion, pose_in_new_frame
-from kinova_interface.utils.frames import BASE_FRAME, TOOL_FRAME
-
-# Links allowed to touch an object once it's attached to the gripper, so the
-# fingers actually closing around it doesn't register as a collision.
-GRIPPER_TOUCH_LINKS = [
-    TOOL_FRAME, "gripper_base_link",
-    "left_finger_dist_link", "left_finger_prox_link",
-    "right_finger_dist_link", "right_finger_prox_link",
-]
+from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, GRIPPER_TOUCH_LINKS
 
 
 class EnvironmentMappingNode(Node):
@@ -291,7 +282,7 @@ class EnvironmentMappingNode(Node):
             response.has_table_bounds = False
 
         self.command_success = True
-        self.status_text = f"Robot Parameters queried"
+        self.status_text = "Robot Parameters queried"
         self.publish_status()
         return response
 
