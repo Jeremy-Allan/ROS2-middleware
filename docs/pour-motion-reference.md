@@ -3,7 +3,7 @@
 This records a manually-driven demonstration of the intended `pour` motion,
 captured on real-time fake hardware in RViz (MoveIt's interactive marker/
 Joints tab, `Plan and Execute`), one joint-space snapshot per stage. It
-exists so the eventual `pour` implementation in `arm_actions.py` is built
+exists so the eventual `pour` implementation (now `actions/pour.py`) is built
 against a concrete, physically-verified sequence rather than guessed at.
 
 Captured with the `box` object (`kinova_interface/data/configs/env/object_dictionary.json`,
@@ -102,7 +102,7 @@ case.
 
 ## Implementation
 
-Implemented in `arm_actions.py`/`hardware_interface_client.py`:
+Implemented in `actions/pour.py`, `actions/pickup.py` and `nodes/hardware_interface_client.py`:
 
 - `pickup` gained optional `orientation`/`grasp_offset` params for a fully
   manual override (unconstrained/zero by default, unchanged for every

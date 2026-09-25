@@ -11,23 +11,14 @@ from std_srvs.srv import Trigger
 from moveit_msgs.msg import PlanningScene, CollisionObject, AttachedCollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
 from shape_msgs.msg import SolidPrimitive
-from geometry_msgs.msg import Pose, Quaternion
+from geometry_msgs.msg import Pose
 from kinova_interfaces.msg import ExtendedStatus
-from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
-from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.duration import Duration
 from tf2_ros import Buffer, TransformListener
 
-from kinova_interface.helpers.geometry_utils import euler_to_quaternion
-from kinova_interface.helpers.frame_names import BASE_FRAME, TOOL_FRAME
-
-# Links allowed to touch an object once it's attached to the gripper, so the
-# fingers actually closing around it doesn't register as a collision.
-GRIPPER_TOUCH_LINKS = [
-    TOOL_FRAME, "gripper_base_link",
-    "left_finger_dist_link", "left_finger_prox_link",
-    "right_finger_dist_link", "right_finger_prox_link",
-]
+from kinova_interface.utils.geometry import euler_to_quaternion, pose_in_new_frame
+from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, GRIPPER_TOUCH_LINKS
 
 
 class EnvironmentMappingNode(Node):
@@ -291,7 +282,7 @@ class EnvironmentMappingNode(Node):
             response.has_table_bounds = False
 
         self.command_success = True
-        self.status_text = f"Robot Parameters queried"
+        self.status_text = "Robot Parameters queried"
         self.publish_status()
         return response
 
@@ -359,7 +350,7 @@ class EnvironmentMappingNode(Node):
             response.message = f"Failed to attach '{obj_id}': tool_frame transform unavailable"
             return response
 
-        relative_pose = self.pose_in_new_frame(obj_data['pose'], transform)
+        relative_pose = pose_in_new_frame(obj_data['pose'], transform)
         success = self.apply_attach_diff(obj_id, obj_data, relative_pose)
         if success:
             self.attached_objects.add(obj_id)
@@ -413,49 +404,6 @@ class EnvironmentMappingNode(Node):
         self.status_text = response.message
         self.publish_status()
         return response
-
-    # --- Quaternion helpers for re-expressing a pose in another frame ---
-    # Same small-local-helper style as the euler/quaternion methods already
-    # duplicated in hardware_interface_client.py, not shared into a util module.
-    @staticmethod
-    def quat_multiply(q1, q2):
-        x1, y1, z1, w1 = q1
-        x2, y2, z2, w2 = q2
-        w = w1*w2 - x1*x2 - y1*y2 - z1*z2
-        x = w1*x2 + x1*w2 + y1*z2 - z1*y2
-        y = w1*y2 - x1*z2 + y1*w2 + z1*x2
-        z = w1*z2 + x1*y2 - y1*x2 + z1*w2
-        return (x, y, z, w)
-
-    @staticmethod
-    def quat_rotate_vector(q, v):
-        qv = (q[0], q[1], q[2])
-        qw = q[3]
-
-        def cross(a, b):
-            return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
-
-        t = tuple(2*c for c in cross(qv, v))
-        ct = cross(qv, t)
-        return (v[0]+qw*t[0]+ct[0], v[1]+qw*t[1]+ct[1], v[2]+qw*t[2]+ct[2])
-
-    def pose_in_new_frame(self, pose_dict, transform):
-        """Re-express a pose (dict with position x/y/z and orientation x/y/z/w)
-        in the frame that `transform` (a TransformStamped converting into that
-        frame) targets."""
-        pos = pose_dict['position']
-        orient = pose_dict['orientation']
-        t = transform.transform.translation
-        r = transform.transform.rotation
-        tq = (r.x, r.y, r.z, r.w)
-
-        rotated = self.quat_rotate_vector(tq, (pos['x'], pos['y'], pos['z']))
-        new_pos = (rotated[0] + t.x, rotated[1] + t.y, rotated[2] + t.z)
-        new_orient = self.quat_multiply(tq, (orient['x'], orient['y'], orient['z'], orient['w']))
-        return {
-            'position': {'x': new_pos[0], 'y': new_pos[1], 'z': new_pos[2]},
-            'orientation': {'x': new_orient[0], 'y': new_orient[1], 'z': new_orient[2], 'w': new_orient[3]}
-        }
 
     def apply_attach_diff(self, obj_id, obj_data, relative_pose):
         """Remove the object from the world and add it as a real

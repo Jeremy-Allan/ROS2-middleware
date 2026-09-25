@@ -11,7 +11,7 @@ from kinova_interfaces.srv import ExecuteRecipe
 from kinova_interfaces.msg import ExtendedStatus
 from std_srvs.srv import Trigger
 
-from kinova_interface.helpers.arm_actions import ArmActions
+from kinova_interface.actions.arm_actions import ArmActions
 
 class JsonParser:
     """Helper class to handle JSON loading."""
@@ -96,7 +96,8 @@ class JsonParserNode(Node):
                 except Exception as e:
                     # Fallback for local development
                     self.get_logger().warning(f"Could not find package share directory, falling back to local path: {e}")
-                    base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                    # nodes/ -> kinova_interface/ (python pkg) -> kinova_interface/ (ROS pkg, holds recipes/)
+                    base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                     recipe_path = os.path.join(base_path, 'recipes', recipe_file)
 
         # 6. If a static recipe was provided, execute it on startup using a one-shot Timer
@@ -152,9 +153,9 @@ class JsonParserNode(Node):
             response.message = "Recipe executed successfully."
             self._update_node_status(status_text="Recipe execution complete (Success)", success=True)
         else:
-            self.get_logger().error("Returning Failure to client.")
-            response.message = "Recipe execution failed. Check logs."
-            self._update_node_status(status_text="Recipe execution failed", success=False)
+            self.get_logger().error(f"Returning Failure to client: {self.status_text}")
+            response.message = self.status_text
+            self._update_node_status(success=False)
 
         return response
 
@@ -238,7 +239,7 @@ class JsonParserNode(Node):
 
             if not success:
                 self.get_logger().error(f"Failed at step {i+1}: {step.get('action')}")
-                self.status_text = f"Recipe failed at step {i+1}"
+                self.status_text = f"Recipe failed at step {i+1} ({step.get('action')})"
                 self.command_success = False
                 self.get_logger().info(
                     f"[recipe_log] event=end timestamp={time.time():.3f} recipe={recipe_name} result=failure"

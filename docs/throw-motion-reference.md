@@ -67,7 +67,7 @@ happening").
   even the bounded fire-and-forget window `call_joint_move_service`
   still waits for). This is what actually unblocks the client in time.
 - `wait_for_joint_crossing(joint_name, threshold, starting_value)` - a
-  closed-loop release trigger. `arm_actions.py` now subscribes to
+  closed-loop release trigger. `actions/arm_actions.py` now subscribes to
   `/joint_states` (mirroring `hardware_interface_client`'s own pattern)
   and polls the arm's **real, live** `joint_5` value, returning the
   moment it actually crosses the release threshold. This ties release

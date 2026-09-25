@@ -123,7 +123,7 @@ A recipe is:
 
 Steps execute strictly in array order, one at a time, and execution stops immediately the moment any step fails. Later steps never run.
 
-**The six valid `action` values**, enforced both by `json_parser_node.py` and by the proxy's own schema, so the two sides do agree on this part:
+**The ten valid `action` values.** The proxy's own schema must list an action too before the LLM can produce it, so keep the two in sync when adding one.
 
 | `action` | Required `parameters` | Optional `parameters` | What happens |
 |---|---|---|---|
@@ -131,10 +131,14 @@ Steps execute strictly in array order, one at a time, and execution stops immedi
 | `"move_arm"` | `"target": "<object_name>"` | `orientation`, `speed` | Looks up `<object_name>` in the object dictionary, moves there |
 | `"relative_move"` | `"vector": "<movement_name>"` | `orientation`, `speed` | Looks up `<movement_name>` in the relative-movements file, moves the arm by that offset from wherever it currently is |
 | `"gripper"` | `"position": <number>` | (none) | Sends the gripper to that position |
-| `"pickup"` | `"target": "<object_name>"` | `open_position`, `close_position` | Opens the gripper, moves to the object, closes the gripper, attaches the object in the planning scene |
+| `"pickup"` | `"target": "<object_name>"` | `open_position`, `close_position`, `grasp_style`, `orientation`, `grasp_offset` | Opens the gripper, moves to the object, closes the gripper, attaches the object in the planning scene. `grasp_style: "side"` computes and IK-verifies a level side grasp (needed by `pour`/`thrust`) |
 | `"dropoff"` | `"destination": "<object_name>"` | `target`, `open_position`, `place_offset` | Two-stage release onto `destination`: hover above, then lower to a small clearance before opening the gripper, so the object doesn't fall from hover height. See below. |
+| `"pour"` | `"target": "<held_object>"` | `destination`, `direction`, `distance`, `lift_height`, `tilt_angle`, `duration`, `speed` | Lifts the held object, optionally moves above a destination/direction, tilts `joint_6` to pour, then returns level. See [pour-motion-reference](pour-motion-reference.md) |
+| `"push"` | `"target": "<object_name>"` | `destination` or `direction` (one required), `distance`, `close_position`, `speed` | Slides an object by sustained contact in a single vertical plane. See [push-motion-reference](push-motion-reference.md) |
+| `"thrust"` | `"target": "<held_object>"` | `destination` or `direction` (one required), `distance`, `lift_height`, `speed` | Raises the held object, faces the destination and extends toward it |
+| `"throw"` | `"target": "<held_object>"` | `destination` or `direction` (one required), `distance`, `open_position`, `speed` | Winds up and flings the held object, releasing on a live `joint_5` trigger. See [throw-motion-reference](throw-motion-reference.md) |
 
-> This repo's older top-level docs described the whitelist as `move_arm`, `move_gripper`, `relative_move`, `home_arm`, and missed `pickup`/`dropoff` entirely. Those old names do not appear anywhere in the actual parsing code, or in the proxy's schema. Use the six values above.
+> This repo's older top-level docs described the whitelist as `move_arm`, `move_gripper`, `relative_move`, `home_arm`, and missed `pickup`/`dropoff` entirely. Those old names do not appear anywhere in the actual parsing code, or in the proxy's schema. Use the ten values above.
 
 **`orientation` (optional, `move_arm` and `relative_move`):** a preset name from `orientation_presets.json`, resolved via `/get_orientation_preset`, never raw angles, that's a deliberate anti-hallucination choice so the LLM never has to produce numeric roll/pitch/yaw itself. For `move_arm` this is the absolute target orientation; for `relative_move` it's applied as a delta on top of the arm's current orientation. If omitted, the move happens with no orientation constraint, current behavior, MoveIt picks whatever orientation it wants.
 

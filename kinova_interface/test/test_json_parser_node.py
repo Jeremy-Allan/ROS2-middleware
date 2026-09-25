@@ -3,7 +3,7 @@ import pytest
 
 from unittest.mock import MagicMock, patch
 
-from kinova_interface.json_parser_node import JsonParser, JsonParserNode
+from kinova_interface.nodes.json_parser_node import JsonParser, JsonParserNode
 
 from kinova_interfaces.msg import ExtendedStatus
 
@@ -157,7 +157,7 @@ def test_execute_recipe(node):
 
     node.publish_status = MagicMock()
 
-    with patch("kinova_interface.json_parser_node.time.sleep"):
+    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
         result = node.execute_recipe()
 
     assert result is True
@@ -255,7 +255,7 @@ def test_execute_recipe_step_failure_sets_all_success_false(node):
     }
     node.publish_status = MagicMock()
 
-    with patch("kinova_interface.json_parser_node.time.sleep"):
+    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
         result = node.execute_recipe()
 
     assert result is False
@@ -273,7 +273,7 @@ def test_execute_recipe_unknown_action_fails(node):
     }
     node.publish_status = MagicMock()
 
-    with patch("kinova_interface.json_parser_node.time.sleep"):
+    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
         result = node.execute_recipe()
 
     assert result is False
@@ -296,7 +296,7 @@ def test_execute_recipe_stops_at_first_failure(node):
     }
     node.publish_status = MagicMock()
 
-    with patch("kinova_interface.json_parser_node.time.sleep"):
+    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
         result = node.execute_recipe()
 
     assert result is False
@@ -337,3 +337,25 @@ def test_reset_environment_callback_failure(node):
     assert result == response
     assert response.success is False
     assert response.message == "Environment reset service not available"
+
+
+# failure messages
+def test_execute_recipe_callback_names_failing_step(node):
+    """The /execute_recipe response should name the failing step and action,
+    not a generic 'check logs' message."""
+
+    node.arm_actions.handlers = {'pickup': MagicMock(return_value=False)}
+    node.publish_status = MagicMock()
+
+    request = MagicMock()
+    request.recipe_json = json.dumps({
+        "recipe_name": "Test",
+        "steps": [{"action": "pickup", "parameters": {"target": "red_cube"}}]
+    })
+    response = MagicMock()
+
+    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
+        node.execute_recipe_callback(request, response)
+
+    assert response.success is False
+    assert response.message == "Recipe failed at step 1 (pickup)"

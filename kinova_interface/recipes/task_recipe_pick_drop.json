@@ -10,8 +10,7 @@
       "step_id": 2,
       "action": "pickup",
       "parameters": {
-        "target": "blue_cube",
-        "pre_offset": 0.1
+        "target": "blue_cube"
       },
       "description": "Pick up the blue cube"
     },
@@ -29,8 +28,7 @@
       "step_id": 4,
       "action": "pickup",
       "parameters": {
-        "target": "water_bottle",
-        "pre_offset": 0.1
+        "target": "water_bottle"
       },
       "description": "Pick up the water bottle"
     },

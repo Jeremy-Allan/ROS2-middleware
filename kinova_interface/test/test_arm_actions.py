@@ -6,7 +6,9 @@ from unittest.mock import MagicMock, patch
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 
-from kinova_interface.helpers.arm_actions import ArmActions
+from kinova_interface.actions.arm_actions import ArmActions
+from kinova_interface.actions import pickup, pour, throw
+from kinova_interface.utils import geometry
 
 from kinova_interfaces.srv import (
     GetObjectInfo,
@@ -383,17 +385,17 @@ def test_build_motion_params_with_speed(actions):
 # object_half_height()
 def test_object_half_height_box(actions):
     shape = {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.08]}
-    assert actions.object_half_height(shape) == pytest.approx(0.04)
+    assert geometry.object_half_height(shape) == pytest.approx(0.04)
 
 
 def test_object_half_height_cylinder(actions):
     shape = {"type": SolidPrimitive.CYLINDER, "dimensions": [0.1, 0.02]}
-    assert actions.object_half_height(shape) == pytest.approx(0.05)
+    assert geometry.object_half_height(shape) == pytest.approx(0.05)
 
 
 def test_object_half_height_sphere(actions):
     shape = {"type": SolidPrimitive.SPHERE, "dimensions": [0.03]}
-    assert actions.object_half_height(shape) == pytest.approx(0.03)
+    assert geometry.object_half_height(shape) == pytest.approx(0.03)
 
 
 # _handle_dropoff() two-stage descent and stacking height
@@ -421,7 +423,7 @@ def test_handle_dropoff_two_stage_descent_with_stacking(actions):
     actions.update_object_pose = MagicMock(return_value=True)
     actions.detach_object = MagicMock(return_value=True)
 
-    result = actions._handle_dropoff({
+    result = actions.handlers['dropoff']({
         "target": "red_cube",
         "destination": "delivery_tray",
         "place_offset": 0.1
@@ -550,7 +552,7 @@ def test_compute_side_grasp_candidates_for_box(actions):
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.07, 0.04]}
     }
 
-    candidates = actions.compute_side_grasp_candidates(target_info)
+    candidates = pickup.compute_side_grasp_candidates(actions, target_info)
 
     assert len(candidates) >= 4
     # first 4 candidates: object's exact center, each yaw offset
@@ -578,7 +580,7 @@ def test_compute_side_grasp_candidates_for_cylinder(actions):
         "shape": {"type": SolidPrimitive.CYLINDER, "dimensions": [0.25, 0.035]}
     }
 
-    candidates = actions.compute_side_grasp_candidates(target_info)
+    candidates = pickup.compute_side_grasp_candidates(actions, target_info)
 
     assert len(candidates) >= 8
     for cand in candidates[:8]:
@@ -599,7 +601,7 @@ def test_compute_side_grasp_candidates_rejects_unsupported_shape(actions):
         "shape": {"type": SolidPrimitive.SPHERE, "dimensions": [0.03]}
     }
 
-    assert actions.compute_side_grasp_candidates(target_info) == []
+    assert pickup.compute_side_grasp_candidates(actions, target_info) == []
 
 
 def _mock_ik_response(error_code, joint_positions=None):
@@ -800,7 +802,7 @@ def test_pickup_side_grasp_uses_first_verified_candidate(actions):
     assert result is True
     assert actions.verify_grasp_pose.call_count == 4
     move_call = actions.call_move_service.call_args[0]
-    expected = actions.compute_side_grasp_candidates(actions.get_object_info.return_value)[3]
+    expected = pickup.compute_side_grasp_candidates(actions, actions.get_object_info.return_value)[3]
     assert move_call[0:3] == expected[0:3]
     assert move_call[3] is True
 
@@ -910,14 +912,14 @@ def test_pour_without_destination_or_direction_pours_in_place(actions):
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
-    with patch("kinova_interface.helpers.arm_actions.time.sleep"):
+    with patch("kinova_interface.actions.pour.time.sleep"):
         result = actions.handlers['pour']({"target": "red_cube"})
 
     assert result is True
     # only the vertical lift - no horizontal transit move at all
     assert actions.call_relative_move_service.call_count == 1
     lift_call = actions.call_relative_move_service.call_args_list[0][0]
-    assert lift_call[0:3] == (0.0, 0.0, pytest.approx(actions._POUR_DEFAULT_LIFT_HEIGHT))
+    assert lift_call[0:3] == (0.0, 0.0, pytest.approx(pour.POUR_DEFAULT_LIFT_HEIGHT))
 
 
 def test_pour_in_place_still_lifts_and_tilts(actions):
@@ -932,7 +934,7 @@ def test_pour_in_place_still_lifts_and_tilts(actions):
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
-    with patch("kinova_interface.helpers.arm_actions.time.sleep") as mock_sleep:
+    with patch("kinova_interface.actions.pour.time.sleep") as mock_sleep:
         result = actions.handlers['pour']({"target": "red_cube", "tilt_angle": 2.0, "duration": 1.0})
 
     assert result is True
@@ -962,7 +964,7 @@ def test_pour_lifts_transits_tilts_and_returns(actions):
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
-    with patch("kinova_interface.helpers.arm_actions.time.sleep") as mock_sleep:
+    with patch("kinova_interface.actions.pour.time.sleep") as mock_sleep:
         result = actions.handlers['pour']({
             "target": "red_cube", "destination": "delivery_tray",
             "lift_height": 0.14, "tilt_angle": 2.36, "duration": 2.0
@@ -1024,7 +1026,7 @@ def test_pour_fails_if_tilt_fails(actions):
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value=None)
 
-    with patch("kinova_interface.helpers.arm_actions.time.sleep") as mock_sleep:
+    with patch("kinova_interface.actions.pour.time.sleep") as mock_sleep:
         result = actions.handlers['pour']({"target": "red_cube", "direction": "forward"})
 
     assert result is False
@@ -1085,7 +1087,7 @@ def test_thrust_raises_spins_and_extends(actions):
 
     face_yaw = math.atan2(origin_y, origin_x)
     thrust_yaw = math.atan2(0.4, -0.2)
-    raise_z = origin_z + actions._POUR_DEFAULT_LIFT_HEIGHT
+    raise_z = origin_z + pour.POUR_DEFAULT_LIFT_HEIGHT
 
     def solve_side_effect(base_yaw, x, y, z, seed_shoulder=None, seed_elbow=None):
         if seed_shoulder is None:
@@ -1825,7 +1827,7 @@ def test_wait_for_joint_crossing_detects_decreasing_crossing(actions):
     def side_effect(*a, **k):
         actions.latest_joint_positions = {'joint_5': -1.0}
 
-    with patch("kinova_interface.helpers.arm_actions.time.sleep", side_effect=side_effect):
+    with patch("kinova_interface.actions.arm_actions.time.sleep", side_effect=side_effect):
         result = actions.wait_for_joint_crossing('joint_5', -0.5, 0.4, timeout=1.0)
 
     assert result is True
@@ -1921,16 +1923,16 @@ def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
 
     # windup/fling: the captured, fixed shapes, joint_1 = the same face yaw
     assert windup_joints[0] == pytest.approx(expected_yaw)
-    assert windup_joints[1:] == pytest.approx(actions._THROW_WINDUP_POSE)
+    assert windup_joints[1:] == pytest.approx(throw.THROW_WINDUP_POSE)
     assert fling_joints[0] == pytest.approx(expected_yaw)
-    assert fling_joints[1:] == pytest.approx(actions._THROW_FLING_POSE)
+    assert fling_joints[1:] == pytest.approx(throw.THROW_FLING_POSE)
 
     # release trigger: joint_5, moving from the wind-up's own joint_5
     # toward the captured release threshold - not a timed sleep
     crossing_args = actions.wait_for_joint_crossing.call_args[0]
     assert crossing_args[0] == 'joint_5'
-    assert crossing_args[1] == pytest.approx(actions._THROW_RELEASE_JOINT5)
-    assert crossing_args[2] == pytest.approx(actions._THROW_WINDUP_POSE[3])
+    assert crossing_args[1] == pytest.approx(throw.THROW_RELEASE_JOINT5)
+    assert crossing_args[2] == pytest.approx(throw.THROW_WINDUP_POSE[3])
 
     actions.detach_object.assert_called_once_with("red_cube")
     assert actions.held_object is None
@@ -2027,14 +2029,14 @@ def test_resolve_direction_offset_forward_continues_same_bearing(actions):
     """'forward' should extend further out along the same bearing from the
     arm's base (origin) the reference point already had."""
 
-    x, y = actions.resolve_direction_offset(1.0, 0.0, 'forward', 0.2)
+    x, y = geometry.resolve_direction_offset(1.0, 0.0, 'forward', 0.2)
 
     assert x == pytest.approx(1.2)
     assert y == pytest.approx(0.0)
 
 
 def test_resolve_direction_offset_backward_reverses_bearing(actions):
-    x, y = actions.resolve_direction_offset(1.0, 0.0, 'backward', 0.2)
+    x, y = geometry.resolve_direction_offset(1.0, 0.0, 'backward', 0.2)
 
     assert x == pytest.approx(0.8)
     assert y == pytest.approx(0.0)
@@ -2044,8 +2046,8 @@ def test_resolve_direction_offset_left_and_right_are_perpendicular(actions):
     """'left'/'right' should be the bearing rotated +/-90 degrees, not
     along the original bearing at all."""
 
-    left_x, left_y = actions.resolve_direction_offset(1.0, 0.0, 'left', 0.2)
-    right_x, right_y = actions.resolve_direction_offset(1.0, 0.0, 'right', 0.2)
+    left_x, left_y = geometry.resolve_direction_offset(1.0, 0.0, 'left', 0.2)
+    right_x, right_y = geometry.resolve_direction_offset(1.0, 0.0, 'right', 0.2)
 
     assert left_x == pytest.approx(1.0)
     assert left_y == pytest.approx(0.2)
@@ -2054,14 +2056,14 @@ def test_resolve_direction_offset_left_and_right_are_perpendicular(actions):
 
 
 def test_resolve_direction_offset_unknown_direction_returns_none(actions):
-    assert actions.resolve_direction_offset(1.0, 0.0, 'sideways', 0.2) is None
+    assert geometry.resolve_direction_offset(1.0, 0.0, 'sideways', 0.2) is None
 
 
 def test_resolve_direction_offset_falls_back_when_at_origin(actions):
     """A reference point essentially at the arm's base has no bearing to
     rotate - fall back to a fixed +X bearing rather than dividing by zero."""
 
-    x, y = actions.resolve_direction_offset(0.0, 0.0, 'forward', 0.2)
+    x, y = geometry.resolve_direction_offset(0.0, 0.0, 'forward', 0.2)
 
     assert x == pytest.approx(0.2)
     assert y == pytest.approx(0.0)

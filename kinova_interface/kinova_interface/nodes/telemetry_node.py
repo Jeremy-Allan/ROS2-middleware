@@ -9,7 +9,6 @@ from kinova_interfaces.msg import ExtendedStatus, SystemSummary
 
 # Imports for controller auto-activation workaround
 import threading
-import time
 from controller_manager_msgs.srv import ConfigureController, SwitchController
 
 class TelemetryNode(Node):

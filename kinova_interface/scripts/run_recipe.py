@@ -10,10 +10,8 @@ parse entirely. This script reads the file and sends it as a service
 request field directly via rclpy, so the recipe's actual content never
 passes through any string-quoting layer at all.
 
-Usage:
-    source /opt/ros/humble/setup.bash
-    source ~/workspace/ros2_kortex_ws/install/setup.bash
-    python3 run_recipe.py <path/to/recipe.json>
+Usage (installed with the package; the middleware must already be running):
+    ros2 run kinova_interface run_recipe.py <path/to/recipe.json>
 """
 import sys
 

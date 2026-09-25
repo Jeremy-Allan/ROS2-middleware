@@ -12,7 +12,7 @@ from control_msgs.action import GripperCommand
 
 
 # Change this import only if your package/module name is different
-from kinova_interface.hardware_interface_client import HardwareInterfaceClient
+from kinova_interface.nodes.hardware_interface_client import HardwareInterfaceClient
 
 """
 Test with:
@@ -30,9 +30,9 @@ def node(ros_context):
     """
 
     with patch(
-        "kinova_interface.hardware_interface_client.ActionClient"
+        "kinova_interface.nodes.hardware_interface_client.ActionClient"
     ), patch(
-        "kinova_interface.hardware_interface_client.TransformListener"
+        "kinova_interface.nodes.hardware_interface_client.TransformListener"
     ), patch.object(
         HardwareInterfaceClient,
         "create_timer",
