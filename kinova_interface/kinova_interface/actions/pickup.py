@@ -34,7 +34,7 @@ SIDE_GRASP_CYLINDER_YAWS = [math.radians(a) for a in range(0, 360, 45)]
 # verify at any of the yaw offsets above - meters, along each world axis.
 SIDE_GRASP_POSITION_OFFSETS = [0.02, -0.02, 0.04, -0.04]
 
-def compute_side_grasp_candidates(ctx: 'ArmActions', target_info):
+def compute_side_grasp_candidates(target_info):
     """Generate candidate flat, side-on grasp poses for a BOX or
     CYLINDER object from its own registered shape and pose - not a
     fixed preset calibrated to one specific object/position (see
@@ -46,7 +46,6 @@ def compute_side_grasp_candidates(ctx: 'ArmActions', target_info):
     likely first; [] if the shape isn't supported."""
     shape = target_info['shape']
     if shape['type'] not in (SolidPrimitive.BOX, SolidPrimitive.CYLINDER):
-        ctx.get_logger().error(f"Side grasp only supports BOX/CYLINDER shapes currently (got shape type {shape['type']})")
         return []
 
     pos = target_info['pose']['position']
@@ -74,7 +73,7 @@ def compute_side_grasp_candidates(ctx: 'ArmActions', target_info):
     return candidates
 
 
-def run(ctx: 'ArmActions', params: dict) -> bool:
+def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     """Default behaviour is unchanged: unconstrained orientation at the
     object's registered center (forcing one can make an
     otherwise-reachable approach infeasible for the planner, same
@@ -100,25 +99,23 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     if params.get('grasp_style') == 'side':
         target_info = ctx.get_object_info(target_name)
         if not target_info:
-            return False
-        candidates = compute_side_grasp_candidates(ctx, target_info)
+            return False, f"Could not resolve pickup target '{target_name}'"
+        candidates = compute_side_grasp_candidates(target_info)
         if not candidates:
-            return False
+            return False, f"Side grasp only supports BOX/CYLINDER shapes, '{target_name}' is neither"
         chosen = next((c for c in candidates if ctx.verify_grasp_pose(*c)), None)
         if chosen is None:
-            ctx.get_logger().error(f"No valid side-grasp pose found for '{target_name}'")
-            return False
+            return False, f"No valid side-grasp pose found for '{target_name}'"
         target_x, target_y, target_z, roll, pitch, yaw = chosen
         has_orientation = True
     else:
         coords = ctx.get_static_object_coords(target_name)
         if not coords:
-            return False
+            return False, f"Could not resolve pickup target '{target_name}'"
 
         orientation = ctx.resolve_orientation(params.get('orientation'))
         if orientation is None:
-            ctx.get_logger().error(f"Unknown orientation preset '{params.get('orientation')}' for pickup")
-            return False
+            return False, f"Unknown orientation preset '{params.get('orientation')}' for pickup"
         has_orientation, roll, pitch, yaw = orientation
 
         grasp_offset = params.get('grasp_offset') or {}
@@ -128,26 +125,22 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
 
     # 1. Open gripper before moving
     rg = ctx.call_move_gripper_service(open_pos)
-    if not (rg and rg['success']):
-        ctx.get_logger().error('Failed to open gripper for pickup')
-        return False
+    if not rg['success']:
+        return False, f"Failed to open gripper for pickup: {rg['message']}"
 
     # 2. Descend to the chosen approach pose
     r = ctx.call_move_service(target_x, target_y, target_z, has_orientation, roll, pitch, yaw)
-    if not (r and r['success']):
-        ctx.get_logger().error('Failed to move to object position')
-        return False
+    if not r['success']:
+        return False, f"Failed to move to object position: {r['message']}"
 
     # 3. Close gripper
     rg = ctx.call_move_gripper_service(close_pos)
-    if not (rg and rg['success']):
-        return False
+    if not rg['success']:
+        return False, f"Failed to close gripper on '{target_name}': {rg['message']}"
 
     # 4. Remove object from planning scene (attach)
     if not ctx.attach_object(target_name):
-        ctx.get_logger().error("Failed to attach object after pickup")
-        return False
+        return False, "Failed to attach object after pickup"
 
     ctx.held_object = target_name
-    ctx.get_logger().info(f"Picked up '{target_name}'")
-    return True
+    return True, f"Picked up '{target_name}'"

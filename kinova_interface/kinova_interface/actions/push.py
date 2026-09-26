@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from kinova_interface.actions.arm_actions import ArmActions
 
 
-def run(ctx: 'ArmActions', params: dict) -> bool:
+def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     """Slide an object to a destination by sustained contact, without
     ever grasping or lifting it - captured from a manual RViz
     demonstration (see docs/push-motion-reference.md): face the
@@ -52,16 +52,13 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     destination_name = params.get('destination')
     direction = params.get('direction')
     if not target_name:
-        ctx.get_logger().error("push action requires 'target'")
-        return False
+        return False, "push action requires 'target'"
     if not destination_name and not direction:
-        ctx.get_logger().error("push action requires either 'destination' or 'direction'")
-        return False
+        return False, "push action requires either 'destination' or 'direction'"
 
     target_info = ctx.get_object_info(target_name)
     if not target_info:
-        ctx.get_logger().error(f"Could not resolve push target '{target_name}'")
-        return False
+        return False, f"Could not resolve push target '{target_name}'"
     origin = target_info['pose']['position']
 
     # Face the object - joint_1 fixed for the whole push, the single
@@ -85,25 +82,21 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     # larger object slightly off from how a human would naturally
     # grip it, favoring keeping the single-plane motion simple.
     if not ctx.set_collision_allowed(target_name, True):
-        ctx.get_logger().error(f"Failed to allow contact with '{target_name}' for push")
-        return False
+        return False, f"Failed to allow contact with '{target_name}' for push"
 
     try:
         contact = ctx.solve_planar_reach(base_yaw, origin['x'], origin['y'], origin['z'])
         if contact is None or contact[3] > ctx._PLANAR_REACH_MAX_ERROR:
-            ctx.get_logger().error(f"Could not solve a planar reach to '{target_name}'")
-            return False
+            return False, f"Could not solve a planar reach to '{target_name}'"
         contact_shoulder, contact_elbow, _, _ = contact
         contact_joints = [base_yaw, contact_shoulder, contact_elbow, *ctx._PLANAR_REACH_WRIST]
         if not ctx.check_joint_state_validity(contact_joints):
-            ctx.get_logger().error(f"Push contact pose for '{target_name}' is in collision")
-            return False
+            return False, f"Push contact pose for '{target_name}' is in collision"
 
         if destination_name:
             dest_info = ctx.get_object_info(destination_name)
             if not dest_info:
-                ctx.get_logger().error(f"Could not resolve push destination '{destination_name}'")
-                return False
+                return False, f"Could not resolve push destination '{destination_name}'"
             release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
         else:
             requested_distance = params.get('distance')
@@ -120,14 +113,10 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
                     origin, direction, origin['z'], contact_shoulder, contact_elbow, fixed_yaw=base_yaw
                 )
                 if distance is None:
-                    ctx.get_logger().error(
-                        f"No reachable push distance found for '{target_name}' in direction '{direction}'"
-                    )
-                    return False
+                    return False, f"No reachable push distance found for '{target_name}' in direction '{direction}'"
             offset = resolve_direction_offset(origin['x'], origin['y'], direction, distance)
             if offset is None:
-                ctx.get_logger().error(f"Unknown push direction '{direction}'")
-                return False
+                return False, f"Unknown push direction '{direction}'"
             release_x, release_y = offset
 
         # Same height, same plane, seeded at the contact solution so
@@ -138,40 +127,34 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
             seed_shoulder=contact_shoulder, seed_elbow=contact_elbow
         )
         if extend is None or extend[3] > ctx._PLANAR_REACH_MAX_ERROR:
-            ctx.get_logger().error(f"Could not solve a planar reach to the push destination for '{target_name}'")
-            return False
+            return False, f"Could not solve a planar reach to the push destination for '{target_name}'"
         extend_shoulder, extend_elbow, _, _ = extend
         extend_joints = [base_yaw, extend_shoulder, extend_elbow, *ctx._PLANAR_REACH_WRIST]
         if not ctx.check_joint_state_validity(extend_joints):
-            ctx.get_logger().error(f"Push end pose for '{target_name}' is in collision")
-            return False
+            return False, f"Push end pose for '{target_name}' is in collision"
 
         motion_params = ctx.build_motion_params(params.get('speed'))
         close_pos = float(params.get('close_position', 0.75))
 
         # 1. Open the gripper before approaching
         rg = ctx.call_move_gripper_service(0.0)
-        if not (rg and rg['success']):
-            ctx.get_logger().error('Failed to open gripper before push approach')
-            return False
+        if not rg['success']:
+            return False, f"Failed to open gripper before push approach: {rg['message']}"
 
         # 2. Move to the contact pose
         r = ctx.call_joint_move_service(contact_joints, motion_params=motion_params)
-        if not (r and r['success']):
-            ctx.get_logger().error('Failed to approach push target')
-            return False
+        if not r['success']:
+            return False, f"Failed to approach push target: {r['message']}"
 
         # 3. Close the gripper onto it
         rg = ctx.call_move_gripper_service(close_pos)
-        if not (rg and rg['success']):
-            ctx.get_logger().error('Failed to set gripper for push')
-            return False
+        if not rg['success']:
+            return False, f"Failed to set gripper for push: {rg['message']}"
 
         # 4. Extend - shoulder/elbow only, same plane
         r = ctx.call_joint_move_service(extend_joints, motion_params=motion_params)
-        if not (r and r['success']):
-            ctx.get_logger().error('Failed to push to destination')
-            return False
+        if not r['success']:
+            return False, f"Failed to push to destination: {r['message']}"
     finally:
         ctx.set_collision_allowed(target_name, False)
 
@@ -181,5 +164,4 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
         ctx.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
 
     where = f"to '{destination_name}'" if destination_name else f"{direction}"
-    ctx.get_logger().info(f"Pushed '{target_name}' {where}")
-    return True
+    return True, f"Pushed '{target_name}' {where}"

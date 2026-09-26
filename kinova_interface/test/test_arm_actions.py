@@ -423,13 +423,13 @@ def test_handle_dropoff_two_stage_descent_with_stacking(actions):
     actions.update_object_pose = MagicMock(return_value=True)
     actions.detach_object = MagicMock(return_value=True)
 
-    result = actions.handlers['dropoff']({
+    success, message = actions.handlers['dropoff']({
         "target": "red_cube",
         "destination": "delivery_tray",
         "place_offset": 0.1
     })
 
-    assert result is True
+    assert success is True
     assert actions.call_move_service.call_count == 2
 
     # dest top = 0.0 + 0.01 (half of 0.02 tray height) = 0.01
@@ -450,9 +450,9 @@ def test_handle_pickup_failure_when_coords_missing(actions):
 
     actions.get_static_object_coords = MagicMock(return_value=None)
 
-    result = actions.handlers['pickup']({"target": "unknown_object"})
+    success, message = actions.handlers['pickup']({"target": "unknown_object"})
 
-    assert result is False
+    assert success is False
 
 
 def test_handle_move_arm_unknown_orientation_fails(actions):
@@ -461,9 +461,9 @@ def test_handle_move_arm_unknown_orientation_fails(actions):
     actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
     actions.get_orientation_preset = MagicMock(return_value=None)
 
-    result = actions.handlers['move_arm']({"target": "cube", "orientation": "not_a_real_preset"})
+    success, message = actions.handlers['move_arm']({"target": "cube", "orientation": "not_a_real_preset"})
 
-    assert result is False
+    assert success is False
 
 
 # held_object tracking: pickup sets it, dropoff clears it / falls back to it
@@ -475,9 +475,9 @@ def test_pickup_sets_held_object(actions):
     actions.call_move_service = MagicMock(return_value={"success": True})
     actions.attach_object = MagicMock(return_value=True)
 
-    result = actions.handlers['pickup']({"target": "red_cube"})
+    success, message = actions.handlers['pickup']({"target": "red_cube"})
 
-    assert result is True
+    assert success is True
     assert actions.held_object == "red_cube"
     # unconstrained by default, same as before 'orientation' support was added
     move_call = actions.call_move_service.call_args[0]
@@ -496,9 +496,9 @@ def test_pickup_applies_orientation_when_explicitly_given(actions):
     actions.call_move_service = MagicMock(return_value={"success": True})
     actions.attach_object = MagicMock(return_value=True)
 
-    result = actions.handlers['pickup']({"target": "red_cube", "orientation": "some_orientation_preset"})
+    success, message = actions.handlers['pickup']({"target": "red_cube", "orientation": "some_orientation_preset"})
 
-    assert result is True
+    assert success is True
     move_call = actions.call_move_service.call_args[0]
     assert move_call == (1.0, 2.0, 3.0, True, 1.66, -0.04, -1.57)
     actions.get_orientation_preset.assert_called_once_with("some_orientation_preset")
@@ -517,12 +517,12 @@ def test_pickup_applies_grasp_offset_from_object_center(actions):
     actions.call_move_service = MagicMock(return_value={"success": True})
     actions.attach_object = MagicMock(return_value=True)
 
-    result = actions.handlers['pickup']({
+    success, message = actions.handlers['pickup']({
         "target": "red_cube", "orientation": "some_orientation_preset",
         "grasp_offset": {"x": -0.04, "y": -0.01, "z": 0.007}
     })
 
-    assert result is True
+    assert success is True
     move_call = actions.call_move_service.call_args[0]
     assert move_call[0:3] == (pytest.approx(0.96), pytest.approx(1.99), pytest.approx(3.007))
 
@@ -533,9 +533,9 @@ def test_pickup_fails_on_unknown_orientation(actions):
     actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
     actions.get_orientation_preset = MagicMock(return_value=None)
 
-    result = actions.handlers['pickup']({"target": "red_cube", "orientation": "not_a_real_preset"})
+    success, message = actions.handlers['pickup']({"target": "red_cube", "orientation": "not_a_real_preset"})
 
-    assert result is False
+    assert success is False
 
 
 # compute_side_grasp_candidates() / verify_grasp_pose()
@@ -552,7 +552,7 @@ def test_compute_side_grasp_candidates_for_box(actions):
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.07, 0.04]}
     }
 
-    candidates = pickup.compute_side_grasp_candidates(actions, target_info)
+    candidates = pickup.compute_side_grasp_candidates(target_info)
 
     assert len(candidates) >= 4
     # first 4 candidates: object's exact center, each yaw offset
@@ -580,7 +580,7 @@ def test_compute_side_grasp_candidates_for_cylinder(actions):
         "shape": {"type": SolidPrimitive.CYLINDER, "dimensions": [0.25, 0.035]}
     }
 
-    candidates = pickup.compute_side_grasp_candidates(actions, target_info)
+    candidates = pickup.compute_side_grasp_candidates(target_info)
 
     assert len(candidates) >= 8
     for cand in candidates[:8]:
@@ -601,7 +601,7 @@ def test_compute_side_grasp_candidates_rejects_unsupported_shape(actions):
         "shape": {"type": SolidPrimitive.SPHERE, "dimensions": [0.03]}
     }
 
-    assert pickup.compute_side_grasp_candidates(actions, target_info) == []
+    assert pickup.compute_side_grasp_candidates(target_info) == []
 
 
 def _mock_ik_response(error_code, joint_positions=None):
@@ -700,9 +700,9 @@ def test_relative_move_ignores_orientation(actions):
     actions.get_orientation_preset = MagicMock()
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
 
-    result = actions.handlers['relative_move']({"vector": "move_upwards", "orientation": "top_down"})
+    success, message = actions.handlers['relative_move']({"vector": "move_upwards", "orientation": "top_down"})
 
-    assert result is True
+    assert success is True
     actions.get_orientation_preset.assert_not_called()
     args, kwargs = actions.call_relative_move_service.call_args
     assert args == (0.0, 0.0, 0.1)
@@ -813,12 +813,12 @@ def test_pickup_side_grasp_uses_first_verified_candidate(actions):
     actions.call_move_service = MagicMock(return_value={"success": True})
     actions.attach_object = MagicMock(return_value=True)
 
-    result = actions.handlers['pickup']({"target": "box", "grasp_style": "side"})
+    success, message = actions.handlers['pickup']({"target": "box", "grasp_style": "side"})
 
-    assert result is True
+    assert success is True
     assert actions.verify_grasp_pose.call_count == 4
     move_call = actions.call_move_service.call_args[0]
-    expected = pickup.compute_side_grasp_candidates(actions, actions.get_object_info.return_value)[3]
+    expected = pickup.compute_side_grasp_candidates(actions.get_object_info.return_value)[3]
     assert move_call[0:3] == expected[0:3]
     assert move_call[3] is True
 
@@ -834,9 +834,9 @@ def test_pickup_side_grasp_fails_if_no_candidate_verifies(actions):
     actions.verify_grasp_pose = MagicMock(return_value=False)
     actions.call_move_service = MagicMock(return_value={"success": True})
 
-    result = actions.handlers['pickup']({"target": "box", "grasp_style": "side"})
+    success, message = actions.handlers['pickup']({"target": "box", "grasp_style": "side"})
 
-    assert result is False
+    assert success is False
     actions.call_move_service.assert_not_called()
 
 
@@ -853,9 +853,9 @@ def test_dropoff_clears_held_object(actions):
     actions.update_object_pose = MagicMock(return_value=True)
     actions.detach_object = MagicMock(return_value=True)
 
-    result = actions.handlers['dropoff']({"target": "red_cube", "destination": "delivery_tray"})
+    success, message = actions.handlers['dropoff']({"target": "red_cube", "destination": "delivery_tray"})
 
-    assert result is True
+    assert success is True
     assert actions.held_object is None
 
 
@@ -884,9 +884,9 @@ def test_dropoff_falls_back_to_held_object_when_target_omitted(actions):
     actions.update_object_pose = MagicMock(return_value=True)
     actions.detach_object = MagicMock(return_value=True)
 
-    result = actions.handlers['dropoff']({"destination": "delivery_tray"})
+    success, message = actions.handlers['dropoff']({"destination": "delivery_tray"})
 
-    assert result is True
+    assert success is True
     # Same release_z as test_handle_dropoff_two_stage_descent_with_stacking:
     # dest top 0.01 + held cube's half-height 0.025 = 0.035, not 0.01 (which
     # is what a silent target_half_height=0.0 fallback would have produced).
@@ -899,9 +899,9 @@ def test_dropoff_falls_back_to_held_object_when_target_omitted(actions):
 def test_pour_requires_target(actions):
     """pour without a target should fail cleanly, not assume anything is held."""
 
-    result = actions.handlers['pour']({})
+    success, message = actions.handlers['pour']({})
 
-    assert result is False
+    assert success is False
 
 
 def test_pour_fails_if_target_not_held(actions):
@@ -909,9 +909,9 @@ def test_pour_fails_if_target_not_held(actions):
 
     actions.held_object = "blue_cube"
 
-    result = actions.handlers['pour']({"target": "red_cube", "destination": "delivery_tray"})
+    success, message = actions.handlers['pour']({"target": "red_cube", "destination": "delivery_tray"})
 
-    assert result is False
+    assert success is False
 
 
 def test_pour_without_destination_or_direction_pours_in_place(actions):
@@ -929,9 +929,9 @@ def test_pour_without_destination_or_direction_pours_in_place(actions):
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
     with patch("kinova_interface.actions.pour.time.sleep"):
-        result = actions.handlers['pour']({"target": "red_cube"})
+        success, message = actions.handlers['pour']({"target": "red_cube"})
 
-    assert result is True
+    assert success is True
     # only the vertical lift - no horizontal transit move at all
     assert actions.call_relative_move_service.call_count == 1
     lift_call = actions.call_relative_move_service.call_args_list[0][0]
@@ -951,9 +951,9 @@ def test_pour_in_place_still_lifts_and_tilts(actions):
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
     with patch("kinova_interface.actions.pour.time.sleep") as mock_sleep:
-        result = actions.handlers['pour']({"target": "red_cube", "tilt_angle": 2.0, "duration": 1.0})
+        success, message = actions.handlers['pour']({"target": "red_cube", "tilt_angle": 2.0, "duration": 1.0})
 
-    assert result is True
+    assert success is True
     mock_sleep.assert_called_once_with(1.0)
     assert actions.call_joint_move_service.call_count == 2
     tilt_call, untilt_call = actions.call_joint_move_service.call_args_list
@@ -981,12 +981,12 @@ def test_pour_lifts_transits_tilts_and_returns(actions):
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
     with patch("kinova_interface.actions.pour.time.sleep") as mock_sleep:
-        result = actions.handlers['pour']({
+        success, message = actions.handlers['pour']({
             "target": "red_cube", "destination": "delivery_tray",
             "lift_height": 0.14, "tilt_angle": 2.36, "duration": 2.0
         })
 
-    assert result is True
+    assert success is True
     mock_sleep.assert_called_once_with(2.0)
 
     assert actions.call_relative_move_service.call_count == 2
@@ -1018,12 +1018,13 @@ def test_pour_fails_if_lift_fails(actions):
         "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
     })
-    actions.call_relative_move_service = MagicMock(return_value={"success": False})
+    actions.call_relative_move_service = MagicMock(return_value={"success": False, "message": "MoveIt failed"})
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
-    result = actions.handlers['pour']({"target": "red_cube", "direction": "forward"})
+    success, message = actions.handlers['pour']({"target": "red_cube", "direction": "forward"})
 
-    assert result is False
+    assert success is False
+    assert message == "Failed to lift for pour: MoveIt failed"
     actions.call_joint_move_service.assert_not_called()
 
 
@@ -1037,12 +1038,12 @@ def test_pour_fails_if_tilt_fails(actions):
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
     })
     actions.call_relative_move_service = MagicMock(return_value={"success": True})
-    actions.call_joint_move_service = MagicMock(return_value=None)
+    actions.call_joint_move_service = MagicMock(return_value={"success": False, "message": "MoveIt failed"})
 
     with patch("kinova_interface.actions.pour.time.sleep") as mock_sleep:
-        result = actions.handlers['pour']({"target": "red_cube", "direction": "forward"})
+        success, message = actions.handlers['pour']({"target": "red_cube", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     mock_sleep.assert_not_called()
 
 
@@ -1050,9 +1051,9 @@ def test_pour_fails_if_tilt_fails(actions):
 def test_thrust_requires_target(actions):
     """thrust without a target should fail cleanly, not assume anything is held."""
 
-    result = actions.handlers['thrust']({})
+    success, message = actions.handlers['thrust']({})
 
-    assert result is False
+    assert success is False
 
 
 def test_thrust_fails_if_target_not_held(actions):
@@ -1060,9 +1061,9 @@ def test_thrust_fails_if_target_not_held(actions):
 
     actions.held_object = "blue_cube"
 
-    result = actions.handlers['thrust']({"target": "red_cube"})
+    success, message = actions.handlers['thrust']({"target": "red_cube"})
 
-    assert result is False
+    assert success is False
 
 
 def test_thrust_requires_destination_or_direction(actions):
@@ -1071,9 +1072,9 @@ def test_thrust_requires_destination_or_direction(actions):
 
     actions.held_object = "red_cube"
 
-    result = actions.handlers['thrust']({"target": "red_cube"})
+    success, message = actions.handlers['thrust']({"target": "red_cube"})
 
-    assert result is False
+    assert success is False
 
 
 def test_thrust_raises_spins_and_extends(actions):
@@ -1116,9 +1117,9 @@ def test_thrust_raises_spins_and_extends(actions):
     actions.check_joint_state_validity = MagicMock(return_value=True)
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
 
-    result = actions.handlers['thrust']({"target": "red_cube", "destination": "target_spot"})
+    success, message = actions.handlers['thrust']({"target": "red_cube", "destination": "target_spot"})
 
-    assert result is True
+    assert success is True
     raise_call, spin_call, extend_call = actions.call_joint_move_service.call_args_list
 
     assert raise_call[0][0] == [pytest.approx(face_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
@@ -1139,9 +1140,9 @@ def test_thrust_fails_if_raise_unsolvable(actions):
     actions.solve_planar_reach = MagicMock(return_value=None)
     actions.call_joint_move_service = MagicMock()
 
-    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     actions.call_joint_move_service.assert_not_called()
 
 
@@ -1159,9 +1160,9 @@ def test_thrust_fails_if_raise_pose_in_collision(actions):
     actions.check_joint_state_validity = MagicMock(return_value=False)
     actions.call_joint_move_service = MagicMock()
 
-    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     actions.call_joint_move_service.assert_not_called()
 
 
@@ -1185,9 +1186,9 @@ def test_thrust_fails_if_spin_pose_in_collision(actions):
     # just the real raise/spin checks it's actually testing.
     actions._find_max_planar_reach_distance = MagicMock(return_value=0.4)
 
-    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     # the raise itself should still have been attempted (it was valid)
     assert actions.call_joint_move_service.call_count == 1
 
@@ -1216,9 +1217,9 @@ def test_thrust_fails_if_extend_unsolvable(actions):
     # real raise/extend calls it's actually testing.
     actions._find_max_planar_reach_distance = MagicMock(return_value=0.4)
 
-    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     # raise and spin both happen (2 real moves) before the extend fails to solve
     assert actions.call_joint_move_service.call_count == 2
 
@@ -1343,9 +1344,9 @@ def test_thrust_uses_dynamic_distance_when_none_given(actions):
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
     actions._find_max_planar_reach_distance = MagicMock(return_value=0.22)
 
-    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
 
-    assert result is True
+    assert success is True
     actions._find_max_planar_reach_distance.assert_called_once()
     # 'forward' extends straight along the object's own bearing from the
     # arm's base, so the resolved release point should sit 0.22m further
@@ -1370,9 +1371,9 @@ def test_thrust_honors_explicit_distance_without_dynamic_search(actions):
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
     actions._find_max_planar_reach_distance = MagicMock(return_value=0.22)
 
-    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward", "distance": 0.15})
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward", "distance": 0.15})
 
-    assert result is True
+    assert success is True
     actions._find_max_planar_reach_distance.assert_not_called()
 
 
@@ -1392,9 +1393,9 @@ def test_thrust_fails_cleanly_if_no_reachable_distance_found(actions):
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
     actions._find_max_planar_reach_distance = MagicMock(return_value=None)
 
-    result = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     actions.call_joint_move_service.assert_not_called()
 
 
@@ -1402,8 +1403,8 @@ def test_thrust_fails_cleanly_if_no_reachable_distance_found(actions):
 def test_push_requires_target_and_destination(actions):
     """push without both a target and a destination should fail cleanly."""
 
-    assert actions.handlers['push']({"target": "red_cube"}) is False
-    assert actions.handlers['push']({"destination": "delivery_tray"}) is False
+    assert actions.handlers['push']({"target": "red_cube"})[0] is False
+    assert actions.handlers['push']({"destination": "delivery_tray"})[0] is False
 
 
 def test_push_faces_object_and_extends_shoulder_elbow_only(actions):
@@ -1444,9 +1445,9 @@ def test_push_faces_object_and_extends_shoulder_elbow_only(actions):
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
     actions.update_object_pose = MagicMock(return_value=True)
 
-    result = actions.handlers['push']({"target": "push_block", "destination": "delivery_tray"})
+    success, message = actions.handlers['push']({"target": "push_block", "destination": "delivery_tray"})
 
-    assert result is True
+    assert success is True
 
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[0][0] == ("push_block", True)
@@ -1476,9 +1477,9 @@ def test_push_fails_if_contact_reach_unsolvable(actions):
     actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_joint_move_service = MagicMock()
 
-    result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     actions.call_joint_move_service.assert_not_called()
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[0][0] == ("push_block", True)
@@ -1497,9 +1498,9 @@ def test_push_fails_if_contact_reach_error_too_large(actions):
     actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.1, 0.1, 0.5), 0.3))
     actions.set_collision_allowed = MagicMock(return_value=True)
 
-    result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[-1][0] == ("push_block", False)
 
@@ -1534,9 +1535,9 @@ def test_push_allows_target_object_contact_before_checking(actions):
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
     actions.update_object_pose = MagicMock(return_value=True)
 
-    result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
-    assert result is True
+    assert success is True
     assert actions.set_collision_allowed.call_args_list[0][0] == ("push_block", True)
     # allowed BEFORE the geometry/validity checks ever run
     assert call_order.index("set_collision_allowed") < call_order.index("solve_planar_reach")
@@ -1558,9 +1559,9 @@ def test_push_fails_if_contact_pose_in_collision(actions):
     actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_joint_move_service = MagicMock()
 
-    result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     actions.call_joint_move_service.assert_not_called()
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[0][0] == ("push_block", True)
@@ -1592,9 +1593,9 @@ def test_push_fails_if_extend_reach_unsolvable(actions):
     # real contact/extend calls it's actually testing.
     actions._find_max_planar_reach_distance = MagicMock(return_value=0.2)
 
-    result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     actions.call_joint_move_service.assert_not_called()
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[0][0] == ("push_block", True)
@@ -1615,11 +1616,11 @@ def test_push_reverts_collision_allowance_if_real_move_fails(actions):
     actions.check_joint_state_validity = MagicMock(return_value=True)
     actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
-    actions.call_joint_move_service = MagicMock(return_value={"success": False})
+    actions.call_joint_move_service = MagicMock(return_value={"success": False, "message": "MoveIt failed"})
 
-    result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[0][0] == ("push_block", True)
     assert allow_calls[-1][0] == ("push_block", False)
@@ -1645,9 +1646,9 @@ def test_push_uses_dynamic_distance_when_none_given(actions):
     actions.update_object_pose = MagicMock(return_value=True)
     actions._find_max_planar_reach_distance = MagicMock(return_value=0.12)
 
-    result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
-    assert result is True
+    assert success is True
     actions._find_max_planar_reach_distance.assert_called_once()
     call_args, call_kwargs = actions._find_max_planar_reach_distance.call_args
     assert call_args[0] == {"x": origin_x, "y": origin_y, "z": origin_z}
@@ -1672,9 +1673,9 @@ def test_push_honors_explicit_distance_without_dynamic_search(actions):
     actions.update_object_pose = MagicMock(return_value=True)
     actions._find_max_planar_reach_distance = MagicMock(return_value=0.12)
 
-    result = actions.handlers['push']({"target": "push_block", "direction": "forward", "distance": 0.08})
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward", "distance": 0.08})
 
-    assert result is True
+    assert success is True
     actions._find_max_planar_reach_distance.assert_not_called()
 
 
@@ -1694,9 +1695,9 @@ def test_push_fails_cleanly_and_reverts_collision_allowance_if_no_reachable_dist
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
     actions._find_max_planar_reach_distance = MagicMock(return_value=None)
 
-    result = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
-    assert result is False
+    assert success is False
     actions.call_joint_move_service.assert_not_called()
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[0][0] == ("push_block", True)
@@ -1788,9 +1789,9 @@ def test_push_fails_if_target_unresolved(actions):
 
     actions.get_object_info = MagicMock(return_value=None)
 
-    result = actions.handlers['push']({"target": "unknown", "destination": "delivery_tray"})
+    success, message = actions.handlers['push']({"target": "unknown", "destination": "delivery_tray"})
 
-    assert result is False
+    assert success is False
 
 
 # _on_joint_state() / call_joint_move_service_async() / wait_for_joint_crossing()
@@ -1861,9 +1862,9 @@ def test_wait_for_joint_crossing_times_out_if_never_crossed(actions):
 def test_throw_requires_target(actions):
     """throw without a target should fail cleanly, not assume anything is held."""
 
-    result = actions.handlers['throw']({"destination": "delivery_tray"})
+    success, message = actions.handlers['throw']({"destination": "delivery_tray"})
 
-    assert result is False
+    assert success is False
 
 
 def test_throw_fails_if_target_not_held(actions):
@@ -1871,9 +1872,9 @@ def test_throw_fails_if_target_not_held(actions):
 
     actions.held_object = "blue_cube"
 
-    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+    success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
-    assert result is False
+    assert success is False
 
 
 def test_throw_requires_destination(actions):
@@ -1881,9 +1882,9 @@ def test_throw_requires_destination(actions):
 
     actions.held_object = "red_cube"
 
-    result = actions.handlers['throw']({"target": "red_cube"})
+    success, message = actions.handlers['throw']({"target": "red_cube"})
 
-    assert result is False
+    assert success is False
 
 
 def _mock_future(result=None):
@@ -1916,9 +1917,9 @@ def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
     actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
 
-    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+    success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
-    assert result is True
+    assert success is True
 
     # destination == target here (same mocked get_object_info return), so
     # the release point is (0.5, 0.1) - the bearing from the arm's base
@@ -1963,9 +1964,9 @@ def test_throw_fails_if_no_joint_state_available_to_rotate(actions):
     actions.latest_joint_positions = None
     actions.call_joint_move_service = MagicMock()
 
-    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+    success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
-    assert result is False
+    assert success is False
     actions.call_joint_move_service.assert_not_called()
 
 
@@ -1981,12 +1982,12 @@ def test_throw_fails_if_rotate_fails(actions):
     actions.latest_joint_positions = {
         'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
     }
-    actions.call_joint_move_service = MagicMock(return_value=None)
+    actions.call_joint_move_service = MagicMock(return_value={"success": False, "message": "MoveIt failed"})
     actions.call_joint_move_service_async = MagicMock()
 
-    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+    success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
-    assert result is False
+    assert success is False
     assert actions.call_joint_move_service.call_count == 1
     actions.call_joint_move_service_async.assert_not_called()
 
@@ -2003,12 +2004,12 @@ def test_throw_fails_if_windup_fails(actions):
     actions.latest_joint_positions = {
         'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
     }
-    actions.call_joint_move_service = MagicMock(side_effect=[{"success": True}, None])
+    actions.call_joint_move_service = MagicMock(side_effect=[{"success": True}, {"success": False, "message": "MoveIt failed"}])
     actions.call_joint_move_service_async = MagicMock()
 
-    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+    success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
-    assert result is False
+    assert success is False
     actions.call_joint_move_service_async.assert_not_called()
 
 
@@ -2030,9 +2031,9 @@ def test_throw_fails_if_release_point_never_crossed(actions):
     actions.wait_for_joint_crossing = MagicMock(return_value=False)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
 
-    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+    success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
-    assert result is False
+    assert success is False
     actions.call_move_gripper_service.assert_not_called()
     assert actions.held_object == "red_cube"
 
@@ -2090,9 +2091,9 @@ def test_push_fails_on_unknown_direction(actions):
     })
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
 
-    result = actions.handlers['push']({"target": "red_cube", "direction": "sideways"})
+    success, message = actions.handlers['push']({"target": "red_cube", "direction": "sideways"})
 
-    assert result is False
+    assert success is False
 
 
 # throw() with 'direction' instead of 'destination'
@@ -2116,9 +2117,9 @@ def test_throw_with_direction(actions):
     actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
 
-    result = actions.handlers['throw']({"target": "red_cube", "direction": "left", "distance": 0.3})
+    success, message = actions.handlers['throw']({"target": "red_cube", "direction": "left", "distance": 0.3})
 
-    assert result is True
+    assert success is True
 
     # left = bearing (1,0) rotated +90 degrees -> (0,1), scaled by distance,
     # giving release point (1.0, 0.3); face yaw points at that from the arm's base
@@ -2141,9 +2142,9 @@ def test_throw_fails_on_unknown_direction(actions):
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
     })
 
-    result = actions.handlers['throw']({"target": "red_cube", "direction": "sideways"})
+    success, message = actions.handlers['throw']({"target": "red_cube", "direction": "sideways"})
 
-    assert result is False
+    assert success is False
 
 
 def test_throw_fails_if_fling_does_not_start(actions):
@@ -2164,9 +2165,9 @@ def test_throw_fails_if_fling_does_not_start(actions):
     actions.call_joint_move_service_async = MagicMock(return_value=None)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
 
-    result = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+    success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
-    assert result is False
+    assert success is False
     actions.call_move_gripper_service.assert_not_called()
     assert actions.held_object == "red_cube"
 

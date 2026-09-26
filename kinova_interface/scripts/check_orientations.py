@@ -6,7 +6,7 @@ Also shows which spots above the table each orientation can reach.
 Moves to a grid of points with every orientation and prints one line per move:
   'ok 0.8 P'  got there, 0.8 deg off, planned by Pilz ('R' = RRT* fallback)
   'BAD 14.3 P' moved, but ended up in the wrong orientation or position
-  'FAIL'      couldn't get there (often just out of reach)
+  'FAIL (..)' couldn't get there, with the reason (often just out of reach)
 --ik-only only checks reachability ('ik ok' / 'no IK') and never moves.
 See docs/testing.md for how to read the results.
 
@@ -60,8 +60,8 @@ def _check(actions, tf_buffer, x, y, z, target, args):
 
     motion_params = actions.build_motion_params(args.speed)
     result = actions.call_move_service(x, y, z, True, roll, pitch, yaw, motion_params)
-    if not (result and result['success']):
-        return 'FAIL', False
+    if not result['success']:
+        return f"FAIL ({result['message']})", False
     planner = 'P' if 'Pilz PTP' in result['message'] else 'R'
 
     tf = tf_buffer.lookup_transform(BASE_FRAME, TOOL_FRAME, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=1.0))

@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from kinova_interface.actions.arm_actions import ArmActions
 
 
-def run(ctx: 'ArmActions', params: dict) -> bool:
+def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     """Raise a held object and thrust it toward a destination -
     reuses the exact same single-plane mechanism as 'push' (see
     docs/push-motion-reference.md): joint_1 fixed per stage, wrist
@@ -50,22 +50,18 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     registered position, the same as 'push'."""
     target_name = params.get('target')
     if not target_name:
-        ctx.get_logger().error("thrust action requires 'target' naming the held object")
-        return False
+        return False, "thrust action requires 'target' naming the held object"
     if target_name != ctx.held_object:
-        ctx.get_logger().error(f"Cannot thrust '{target_name}': held object is '{ctx.held_object}'")
-        return False
+        return False, f"Cannot thrust '{target_name}': held object is '{ctx.held_object}'"
 
     destination_name = params.get('destination')
     direction = params.get('direction')
     if not destination_name and not direction:
-        ctx.get_logger().error("thrust action requires either 'destination' or 'direction'")
-        return False
+        return False, "thrust action requires either 'destination' or 'direction'"
 
     target_info = ctx.get_object_info(target_name)
     if not target_info:
-        ctx.get_logger().error(f"Could not resolve held object '{target_name}' for thrust")
-        return False
+        return False, f"Could not resolve held object '{target_name}' for thrust"
     origin = target_info['pose']['position']
 
     # Fast by default (unlike push/pour's more careful pace) - a
@@ -85,19 +81,16 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     face_yaw = math.atan2(origin['y'], origin['x'])
     raise_solved = ctx.solve_planar_reach(face_yaw, origin['x'], origin['y'], raise_z)
     if raise_solved is None or raise_solved[3] > ctx._PLANAR_REACH_MAX_ERROR:
-        ctx.get_logger().error(f"Could not solve a planar reach to raise '{target_name}'")
-        return False
+        return False, f"Could not solve a planar reach to raise '{target_name}'"
     raise_shoulder, raise_elbow, _, _ = raise_solved
     raise_joints = [face_yaw, raise_shoulder, raise_elbow, *ctx._PLANAR_REACH_WRIST]
     if not ctx.check_joint_state_validity(raise_joints):
-        ctx.get_logger().error(f"Raised pose for '{target_name}' is in collision")
-        return False
+        return False, f"Raised pose for '{target_name}' is in collision"
 
     if destination_name:
         dest_info = ctx.get_object_info(destination_name)
         if not dest_info:
-            ctx.get_logger().error(f"Could not resolve thrust destination '{destination_name}'")
-            return False
+            return False, f"Could not resolve thrust destination '{destination_name}'"
         release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
     else:
         requested_distance = params.get('distance')
@@ -110,33 +103,26 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
             # (see _find_max_planar_reach_distance).
             distance = ctx._find_max_planar_reach_distance(origin, direction, raise_z, raise_shoulder, raise_elbow)
             if distance is None:
-                ctx.get_logger().error(
-                    f"No reachable thrust distance found for '{target_name}' in direction '{direction}'"
-                )
-                return False
+                return False, f"No reachable thrust distance found for '{target_name}' in direction '{direction}'"
         offset = resolve_direction_offset(origin['x'], origin['y'], direction, distance)
         if offset is None:
-            ctx.get_logger().error(f"Unknown thrust direction '{direction}'")
-            return False
+            return False, f"Unknown thrust direction '{direction}'"
         release_x, release_y = offset
 
     r = ctx.call_joint_move_service(raise_joints, motion_params=motion_params)
-    if not (r and r['success']):
-        ctx.get_logger().error(f"Failed to raise '{target_name}'")
-        return False
+    if not r['success']:
+        return False, f"Failed to raise '{target_name}': {r['message']}"
 
     # 2. Spin to face the thrust direction - joint_1 only,
     # shoulder/elbow held exactly where the raise left them
     thrust_yaw = math.atan2(release_y, release_x)
     spin_joints = [thrust_yaw, raise_shoulder, raise_elbow, *ctx._PLANAR_REACH_WRIST]
     if not ctx.check_joint_state_validity(spin_joints):
-        ctx.get_logger().error(f"Spin pose for '{target_name}' is in collision")
-        return False
+        return False, f"Spin pose for '{target_name}' is in collision"
 
     r = ctx.call_joint_move_service(spin_joints, motion_params=motion_params)
-    if not (r and r['success']):
-        ctx.get_logger().error(f"Failed to spin to face the thrust direction for '{target_name}'")
-        return False
+    if not r['success']:
+        return False, f"Failed to spin to face the thrust direction for '{target_name}': {r['message']}"
 
     # 3. Extend toward the destination - same height, seeded at the
     # spin position so it stays a small, local adjustment
@@ -145,19 +131,15 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
         seed_shoulder=raise_shoulder, seed_elbow=raise_elbow
     )
     if extend_solved is None or extend_solved[3] > ctx._PLANAR_REACH_MAX_ERROR:
-        ctx.get_logger().error(f"Could not solve a planar reach to thrust '{target_name}' to its destination")
-        return False
+        return False, f"Could not solve a planar reach to thrust '{target_name}' to its destination"
     extend_shoulder, extend_elbow, _, _ = extend_solved
     extend_joints = [thrust_yaw, extend_shoulder, extend_elbow, *ctx._PLANAR_REACH_WRIST]
     if not ctx.check_joint_state_validity(extend_joints):
-        ctx.get_logger().error(f"Thrust end pose for '{target_name}' is in collision")
-        return False
+        return False, f"Thrust end pose for '{target_name}' is in collision"
 
     r = ctx.call_joint_move_service(extend_joints, motion_params=motion_params)
-    if not (r and r['success']):
-        ctx.get_logger().error(f"Failed to thrust '{target_name}' to its destination")
-        return False
+    if not r['success']:
+        return False, f"Failed to thrust '{target_name}' to its destination: {r['message']}"
 
     where = f"toward '{destination_name}'" if destination_name else direction
-    ctx.get_logger().info(f"Thrust '{target_name}' {where}")
-    return True
+    return True, f"Thrust '{target_name}' {where}"

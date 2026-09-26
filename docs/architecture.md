@@ -48,7 +48,7 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 - Loads a recipe two ways: a static file via the `recipe` launch parameter, or a dynamic JSON string via the `/execute_recipe` service, which is exactly what the proxy calls at runtime.
 - Iterates recipe steps in order, stopping at the first failure.
 - Dispatches each step to an action in `kinova_interface/actions/` (see the layout below). Actions call the hardware and environment nodes' services, and query MoveIt services directly (`/compute_ik`, `/compute_fk`, `/check_state_validity`, `/get_planning_scene`, `/apply_planning_scene`), but never execute motion themselves.
-- On failure, `/execute_recipe` returns the failing step and action (for example `Recipe failed at step 2 (pickup)`). For why it failed, check the node's logs.
+- Each action returns `(success, message)`. On failure, `/execute_recipe` returns the failing step, its action and the reason, for example `Recipe failed at step 2 (pickup): Failed to move to object position: <MoveIt error>`.
 
 **`telemetry_node.py`, pure aggregation:**
 - Subscribes to `/status/node_report`, publishes an aggregated `/system/status` every 0.5s using a worst-case-wins rule across all tracked nodes.
@@ -75,7 +75,7 @@ The proxy's own components (`llm_proxy.py`, the LLM adapters, `ros2_bridge_ws`, 
 | `GetOrientationPreset` | `preset_name` (string) | `roll`, `pitch`, `yaw`, `success`, `message` |
 | `GetRobotParameters` | (none) | `object_list[]`, `movement_names[]`, `orientation_names[]` |
 | `JointMove` | `joint_positions[]` (float64), `wait_for_completion` (bool), `relative` (bool), `motion_params` (`MotionParams`) | `success`, `message` |
-| `ExecuteRecipe` | `recipe_json` (string) | `success`, `message` (the failing step and action on failure) |
+| `ExecuteRecipe` | `recipe_json` (string) | `success`, `message` (the failing step, action and reason on failure) |
 
 `MoveArm`'s `has_orientation` defaults to `false`: no orientation constraint, MoveIt picks the orientation, and the move is planned with OMPL RRT* since Pilz needs a full pose. `RelativeMove` always keeps the current orientation (plus any deltas), so it has no such flag.
 

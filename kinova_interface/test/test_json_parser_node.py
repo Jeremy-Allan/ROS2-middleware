@@ -150,9 +150,9 @@ def test_execute_recipe(node):
     }
 
     node.arm_actions.handlers = {
-        'home': MagicMock(return_value=True),
-        'move_arm': MagicMock(return_value=True),
-        'gripper': MagicMock(return_value=True),
+        'home': MagicMock(return_value=(True, "")),
+        'move_arm': MagicMock(return_value=(True, "")),
+        'gripper': MagicMock(return_value=(True, "")),
     }
 
     node.publish_status = MagicMock()
@@ -251,7 +251,7 @@ def test_execute_recipe_step_failure_sets_all_success_false(node):
     }
 
     node.arm_actions.handlers = {
-        'pickup': MagicMock(return_value=False),
+        'pickup': MagicMock(return_value=(False, "")),
     }
     node.publish_status = MagicMock()
 
@@ -277,6 +277,7 @@ def test_execute_recipe_unknown_action_fails(node):
         result = node.execute_recipe()
 
     assert result is False
+    assert node.status_text == "Recipe failed at step 1 (not_a_real_action): Unknown action 'not_a_real_action'"
 
 
 def test_execute_recipe_stops_at_first_failure(node):
@@ -291,8 +292,8 @@ def test_execute_recipe_stops_at_first_failure(node):
     }
 
     node.arm_actions.handlers = {
-        'home': MagicMock(return_value=False),
-        'move_arm': MagicMock(return_value=True),
+        'home': MagicMock(return_value=(False, "")),
+        'move_arm': MagicMock(return_value=(True, "")),
     }
     node.publish_status = MagicMock()
 
@@ -341,10 +342,9 @@ def test_reset_environment_callback_failure(node):
 
 # failure messages
 def test_execute_recipe_callback_names_failing_step(node):
-    """The /execute_recipe response should name the failing step and action,
-    not a generic 'check logs' message."""
+    """The /execute_recipe response should name the failing step, its action and why it failed."""
 
-    node.arm_actions.handlers = {'pickup': MagicMock(return_value=False)}
+    node.arm_actions.handlers = {'pickup': MagicMock(return_value=(False, "Failed to close gripper on 'red_cube'"))}
     node.publish_status = MagicMock()
 
     request = MagicMock()
@@ -358,4 +358,4 @@ def test_execute_recipe_callback_names_failing_step(node):
         node.execute_recipe_callback(request, response)
 
     assert response.success is False
-    assert response.message == "Recipe failed at step 1 (pickup)"
+    assert response.message == "Recipe failed at step 1 (pickup): Failed to close gripper on 'red_cube'"

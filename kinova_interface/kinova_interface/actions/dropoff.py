@@ -9,7 +9,7 @@ if TYPE_CHECKING:
     from kinova_interface.actions.arm_actions import ArmActions
 
 
-def run(ctx: 'ArmActions', params: dict) -> bool:
+def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     # Fall back to the object we actually know is held if the recipe
     # step didn't name one - the release-height math below needs the
     # held object's height to avoid releasing into the destination.
@@ -20,13 +20,11 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     release_clearance = 0.02
 
     if not destination_name:
-        ctx.get_logger().error("dropoff action requires 'destination' object name")
-        return False
+        return False, "dropoff action requires 'destination' object name"
 
     dest_info = ctx.get_object_info(destination_name)
     if not dest_info:
-        ctx.get_logger().error(f"Could not resolve destination '{destination_name}'")
-        return False
+        return False, f"Could not resolve destination '{destination_name}'"
 
     dest_pos = dest_info['pose']['position']
     dest_top_z = dest_pos['z'] + object_half_height(dest_info['shape'])
@@ -41,22 +39,19 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
 
     # 1. Move to a hover position above the destination, collision-safe approach
     r = ctx.call_move_service(px, py, release_z + hover_clearance)
-    if not (r and r['success']):
-        ctx.get_logger().error('Failed to move to hover position above destination')
-        return False
+    if not r['success']:
+        return False, f"Failed to move to hover position above destination: {r['message']}"
 
     # 2. Lower to a small clearance above the release height before opening,
     # so the object isn't dropped from the hover height
     r = ctx.call_move_service(px, py, release_z + release_clearance)
-    if not (r and r['success']):
-        ctx.get_logger().error('Failed to lower to release position')
-        return False
+    if not r['success']:
+        return False, f"Failed to lower to release position: {r['message']}"
 
     # 3. Open gripper to release
     rg = ctx.call_move_gripper_service(open_pos)
-    if not (rg and rg['success']):
-        ctx.get_logger().error('Failed to open gripper during place')
-        return False
+    if not rg['success']:
+        return False, f"Failed to open gripper during place: {rg['message']}"
 
     if target_name:
         orient = target_info['pose']['orientation'] if target_info else None
@@ -66,8 +61,7 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
 
         # 4. Add object back to planning scene (detach)
         ctx.detach_object(target_name)
-        ctx.get_logger().info(f"Placed '{target_name}' at '{destination_name}'")
 
     if target_name == ctx.held_object:
         ctx.held_object = None
-    return True
+    return True, f"Placed '{target_name or 'object'}' at '{destination_name}'"

@@ -39,7 +39,7 @@ class ArmActions:
     state. The actions themselves live one per module in this package
     (basic.py, pickup.py, ...), each as a function taking this object as
     `ctx`. Exposes `handlers`, a dict of action name -> callable(params) ->
-    bool, for JsonParserNode to dispatch recipe steps against."""
+    (success, message), for JsonParserNode to dispatch recipe steps against."""
 
     def __init__(self, node):
         self.node = node
@@ -482,16 +482,19 @@ class ArmActions:
         error = math.hypot(rz_final[0] - target_radius, rz_final[1] - target_z)
         return shoulder, elbow, achieved, error
 
+    @staticmethod
+    def _service_result(response):
+        """{'success', 'message'} for a hardware service call. On failure the message says why."""
+        if response is None:
+            return {'success': False, 'message': 'no response'}
+        return {'success': response.success, 'message': response.message}
+
     def call_home_service(self, motion_params=None):
         req = HomeArm.Request()
         req.motion_params = motion_params if motion_params is not None else MotionParams()
         response = call_service(self.home_client, req, '/kinova_hardware_client/home_arm', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
 
-        if response and response.success:
-            return {'success': response.success, 'message': response.message}
-        else:
-            self.get_logger().error(f"Failed to move Home: {response.message if response else 'no response'}")
-            return None
+        return self._service_result(response)
 
     def call_move_service(self, x, y, z, has_orientation=False, roll=0.0, pitch=0.0, yaw=0.0, motion_params=None):
         req = MoveArm.Request()
@@ -506,11 +509,7 @@ class ArmActions:
 
         response = call_service(self.move_arm_client, req, '/kinova_hardware_client/move_arm', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
 
-        if response and response.success:
-            return {'success': response.success, 'message': response.message}
-        else:
-            self.get_logger().error(f"Failed to perform Move to:{x},{y},{z}: {response.message if response else 'no response'}")
-            return None
+        return self._service_result(response)
 
     def call_relative_move_service(self, vx, vy, vz, roll_delta=0.0, pitch_delta=0.0, yaw_delta=0.0, motion_params=None):
         req = RelativeMove.Request()
@@ -524,22 +523,14 @@ class ArmActions:
 
         response = call_service(self.relative_move_client, req, '/kinova_hardware_client/relative_move', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
 
-        if response and response.success:
-            return {'success': response.success, 'message': response.message}
-        else:
-            self.get_logger().error(f"Failed to perform relative move:{vx},{vy},{vz}: {response.message if response else 'no response'}")
-            return None
+        return self._service_result(response)
 
     def call_move_gripper_service(self, position):
         req = MoveGripper.Request()
         req.position = position
         response = call_service(self.move_gripper_client, req, '/kinova_hardware_client/move_gripper', self.get_logger(), timeout_sec=self._GRIPPER_ACTION_TIMEOUT_SEC)
 
-        if response and response.success:
-            return {'success': response.success, 'message': response.message}
-        else:
-            self.get_logger().error(f"Failed to Move Gripper to: {position}: {response.message if response else 'no response'}")
-            return None
+        return self._service_result(response)
 
     def call_joint_move_service(self, joint_positions, motion_params=None, wait_for_completion=True, relative=False):
         """Move to a joint-space target - absolute by default, or a delta
@@ -565,11 +556,7 @@ class ArmActions:
 
         response = call_service(self.joint_move_client, req, '/kinova_hardware_client/joint_move', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
 
-        if response and response.success:
-            return {'success': response.success, 'message': response.message}
-        else:
-            self.get_logger().error(f"Failed to move to joint positions {joint_positions}: {response.message if response else 'no response'}")
-            return None
+        return self._service_result(response)
 
     def call_joint_move_service_async(self, joint_positions, motion_params=None):
         """Fire a joint-space move without waiting for any response at

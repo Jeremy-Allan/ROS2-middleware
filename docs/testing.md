@@ -61,7 +61,7 @@ ros2 run kinova_interface check_orientations.py --speed 0.2     # actually moves
 ```
        top_down at (0.35, +0.20, 0.10): ok 0.8 P
     top_down_90 at (0.45, -0.20, 0.10): ok 2.1 R
- side_level@-90 at (0.25, -0.20, 0.10): FAIL
+ side_level@-90 at (0.25, -0.20, 0.10): FAIL (<planner error>)
 ```
 
 | You see | It means |
@@ -69,7 +69,7 @@ ros2 run kinova_interface check_orientations.py --speed 0.2     # actually moves
 | `ok 0.8 P` | Got there. The orientation was 0.8 degrees off what was asked for. Pilz PTP planned it. |
 | `ok 2.1 R` | Got there, but Pilz couldn't plan it, so the RRT* fallback did. Common near obstacles or awkward poses. |
 | `BAD 14.3 P` | The move "succeeded" but the gripper ended up 14.3 degrees off, or more than 2 cm from the point. Something is wrong with the preset or the convention. |
-| `FAIL` | Neither planner could get there. Usually just out of reach for that orientation. |
+| `FAIL (...)` | Neither planner could get there, with the reason in brackets. Usually just out of reach for that orientation. |
 | `ik ok` / `no IK` | (`--ik-only`) The pose is reachable / not reachable. Nothing moved. |
 
 `FAIL` or `no IK` is normal for some spots: pointing straight down far from the base, for example, may simply be out of reach. That's the map you're after. `BAD` is never normal. The script exits with 0 only if every move was `ok`.

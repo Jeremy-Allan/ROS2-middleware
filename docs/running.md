@@ -79,7 +79,7 @@ source ~/workspace/ros2_kortex_ws/install/setup.bash
 ros2 run kinova_interface run_recipe.py ~/workspace/ros2_kortex_ws/src/ROS2-middleware/kinova_interface/recipes/test_suite/recipe_pickup.json
 ```
 
-It prints `success=...` and `message=...`; on failure the message names the failing step and action (for example `Recipe failed at step 2 (pickup)`); the node's logs have the detailed reason.
+It prints `success=...` and `message=...`; on failure the message names the failing step, its action and why it failed (for example `Recipe failed at step 2 (pickup): Could not resolve pickup target 'red_cube'`).
 
 The service returns once the whole recipe has finished executing, it blocks for the full sequence, not just the first step. For a long recipe this call can take a while to return; that's expected, not a hang.
 

@@ -175,8 +175,7 @@ class JsonParserNode(Node):
         return response
 
     def _dispatch_step(self, index, step):
-        """Look up and run the handler for one recipe step, logging enough to
-        reconstruct what was attempted and what happened for the LLM safety research."""
+        """Look up and run the handler for one recipe step, returns (success, message)."""
         action = step.get('action')
         params = step.get('parameters', {})
         timestamp = time.time()
@@ -187,17 +186,17 @@ class JsonParserNode(Node):
                 f"[recipe_log] step={index+1} timestamp={timestamp:.3f} action={action} "
                 f"parameters={params} accepted=False result=unknown_action"
             )
-            return False
+            return False, f"Unknown action '{action}'"
 
         self.get_logger().info(
             f"[recipe_log] step={index+1} timestamp={timestamp:.3f} action={action} "
             f"parameters={params} accepted=True"
         )
-        success = handler(params)
+        success, message = handler(params)
         self.get_logger().info(
-            f"[recipe_log] step={index+1} action={action} result={'success' if success else 'failure'}"
+            f"[recipe_log] step={index+1} action={action} result={'success' if success else 'failure'} message={message}"
         )
-        return success
+        return success, message
 
     def execute_recipe(self) -> bool:
         """Entry point for recipe execution with guaranteed exception safety
@@ -235,11 +234,11 @@ class JsonParserNode(Node):
             self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
             self._update_node_status(status_text=f"Step {i+1}/{len(steps)}: {step.get('description', '')}")
 
-            success = self._dispatch_step(i, step)
+            success, message = self._dispatch_step(i, step)
 
             if not success:
-                self.get_logger().error(f"Failed at step {i+1}: {step.get('action')}")
-                self.status_text = f"Recipe failed at step {i+1} ({step.get('action')})"
+                self.status_text = f"Recipe failed at step {i+1} ({step.get('action')}): {message}"
+                self.get_logger().error(self.status_text)
                 self.command_success = False
                 self.get_logger().info(
                     f"[recipe_log] event=end timestamp={time.time():.3f} recipe={recipe_name} result=failure"
