@@ -14,9 +14,10 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
         (os.path.join('share', package_name, 'data', 'configs', 'env'), glob('data/configs/env/*.json')),
+        (os.path.join('share', package_name, 'data', 'configs', 'moveit'), glob('data/configs/moveit/*.yaml')),
         (os.path.join('share', package_name, 'recipes'), glob(os.path.join('recipes', '*.json'))),
         (os.path.join('share', package_name, 'recipes', 'test_suite'), glob(os.path.join('recipes', 'test_suite', '*.json'))),
-        (os.path.join('lib', package_name), ['scripts/run_recipe.py']),
+        (os.path.join('lib', package_name), ['scripts/run_recipe.py', 'scripts/check_orientations.py']),
     ],
     
     install_requires=['setuptools'],

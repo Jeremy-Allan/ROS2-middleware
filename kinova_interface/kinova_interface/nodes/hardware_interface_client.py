@@ -4,9 +4,10 @@ from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 import threading
+from collections import namedtuple
 
 from moveit_msgs.action import MoveGroup
-from moveit_msgs.msg import Constraints, PositionConstraint, OrientationConstraint, JointConstraint
+from moveit_msgs.msg import Constraints, PositionConstraint, OrientationConstraint, JointConstraint, MoveItErrorCodes
 from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose
 from control_msgs.action import GripperCommand
@@ -17,11 +18,11 @@ from sensor_msgs.msg import JointState
 from example_interfaces.msg import Bool
 from controller_manager_msgs.srv import ListControllers
 from tf2_ros import Buffer, TransformListener
+from scipy.spatial.transform import Rotation
 
 from kinova_interfaces.msg import ExtendedStatus
 from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
 
-from kinova_interface.utils.geometry import euler_to_quaternion, quaternion_to_euler
 from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES
 
 
@@ -30,14 +31,6 @@ class HardwareInterfaceClient(Node):
     GRIPPER_TIMEOUT_SEC = 10.0
     SERVER_WAIT_TIMEOUT_SEC = 5.0
     PLANNING_GROUP = 'arm'
-    # A tight combined position+orientation constraint reached in one big
-    # jump from a very different starting configuration (e.g. 'pickup' going
-    # straight from home) is a much harder search problem than the same pose
-    # reached through several small incremental moves - bumped from 10/5.0s
-    # after exactly this case (a forced pickup orientation) failed with
-    # generic error 99999 despite being a confirmed-reachable, collision-free
-    # pose (manually verified in RViz).
-    NUM_PLANNING_ATTEMPTS = 20
     ALLOWED_PLANNING_TIME_SEC = 10.0
     SPHERE_TOLERANCE_RADIUS = 0.01
 
@@ -54,6 +47,21 @@ class HardwareInterfaceClient(Node):
     # fast rejection in the fire-and-forget path without turning into a
     # real wait for a genuine, slow motion in progress.
     FIRE_AND_FORGET_REJECTION_WINDOW_SEC = 0.5
+
+    # Arm moves try Pilz PTP first (same path every time, but it won't route
+    # around obstacles), then fall back to OMPL RRT* if it can't plan.
+    Planner = namedtuple('Planner', 'pipeline_id planner_id num_attempts label')
+    PILZ_PTP = Planner('pilz_industrial_motion_planner', 'PTP', 4, 'Pilz PTP')
+    # 4 attempts = one parallel batch, so about ALLOWED_PLANNING_TIME_SEC total
+    RRT_STAR = Planner('ompl', 'RRTstarkConfigDefault', 4, 'OMPL RRT*')
+    # Failed before anything moved, so it's safe to re-plan
+    REPLANNABLE_ERROR_CODES = {
+        MoveItErrorCodes.FAILURE,
+        MoveItErrorCodes.PLANNING_FAILED,
+        MoveItErrorCodes.INVALID_MOTION_PLAN,
+        MoveItErrorCodes.NO_IK_SOLUTION,
+        MoveItErrorCodes.INVALID_GOAL_CONSTRAINTS,
+    }
 
     def __init__(self):
         super().__init__('kinova_hardware_client')
@@ -111,6 +119,7 @@ class HardwareInterfaceClient(Node):
         self.arm_movement_finished = threading.Event()
         self.arm_movement_finished.set()
         self.arm_action_successful = False
+        self.arm_action_error_code = None
         self.arm_action_message = "Ready"
 
         self.gripper_movement_finished = threading.Event()
@@ -236,6 +245,45 @@ class HardwareInterfaceClient(Node):
             response.message = getattr(self, message_attr) if isinstance(message_attr, str) else message_attr()
         return response
 
+    def _plan_and_move(self, send_goal, planners, action_desc, start_failure_message, response, wait=True):
+        """Try each planner in turn until one works, or a failure isn't worth
+        re-planning. send_goal(planner) sends the goal. With wait=False, only waits
+        long enough to catch a fast failure. Returns True if a goal was left
+        running with nobody waiting on it."""
+        for i, planner in enumerate(planners):
+            if i:
+                self.get_logger().warn(
+                    f"{planners[i - 1].label} could not plan ({response.message}), re-planning with {planner.label}"
+                )
+            if not send_goal(planner):
+                response.success = False
+                response.message = start_failure_message
+                return False
+
+            if wait:
+                self._await_action(
+                    self.arm_movement_finished,
+                    self.ACTION_TIMEOUT_SEC,
+                    'arm_action_successful',
+                    'arm_action_message',
+                    action_desc,
+                    response
+                )
+            elif self.arm_movement_finished.wait(timeout=self.FIRE_AND_FORGET_REJECTION_WINDOW_SEC):
+                response.success = self.arm_action_successful
+                response.message = self.arm_action_message
+            else:
+                response.success = True
+                response.message = "Joint move goal accepted (not waiting for completion)"
+                return True
+
+            if response.success:
+                response.message += f" (planned with {planner.label})"
+                return False
+            if self.arm_action_error_code not in self.REPLANNABLE_ERROR_CODES:
+                return False
+        return False
+
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
         self.get_logger().info("Service Call: Home Arm")
@@ -243,19 +291,13 @@ class HardwareInterfaceClient(Node):
         self.status_text = "Sending arm to home position"
         self.publish_status()
 
-        if self.send_home_goal(motion_params=request.motion_params):
-            self._await_action(
-                self.arm_movement_finished,
-                self.ACTION_TIMEOUT_SEC,
-                'arm_action_successful',
-                'arm_action_message',
-                "Arm movement to Home",
-                response
-            )
-        else:
-            response.success = False
-            response.message = "Failed to initiate home movement (action server unavailable)"
-
+        self._plan_and_move(
+            lambda planner: self.send_home_goal(motion_params=request.motion_params, planner=planner),
+            [self.PILZ_PTP, self.RRT_STAR],
+            "Arm movement to Home",
+            "Failed to initiate home movement (action server unavailable)",
+            response,
+        )
         return self.finalize_service_status(response)
 
     def handle_joint_move(self, request, response):
@@ -293,28 +335,16 @@ class HardwareInterfaceClient(Node):
         self.status_text = f"Moving to joint targets {joint_positions}..."
         self.publish_status()
 
-        if not self.send_joint_goal(joint_positions, motion_params=request.motion_params):
-            response.success = False
-            response.message = "Failed to initiate joint move"
-            return self.finalize_service_status(response)
-
-        if not request.wait_for_completion:
-            if self.arm_movement_finished.wait(timeout=self.FIRE_AND_FORGET_REJECTION_WINDOW_SEC):
-                response.success = self.arm_action_successful
-                response.message = self.arm_action_message
-                return self.finalize_service_status(response)
-            response.success = True
-            response.message = "Joint move goal accepted (not waiting for completion)"
-            return response
-
-        self._await_action(
-            self.arm_movement_finished,
-            self.ACTION_TIMEOUT_SEC,
-            'arm_action_successful',
-            'arm_action_message',
+        still_running = self._plan_and_move(
+            lambda planner: self.send_joint_goal(joint_positions, motion_params=request.motion_params, planner=planner),
+            [self.PILZ_PTP, self.RRT_STAR],
             f"Joint move to {joint_positions}",
-            response
+            "Failed to initiate joint move",
+            response,
+            wait=request.wait_for_completion,
         )
+        if still_running:
+            return response
         return self.finalize_service_status(response)
 
     def handle_move_arm(self, request, response):
@@ -326,26 +356,22 @@ class HardwareInterfaceClient(Node):
         self.status_text = f"Moving arm to {x}, {y}, {z}..."
         self.publish_status()
 
-        if self.send_goal(
-            x, y, z,
-            has_orientation=request.has_orientation,
-            roll=request.roll,
-            pitch=request.pitch,
-            yaw=request.yaw,
-            motion_params=request.motion_params,
-        ):
-            self._await_action(
-                self.arm_movement_finished,
-                self.ACTION_TIMEOUT_SEC,
-                'arm_action_successful',
-                'arm_action_message',
-                f"Arm movement to ({x}, {y}, {z})",
-                response
-            )
-        else:
-            response.success = False
-            response.message = "Failed to initiate arm movement (action server unavailable)"
-
+        self._plan_and_move(
+            lambda planner: self.send_goal(
+                x, y, z,
+                has_orientation=request.has_orientation,
+                roll=request.roll,
+                pitch=request.pitch,
+                yaw=request.yaw,
+                motion_params=request.motion_params,
+                planner=planner,
+            ),
+            # Pilz needs a full pose, so position-only goals skip it
+            [self.PILZ_PTP, self.RRT_STAR] if request.has_orientation else [self.RRT_STAR],
+            f"Arm movement to ({x}, {y}, {z})",
+            "Failed to initiate arm movement (action server unavailable)",
+            response,
+        )
         return self.finalize_service_status(response)
 
     def handle_relative_move(self, request, response):
@@ -372,42 +398,32 @@ class HardwareInterfaceClient(Node):
 
             self.get_logger().info(f"Calculated target: {target_x:.3f}, {target_y:.3f}, {target_z:.3f}")
 
-            has_orientation = request.has_orientation
-            target_roll = target_pitch = target_yaw = 0.0
-            if has_orientation:
-                # quaternion_to_euler uses asin() for pitch, capped at +-90deg.
-                # If the arm is already near that boundary (e.g. right after
-                # tilted_for_pour), roll/yaw become coupled and this delta
-                # composition gives unintuitive results. Fine for small nudges
-                # from a normal pose, which is the expected use case.
-                q = trans.transform.rotation
-                curr_roll, curr_pitch, curr_yaw = quaternion_to_euler(q.x, q.y, q.z, q.w)
-                target_roll = curr_roll + request.roll_delta
-                target_pitch = curr_pitch + request.pitch_delta
-                target_yaw = curr_yaw + request.yaw_delta
-                self.get_logger().info(
-                    f"Calculated target orientation (rpy): {target_roll}, {target_pitch}, {target_yaw}"
-                )
+            # Keep the current orientation, plus any deltas. Deltas get odd
+            # near +-90deg pitch (gimbal lock).
+            q = trans.transform.rotation
+            curr_roll, curr_pitch, curr_yaw = Rotation.from_quat([q.x, q.y, q.z, q.w]).as_euler('xyz')
+            target_roll = curr_roll + request.roll_delta
+            target_pitch = curr_pitch + request.pitch_delta
+            target_yaw = curr_yaw + request.yaw_delta
+            self.get_logger().info(
+                f"Calculated target orientation (rpy): {target_roll}, {target_pitch}, {target_yaw}"
+            )
 
-            if self.send_goal(
-                target_x, target_y, target_z,
-                has_orientation=has_orientation,
-                roll=target_roll,
-                pitch=target_pitch,
-                yaw=target_yaw,
-                motion_params=request.motion_params,
-            ):
-                self._await_action(
-                    self.arm_movement_finished,
-                    self.ACTION_TIMEOUT_SEC,
-                    'arm_action_successful',
-                    'arm_action_message',
-                    f"Relative movement to ({target_x}, {target_y}, {target_z})",
-                    response
-                )
-            else:
-                response.success = False
-                response.message = "Failed to initiate relative movement (action server unavailable)"
+            self._plan_and_move(
+                lambda planner: self.send_goal(
+                    target_x, target_y, target_z,
+                    has_orientation=True,
+                    roll=target_roll,
+                    pitch=target_pitch,
+                    yaw=target_yaw,
+                    motion_params=request.motion_params,
+                    planner=planner,
+                ),
+                [self.PILZ_PTP, self.RRT_STAR],
+                f"Relative movement to ({target_x}, {target_y}, {target_z})",
+                "Failed to initiate relative movement (action server unavailable)",
+                response,
+            )
 
         except Exception as e:
             self.get_logger().error(f"Could not calculate relative move: {e}")
@@ -455,15 +471,36 @@ class HardwareInterfaceClient(Node):
         return velocity_scale, acceleration_scale
 
     # --- Action Client Methods ---
-    def send_goal(self, x, y, z, has_orientation=False, roll=0.0, pitch=0.0, yaw=0.0, motion_params=None):
+    def _new_arm_goal(self, planner, motion_params):
+        """An arm MoveGroup goal set up for `planner`, without constraints."""
+        goal_msg = MoveGroup.Goal()
+        request = goal_msg.request
+        request.group_name = self.PLANNING_GROUP
+        request.pipeline_id = planner.pipeline_id
+        request.planner_id = planner.planner_id
+        request.num_planning_attempts = planner.num_attempts
+        request.allowed_planning_time = self.ALLOWED_PLANNING_TIME_SEC
+
+        if motion_params is not None:
+            velocity_scale, acceleration_scale = self.clamp_motion_params(motion_params)
+            if velocity_scale > 0.0:
+                request.max_velocity_scaling_factor = velocity_scale
+            if acceleration_scale > 0.0:
+                request.max_acceleration_scaling_factor = acceleration_scale
+
+        if planner.pipeline_id == self.PILZ_PTP.pipeline_id:
+            # Pilz rejects 0; OMPL treats 0 as full speed, so match that
+            request.max_velocity_scaling_factor = request.max_velocity_scaling_factor or 1.0
+            request.max_acceleration_scaling_factor = request.max_acceleration_scaling_factor or 1.0
+        return goal_msg
+
+    def send_goal(self, x, y, z, planner, has_orientation=False, roll=0.0, pitch=0.0, yaw=0.0, motion_params=None):
+        """Move tool_frame to (x, y, z), optionally with a fixed orientation."""
         if not self.arm_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error('Arm server not available')
             return False
 
-        goal_msg = MoveGroup.Goal()
-        goal_msg.request.group_name = self.PLANNING_GROUP
-        goal_msg.request.num_planning_attempts = self.NUM_PLANNING_ATTEMPTS
-        goal_msg.request.allowed_planning_time = self.ALLOWED_PLANNING_TIME_SEC
+        goal_msg = self._new_arm_goal(planner, motion_params)
 
         pos_constraint = PositionConstraint()
         pos_constraint.header.frame_id = BASE_FRAME
@@ -486,7 +523,7 @@ class HardwareInterfaceClient(Node):
         goal_constraints.position_constraints.append(pos_constraint)
 
         if has_orientation:
-            qx, qy, qz, qw = euler_to_quaternion(roll, pitch, yaw)
+            qx, qy, qz, qw = Rotation.from_euler('xyz', [roll, pitch, yaw]).as_quat()
             orient_constraint = OrientationConstraint()
             orient_constraint.header.frame_id = BASE_FRAME
             orient_constraint.link_name = TOOL_FRAME
@@ -501,26 +538,12 @@ class HardwareInterfaceClient(Node):
             goal_constraints.orientation_constraints.append(orient_constraint)
 
         goal_msg.request.goal_constraints.append(goal_constraints)
+        return self._dispatch_arm_goal(goal_msg)
 
-        if motion_params is not None:
-            velocity_scale, acceleration_scale = self.clamp_motion_params(motion_params)
-            if velocity_scale > 0.0:
-                goal_msg.request.max_velocity_scaling_factor = velocity_scale
-            if acceleration_scale > 0.0:
-                goal_msg.request.max_acceleration_scaling_factor = acceleration_scale
+    def send_home_goal(self, planner, motion_params=None):
+        return self.send_joint_goal(self.HOME_JOINT_POSITIONS, motion_params=motion_params, planner=planner)
 
-        self.arm_movement_finished.clear()
-        future = self.arm_client.send_goal_async(
-            goal_msg,
-            feedback_callback=self.arm_feedback_callback
-        )
-        future.add_done_callback(self.goal_response_callback)
-        return True
-
-    def send_home_goal(self, motion_params=None):
-        return self.send_joint_goal(self.HOME_JOINT_POSITIONS, motion_params=motion_params)
-
-    def send_joint_goal(self, joint_positions, motion_params=None):
+    def send_joint_goal(self, joint_positions, planner, motion_params=None):
         """Plan and execute a move to an absolute target for each of
         joint_1..joint_6, the same JointConstraint-based approach send_home_goal
         already used, just parameterized instead of hardcoded to home."""
@@ -528,10 +551,7 @@ class HardwareInterfaceClient(Node):
             self.get_logger().error('Arm server not available (Joint Move)')
             return False
 
-        goal_msg = MoveGroup.Goal()
-        goal_msg.request.group_name = self.PLANNING_GROUP
-        goal_msg.request.num_planning_attempts = self.NUM_PLANNING_ATTEMPTS
-        goal_msg.request.allowed_planning_time = self.ALLOWED_PLANNING_TIME_SEC
+        goal_msg = self._new_arm_goal(planner, motion_params)
 
         constraints = []
         for name, pos in zip(JOINT_NAMES, joint_positions):
@@ -546,15 +566,11 @@ class HardwareInterfaceClient(Node):
         goal_constraints = Constraints()
         goal_constraints.joint_constraints = constraints
         goal_msg.request.goal_constraints.append(goal_constraints)
+        return self._dispatch_arm_goal(goal_msg)
 
-        if motion_params is not None:
-            velocity_scale, acceleration_scale = self.clamp_motion_params(motion_params)
-            if velocity_scale > 0.0:
-                goal_msg.request.max_velocity_scaling_factor = velocity_scale
-            if acceleration_scale > 0.0:
-                goal_msg.request.max_acceleration_scaling_factor = acceleration_scale
-
+    def _dispatch_arm_goal(self, goal_msg):
         self.arm_movement_finished.clear()
+        self.arm_action_error_code = None
         future = self.arm_client.send_goal_async(
             goal_msg,
             feedback_callback=self.arm_feedback_callback
@@ -606,6 +622,7 @@ class HardwareInterfaceClient(Node):
         try:
             result = future.result().result
             error_code = result.error_code.val
+            self.arm_action_error_code = error_code
 
             if error_code == result.error_code.SUCCESS:
                 self.get_logger().info('Movement complete!')

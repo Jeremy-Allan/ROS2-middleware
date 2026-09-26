@@ -22,7 +22,7 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     'destination'/'direction' first if one is given. Assumes 'target'
     is already grasped - fails cleanly rather than guessing if it
     isn't - and, importantly, assumes it was grasped in a known,
-    level orientation (e.g. via pickup's 'side_grasp_flat' preset),
+    level orientation (e.g. via pickup's grasp_style='side'),
     which lift/transit below then preserve exactly rather than assume
     or recompute.
 
@@ -43,7 +43,7 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
 
     The actual tilt is a pure joint-space delta on joint_6 alone (like
     'throw's wind-up/fling), not a Cartesian orientation change -
-    deliberately: 'side_grasp_flat' holds the wrist at roughly a 90
+    deliberately: a side grasp holds the wrist at roughly a 90
     degree roll, and composing a Cartesian relative orientation delta
     from there hits exactly the asin()-based gimbal-lock-adjacent
     coupling that handle_relative_move's own docstring already warns
@@ -90,7 +90,7 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     # orientation it was grasped in exactly unchanged (a zero-delta
     # relative move - orientation is preserved, never recomputed)
     lift_height = float(params.get('lift_height', POUR_DEFAULT_LIFT_HEIGHT))
-    r = ctx.call_relative_move_service(0.0, 0.0, lift_height, True, 0.0, 0.0, 0.0, motion_params)
+    r = ctx.call_relative_move_service(0.0, 0.0, lift_height, motion_params=motion_params)
     if not (r and r['success']):
         ctx.get_logger().error('Failed to lift for pour')
         return False
@@ -101,7 +101,7 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     # given, since release_x/release_y then equal origin exactly.
     dx, dy = release_x - origin['x'], release_y - origin['y']
     if dx != 0.0 or dy != 0.0:
-        r = ctx.call_relative_move_service(dx, dy, 0.0, True, 0.0, 0.0, 0.0, motion_params)
+        r = ctx.call_relative_move_service(dx, dy, 0.0, motion_params=motion_params)
         if not (r and r['success']):
             ctx.get_logger().error('Failed to move above pour destination')
             return False

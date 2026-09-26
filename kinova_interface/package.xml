@@ -22,8 +22,12 @@
   <depend>tf2_ros</depend>
   <depend>rcl_interfaces</depend>
   <depend>ament_index_python</depend>
+  <exec_depend>python3-scipy</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>moveit_configs_utils</exec_depend>
+  <exec_depend>kinova_gen3_lite_moveit_config</exec_depend>
+  <exec_depend>pilz_industrial_motion_planner</exec_depend>
 
   <!-- Custom Services Package -->
   <depend>kinova_interfaces</depend>
