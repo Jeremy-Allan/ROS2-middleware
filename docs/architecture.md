@@ -68,7 +68,7 @@ The proxy's own components (`llm_proxy.py`, the LLM adapters, `ros2_bridge_ws`, 
 | `HomeArm` | `motion_params` (`MotionParams`) | `success`, `message` |
 | `MoveArm` | `target_position` (`Point`), `has_orientation` (bool), `roll`, `pitch`, `yaw` (float64), `motion_params` (`MotionParams`) | `success`, `message` |
 | `MoveGripper` | `position` (float64) | `success`, `message` |
-| `RelativeMove` | `vx`, `vy`, `vz` (float64), `has_orientation` (bool), `roll_delta`, `pitch_delta`, `yaw_delta` (float64), `motion_params` (`MotionParams`) | `success`, `message` |
+| `RelativeMove` | `vx`, `vy`, `vz` (float64), `roll_delta`, `pitch_delta`, `yaw_delta` (float64), `motion_params` (`MotionParams`) | `success`, `message` |
 | `GetObjectCoordinates` | `object_id` (string) | `x`, `y`, `z`, `success`, `message` |
 | `GetObjectInfo` | `object_id` (string) | `pose` (`Pose`), `shape` (`SolidPrimitive`), `success`, `message` |
 | `GetRelativeMovement` | `move_id` (string) | `x`, `y`, `z`, `success`, `message` |
@@ -77,13 +77,13 @@ The proxy's own components (`llm_proxy.py`, the LLM adapters, `ros2_bridge_ws`, 
 | `JointMove` | `joint_positions[]` (float64), `wait_for_completion` (bool), `relative` (bool), `motion_params` (`MotionParams`) | `success`, `message` |
 | `ExecuteRecipe` | `recipe_json` (string) | `success`, `message` (the failing step and action on failure) |
 
-`has_orientation` defaults to `false`, so existing callers that never set it get identical behavior to before this field existed, no orientation constraint applied, MoveIt picks whatever orientation it wants. `MoveArm`'s request fields changed shape (`x`/`y`/`z` became `target_position`), a breaking change to the wire format, not additive.
+`MoveArm`'s `has_orientation` defaults to `false`: no orientation constraint, MoveIt picks the orientation, and the move is planned with OMPL RRT* since Pilz needs a full pose. `RelativeMove` always keeps the current orientation (plus any deltas), so it has no such flag.
 
 **Messages** (published continuously, not request/response):
 
 - `ExtendedStatus`: one node's heartbeat: `node_name`, `state` (0 = IDLE, 1 = BUSY, 2 = FAULT), `status_message`, `last_command_valid`.
 - `SystemSummary`: the aggregated view: `summary_state` plus `individual_states[]`.
-- `MotionParams`: not published on its own, a shared field type embedded in `HomeArm`, `MoveArm`, and `RelativeMove` requests: `velocity_scale`, `acceleration_scale` (float64), each `0.0` to `1.0`. `0.0` (the default) means "use the arm's configured default," values are clamped into range on the receiving end.
+- `MotionParams`: not published on its own, a shared field type embedded in `HomeArm`, `MoveArm`, and `RelativeMove` requests: `velocity_scale`, `acceleration_scale` (float64), each `0.0` to `1.0`. `0.0` (the default) means full speed, values are clamped into range on the receiving end.
 
 ## Where everything lives on disk
 
@@ -119,6 +119,7 @@ ROS2-middleware/
       actions/                    one module per recipe action (pickup.py, pour.py, ...) + arm_actions.py, their shared service clients/helpers
       utils/                      shared pure helpers: robot.py (frame, joint and link names), geometry.py (math), ros.py (service-call helpers)
     scripts/run_recipe.py         send a recipe file to /execute_recipe (ros2 run kinova_interface run_recipe.py <file>)
+    scripts/check_orientations.py move to a grid of poses per orientation preset and check the reached orientation (see testing.md)
     launch/robot.launch.py
     recipes/                      task_recipe.json, test_suite/
   kinova_interfaces/

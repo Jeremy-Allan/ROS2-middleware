@@ -1,6 +1,6 @@
 {
   "recipe_name": "Orientation and Speed Demo",
-  "description": "Demonstrates the optional orientation preset and speed parameters on relative_move and home. Uses relative_move from home rather than move_arm to a table-level object position, a full tilted_for_pour tilt right at table height is not reachable, the arm would have to intersect the table, so this lifts first and tilts at a safe height instead.",
+  "description": "Demonstrates the optional orientation preset and speed parameters: moves to the blue cube with the gripper pointing straight down at 30 percent speed, lifts, then returns home at 50 percent speed.",
   "steps": [
     {
       "step_id": 1,
@@ -9,16 +9,32 @@
     },
     {
       "step_id": 2,
-      "action": "relative_move",
+      "action": "gripper",
       "parameters": {
-        "vector": "move_upwards",
-        "orientation": "tilted_for_pour",
-        "speed": 0.3
+        "position": 0.0
       },
-      "description": "Lift and tilt for pouring, at 30 percent speed"
+      "description": "Open the gripper so the fingers clear the cube"
     },
     {
       "step_id": 3,
+      "action": "move_arm",
+      "parameters": {
+        "target": "blue_cube",
+        "orientation": "top_down",
+        "speed": 0.3
+      },
+      "description": "Move to the blue cube pointing straight down, at 30 percent speed"
+    },
+    {
+      "step_id": 4,
+      "action": "relative_move",
+      "parameters": {
+        "vector": "move_upwards"
+      },
+      "description": "Lift straight up"
+    },
+    {
+      "step_id": 5,
       "action": "home",
       "parameters": {
         "speed": 0.5

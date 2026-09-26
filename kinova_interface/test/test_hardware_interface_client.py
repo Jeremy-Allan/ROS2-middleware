@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from unittest.mock import MagicMock, patch
@@ -8,6 +10,7 @@ from kinova_interfaces.msg import ExtendedStatus
 from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
 
 from moveit_msgs.action import MoveGroup
+from moveit_msgs.msg import MoveItErrorCodes
 from control_msgs.action import GripperCommand
 
 
@@ -263,7 +266,7 @@ def test_handle_home_arm_success(node):
     result = node.handle_home_arm(request, response)
 
     assert result.success is True
-    assert result.message == "Arm moved home successfully"
+    assert result.message == "Arm moved home successfully (planned with Pilz PTP)"
     node.send_home_goal.assert_called_once()
 
 
@@ -291,7 +294,7 @@ def test_send_joint_goal_custom_positions(node):
     node.arm_client.send_goal_async.return_value = fake_future
 
     positions = [0.5, 0.0, 1.0, 1.5708, 1.5708, 0.0]
-    result = node.send_joint_goal(positions)
+    result = node.send_joint_goal(positions, node.PILZ_PTP)
 
     assert result is True
 
@@ -312,7 +315,7 @@ def test_send_home_goal_matches_send_joint_goal_defaults(node):
     node.arm_client.wait_for_server.return_value = True
     node.arm_client.send_goal_async.return_value = MagicMock()
 
-    node.send_home_goal()
+    node.send_home_goal(node.PILZ_PTP)
 
     goal = node.arm_client.send_goal_async.call_args[0][0]
     positions = [jc.position for jc in goal.request.goal_constraints[0].joint_constraints]
@@ -339,7 +342,7 @@ def test_handle_joint_move_waits_by_default(node):
     result = node.handle_joint_move(request, response)
 
     assert result.success is True
-    assert result.message == "Joint move complete"
+    assert result.message == "Joint move complete (planned with Pilz PTP)"
     node.arm_movement_finished.wait.assert_called_once()
 
 
@@ -492,7 +495,7 @@ def test_handle_move_arm_success(node):
     result = node.handle_move_arm(request, response)
 
     assert result.success is True
-    assert result.message == "Arm moved to 0.5, 0.2, 0.3"
+    assert result.message == "Arm moved to 0.5, 0.2, 0.3 (planned with OMPL RRT*)"
 
     node.send_goal.assert_called_once_with(
         0.5,
@@ -503,6 +506,7 @@ def test_handle_move_arm_success(node):
         pitch=0.0,
         yaw=0.0,
         motion_params=request.motion_params,
+        planner=node.RRT_STAR,
     )
 
 
@@ -537,7 +541,143 @@ def test_handle_move_arm_with_orientation_and_speed(node):
         pitch=1.57,
         yaw=0.0,
         motion_params=request.motion_params,
+        planner=node.PILZ_PTP,
     )
+
+
+# Planner selection: Pilz PTP first, OMPL RRT* fallback
+def _oriented_request():
+    request = MoveArm.Request()
+    request.target_position.x = 0.4
+    request.has_orientation = True
+    request.roll = math.pi
+    return request
+
+
+def _goal_results(node, results):
+    """send_goal/send_joint_goal mock whose Nth call leaves result N
+    (success, message, error_code) behind, as result_callback would."""
+    def send(*args, **kwargs):
+        node.arm_action_successful, node.arm_action_message, node.arm_action_error_code = results.pop(0)
+        return True
+    node.arm_movement_finished = MagicMock()
+    node.arm_movement_finished.wait.return_value = True
+    return MagicMock(side_effect=send)
+
+
+def test_handle_move_arm_with_orientation_uses_pilz_ptp(node):
+    node.send_goal = _goal_results(node, [(True, "Movement complete", MoveItErrorCodes.SUCCESS)])
+
+    result = node.handle_move_arm(_oriented_request(), MoveArm.Response())
+
+    assert result.success is True
+    assert result.message == "Movement complete (planned with Pilz PTP)"
+    assert node.send_goal.call_args.kwargs["planner"] == node.PILZ_PTP
+
+
+def test_handle_move_arm_falls_back_to_rrtstar(node):
+    """PTP's direct path collides (INVALID_MOTION_PLAN): the same goal is
+    re-planned with OMPL RRT*, which routes around obstacles."""
+    node.send_goal = _goal_results(node, [
+        (False, "Planning failed", MoveItErrorCodes.INVALID_MOTION_PLAN),
+        (True, "Movement complete", MoveItErrorCodes.SUCCESS),
+    ])
+
+    result = node.handle_move_arm(_oriented_request(), MoveArm.Response())
+
+    assert result.success is True
+    assert result.message == "Movement complete (planned with OMPL RRT*)"
+    first, fallback = node.send_goal.call_args_list
+    assert (first.kwargs["planner"], fallback.kwargs["planner"]) == (node.PILZ_PTP, node.RRT_STAR)
+    # Same target and orientation both times
+    assert first.args == fallback.args
+    assert fallback.kwargs["roll"] == pytest.approx(math.pi)
+
+
+def test_handle_move_arm_no_fallback_after_execution_failure(node):
+    """A failure during execution (the arm already moved) must not be
+    retried with another planner."""
+    node.send_goal = _goal_results(node, [(False, "Control failed", MoveItErrorCodes.CONTROL_FAILED)])
+
+    result = node.handle_move_arm(_oriented_request(), MoveArm.Response())
+
+    assert result.success is False
+    assert node.send_goal.call_count == 1
+
+
+def test_handle_move_arm_without_orientation_goes_straight_to_rrtstar(node):
+    """Pilz needs a full target pose, so a position-only goal skips it."""
+    node.send_goal = _goal_results(node, [(False, "Planning failed", MoveItErrorCodes.PLANNING_FAILED)])
+    request = _oriented_request()
+    request.has_orientation = False
+
+    result = node.handle_move_arm(request, MoveArm.Response())
+
+    assert result.success is False
+    assert node.send_goal.call_count == 1
+    assert node.send_goal.call_args.kwargs["planner"] == node.RRT_STAR
+
+
+def test_handle_home_arm_falls_back_to_rrtstar(node):
+    node.send_home_goal = _goal_results(node, [
+        (False, "No IK", MoveItErrorCodes.PLANNING_FAILED),
+        (True, "Movement complete", MoveItErrorCodes.SUCCESS),
+    ])
+
+    result = node.handle_home_arm(HomeArm.Request(), HomeArm.Response())
+
+    assert result.success is True
+    planners = [c.kwargs["planner"] for c in node.send_home_goal.call_args_list]
+    assert planners == [node.PILZ_PTP, node.RRT_STAR]
+
+
+def test_fire_and_forget_joint_move_falls_back_after_fast_pilz_failure(node):
+    """throw's fling: a Pilz failure inside the rejection window is
+    re-planned with RRT*, still without waiting for it to finish."""
+    node.send_joint_goal = MagicMock(return_value=True)
+    node.arm_movement_finished = MagicMock()
+    # Pilz fails within the window; RRT* is still planning when the window ends
+    node.arm_movement_finished.wait.side_effect = [True, False]
+    node.arm_action_successful = False
+    node.arm_action_message = "Planning failed"
+    node.arm_action_error_code = MoveItErrorCodes.INVALID_MOTION_PLAN
+
+    request = JointMove.Request()
+    request.joint_positions = [0.0] * 6
+    request.wait_for_completion = False
+
+    result = node.handle_joint_move(request, JointMove.Response())
+
+    assert result.success is True
+    assert result.message == "Joint move goal accepted (not waiting for completion)"
+    planners = [c.kwargs["planner"] for c in node.send_joint_goal.call_args_list]
+    assert planners == [node.PILZ_PTP, node.RRT_STAR]
+
+
+def test_send_goal_pilz_defaults_zero_scaling_to_full_speed(node):
+    """Pilz rejects a 0 scaling factor; 0 means 'not given', which MoveIt
+    treats as 1.0 for OMPL plans."""
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    node.send_goal(0.4, 0.0, 0.2, node.PILZ_PTP, has_orientation=True, roll=math.pi)
+
+    request = node.arm_client.send_goal_async.call_args[0][0].request
+    assert (request.pipeline_id, request.planner_id) == ("pilz_industrial_motion_planner", "PTP")
+    assert request.num_planning_attempts == node.PILZ_PTP.num_attempts
+    assert request.max_velocity_scaling_factor == 1.0
+    assert request.max_acceleration_scaling_factor == 1.0
+
+
+def test_send_goal_rrtstar_keeps_zero_scaling(node):
+    """0 scaling is left for MoveIt to default on OMPL plans."""
+    node.arm_client.wait_for_server.return_value = True
+    node.arm_client.send_goal_async.return_value = MagicMock()
+
+    node.send_goal(0.4, 0.0, 0.2, node.RRT_STAR)
+
+    request = node.arm_client.send_goal_async.call_args[0][0].request
+    assert request.max_velocity_scaling_factor == 0.0
 
 
 def test_handle_move_arm_failure_to_start(node):
@@ -565,6 +705,10 @@ def test_handle_relative_move_success(node):
     transform.transform.translation.x = 1.0
     transform.transform.translation.y = 2.0
     transform.transform.translation.z = 3.0
+    transform.transform.rotation.x = 0.0
+    transform.transform.rotation.y = 0.0
+    transform.transform.rotation.z = 0.0
+    transform.transform.rotation.w = 1.0
 
     node.tf_buffer.lookup_transform = MagicMock(
         return_value=transform
@@ -586,17 +730,19 @@ def test_handle_relative_move_success(node):
     result = node.handle_relative_move(request, response)
 
     assert result.success is True
-    assert result.message == "Relative movement complete"
+    assert result.message == "Relative movement complete (planned with Pilz PTP)"
 
+    # Keeps the current orientation (identity here), so Pilz can plan it
     node.send_goal.assert_called_once_with(
         1.5,
         2.5,
         3.5,
-        has_orientation=False,
+        has_orientation=True,
         roll=0.0,
         pitch=0.0,
         yaw=0.0,
         motion_params=request.motion_params,
+        planner=node.PILZ_PTP,
     )
 
 
@@ -623,7 +769,6 @@ def test_handle_relative_move_with_rotation_delta(node):
     request.vx = 0.0
     request.vy = 0.0
     request.vz = 0.0
-    request.has_orientation = True
     request.pitch_delta = 1.5708  # 90 degrees, starting from identity
 
     response = RelativeMove.Response()
@@ -704,7 +849,7 @@ def test_send_goal_server_unavailable(node):
 
     node.arm_client.wait_for_server.return_value = False
 
-    result = node.send_goal(1.0, 2.0, 3.0)
+    result = node.send_goal(1.0, 2.0, 3.0, node.RRT_STAR)
 
     assert result is False
 
@@ -718,7 +863,7 @@ def test_send_goal(node):
 
     node.arm_client.send_goal_async.return_value = fake_future
 
-    result = node.send_goal(1.0, 2.0, 3.0)
+    result = node.send_goal(1.0, 2.0, 3.0, node.RRT_STAR)
 
     assert result is True
 
@@ -728,8 +873,8 @@ def test_send_goal(node):
 
     assert isinstance(goal, MoveGroup.Goal)
     assert goal.request.group_name == "arm"
-    # Bumped from 10/5.0s - see HardwareInterfaceClient.NUM_PLANNING_ATTEMPTS.
-    assert goal.request.num_planning_attempts == 20
+    assert (goal.request.pipeline_id, goal.request.planner_id) == ("ompl", "RRTstarkConfigDefault")
+    assert goal.request.num_planning_attempts == node.RRT_STAR.num_attempts
     assert goal.request.allowed_planning_time == 10.0
 
     constraint = goal.request.goal_constraints[0]
@@ -750,7 +895,7 @@ def test_send_goal_no_orientation_by_default(node):
     node.arm_client.wait_for_server.return_value = True
     node.arm_client.send_goal_async.return_value = MagicMock()
 
-    node.send_goal(1.0, 2.0, 3.0)
+    node.send_goal(1.0, 2.0, 3.0, node.RRT_STAR)
 
     goal = node.arm_client.send_goal_async.call_args[0][0]
     constraint = goal.request.goal_constraints[0]
@@ -768,7 +913,7 @@ def test_send_goal_with_orientation(node):
     node.arm_client.wait_for_server.return_value = True
     node.arm_client.send_goal_async.return_value = MagicMock()
 
-    node.send_goal(1.0, 2.0, 3.0, has_orientation=True, roll=0.0, pitch=math.pi / 2, yaw=0.0)
+    node.send_goal(1.0, 2.0, 3.0, node.PILZ_PTP, has_orientation=True, roll=0.0, pitch=math.pi / 2, yaw=0.0)
 
     goal = node.arm_client.send_goal_async.call_args[0][0]
     constraint = goal.request.goal_constraints[0]
@@ -795,7 +940,7 @@ def test_send_goal_applies_speed_scaling(node):
     params.velocity_scale = 0.5
     params.acceleration_scale = 0.3
 
-    node.send_goal(1.0, 2.0, 3.0, motion_params=params)
+    node.send_goal(1.0, 2.0, 3.0, node.RRT_STAR, motion_params=params)
 
     goal = node.arm_client.send_goal_async.call_args[0][0]
     assert goal.request.max_velocity_scaling_factor == 0.5
@@ -814,7 +959,7 @@ def test_send_goal_clamps_out_of_range_speed(node):
     params.velocity_scale = 5.0
     params.acceleration_scale = -1.0
 
-    node.send_goal(1.0, 2.0, 3.0, motion_params=params)
+    node.send_goal(1.0, 2.0, 3.0, node.RRT_STAR, motion_params=params)
 
     goal = node.arm_client.send_goal_async.call_args[0][0]
     assert goal.request.max_velocity_scaling_factor == 1.0
@@ -828,7 +973,7 @@ def test_send_home_goal_server_unavailable(node):
 
     node.arm_client.wait_for_server.return_value = False
 
-    result = node.send_home_goal()
+    result = node.send_home_goal(node.PILZ_PTP)
 
     assert result is False
 
@@ -841,7 +986,7 @@ def test_send_home_goal(node):
     fake_future = MagicMock()
     node.arm_client.send_goal_async.return_value = fake_future
 
-    result = node.send_home_goal()
+    result = node.send_home_goal(node.PILZ_PTP)
 
     assert result is True
 

@@ -1,3 +1,4 @@
+import math
 import json
 
 import pytest
@@ -160,6 +161,43 @@ def test_load_object_dictionary_invalid_json(node, tmp_path):
 
     with pytest.raises(SystemExit):
         node.load_object_dictionary()
+
+
+# parse_object_data(): orientation is required
+def _object(orientation):
+    pose = {"position": {"x": 1.0, "y": 2.0, "z": 3.0}}
+    if orientation is not None:
+        pose["orientation"] = orientation
+    return {"pose": pose, "shape": {"type": "BOX", "dimensions": [0.05, 0.05, 0.05]}}
+
+
+def test_parse_object_data_converts_rpy_to_quaternion(node):
+    result = node.parse_object_data("cube", _object({"roll": 0.0, "pitch": 0.0, "yaw": math.pi}))
+
+    orient = result["pose"]["orientation"]
+    assert orient["z"] == pytest.approx(1.0)
+    assert orient["w"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_parse_object_data_keeps_quaternion(node):
+    quat = {"x": 0.0, "y": 0.0, "z": 0.7071068, "w": 0.7071068}
+
+    result = node.parse_object_data("cube", _object(dict(quat)))
+
+    assert result["pose"]["orientation"] == pytest.approx(quat)
+
+
+@pytest.mark.parametrize("orientation", [
+    None,                           # not given at all
+    {},                             # given but empty
+    {"yaw": 1.57},                  # partial roll/pitch/yaw
+    {"x": 0.0, "y": 0.0, "z": 0.0},  # partial quaternion
+    {"x": 0.0, "y": 0.0, "z": 0.0, "w": 0.0},  # zero quaternion
+    {"roll": "a", "pitch": 0.0, "yaw": 0.0},  # non-numeric
+])
+def test_parse_object_data_errors_without_full_orientation(node, orientation):
+    with pytest.raises(SystemExit):
+        node.parse_object_data("cube", _object(orientation))
 
 
 # load_relative_movements()

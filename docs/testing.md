@@ -35,6 +35,47 @@ ros2 launch kinova_interface robot.launch.py recipe:=test_suite/recipe_pickup.js
 
 Watch for `[Step N] <description>` lines and a final `--- All Tasks Completed ---` message.
 
+## Checking gripper orientations
+
+**What it's for:** When a recipe asks for an orientation like `top_down`, you want to know two things: does the gripper really end up pointing that way, and from which spots on the table can it get there at all? `scripts/check_orientations.py` answers both in one run. Use it when:
+
+- you change `orientation_presets.json`, or the gripper convention behind it (fingers point along `tool_frame` +Z, close along X). If the presets or the convention are wrong, every move shows `BAD`.
+- you move to a new table or robot setup and want to see which orientations still reach which positions.
+- you're choosing grasp orientations for an object and need to know what's reachable where it sits.
+
+The unit test `test_orientation_presets_match_their_axes` only checks the maths. This script checks what the arm actually does.
+
+**What it does:** It sends the arm to a 3 x 3 grid of points 10 cm above the table. At each point it tries every orientation: `top_down`, `top_down_90`, and `side_level` facing five headings (-90, -45, 0, 45 and 90 degrees). After each move it reads where `tool_frame` really ended up (from TF) and compares it with what was asked for. It goes home before starting each orientation. To change the grid, edit `GRID_X`, `GRID_Y` and `GRID_Z` at the top of the script.
+
+**Running it:** Start the middleware first (no recipe needed), then:
+
+```bash
+ros2 run kinova_interface check_orientations.py --ik-only      # only asks "is this reachable?", never moves
+ros2 run kinova_interface check_orientations.py --speed 0.2     # actually moves the arm
+```
+
+`--tolerance-deg` (default 6) sets how far off an orientation can be and still count as reached.
+
+**Reading the output:** One line per move:
+
+```
+       top_down at (0.35, +0.20, 0.10): ok 0.8 P
+    top_down_90 at (0.45, -0.20, 0.10): ok 2.1 R
+ side_level@-90 at (0.25, -0.20, 0.10): FAIL
+```
+
+| You see | It means |
+|---|---|
+| `ok 0.8 P` | Got there. The orientation was 0.8 degrees off what was asked for. Pilz PTP planned it. |
+| `ok 2.1 R` | Got there, but Pilz couldn't plan it, so the RRT* fallback did. Common near obstacles or awkward poses. |
+| `BAD 14.3 P` | The move "succeeded" but the gripper ended up 14.3 degrees off, or more than 2 cm from the point. Something is wrong with the preset or the convention. |
+| `FAIL` | Neither planner could get there. Usually just out of reach for that orientation. |
+| `ik ok` / `no IK` | (`--ik-only`) The pose is reachable / not reachable. Nothing moved. |
+
+`FAIL` or `no IK` is normal for some spots: pointing straight down far from the base, for example, may simply be out of reach. That's the map you're after. `BAD` is never normal. The script exits with 0 only if every move was `ok`.
+
+**Safety:** On fake hardware this checks planning, IK and the gripper convention, not how accurate the real arm is. On the real arm, run `--ik-only` first, clear the workspace, and keep the speed low.
+
 ## A basic manual smoke test for the middleware alone
 
 1. Launch with no recipe: `ros2 launch kinova_interface robot.launch.py`. RViz opens, all four nodes log ready with no errors.

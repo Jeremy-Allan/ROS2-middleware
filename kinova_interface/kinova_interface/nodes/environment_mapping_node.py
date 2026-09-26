@@ -16,8 +16,9 @@ from kinova_interfaces.msg import ExtendedStatus
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.duration import Duration
 from tf2_ros import Buffer, TransformListener
+from scipy.spatial.transform import Rotation
 
-from kinova_interface.utils.geometry import euler_to_quaternion, pose_in_new_frame
+from kinova_interface.utils.geometry import pose_in_new_frame
 from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, GRIPPER_TOUCH_LINKS
 
 
@@ -151,24 +152,26 @@ class EnvironmentMappingNode(Node):
         return obj
 
     def parse_object_data(self, obj_id, obj_data):
-        # Parse POSE (position & orientation)
+        # Parse POSE (position & orientation). Orientation is required, as
+        # full roll/pitch/yaw or a full quaternion.
         pose = obj_data.get('pose', {})
-        orientation = pose.get('orientation', {})
-        
-        if not orientation:
-            pose['orientation'] = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}
-        elif any(k in orientation for k in ('roll', 'pitch', 'yaw')):
-            roll = orientation.get('roll', 0.0)
-            pitch = orientation.get('pitch', 0.0)
-            yaw = orientation.get('yaw', 0.0)
-            qx, qy, qz, qw = euler_to_quaternion(roll, pitch, yaw)
-            obj_data['pose']['orientation'] = {'x': qx, 'y': qy, 'z': qz, 'w': qw}
-        else:
-            # Already in quaternion format or invalid
-            if not all(k in orientation for k in ('x', 'y', 'z', 'w')):
-                self.get_logger().warn(f"Object '{obj_id}': invalid orientation format, defaulting to quaternion")
-                pose['orientation'] = {'x': 0.0, 'y': 0.0, 'z': 0.0, 'w': 1.0}
-        
+        orientation = pose.get('orientation') or {}
+
+        try:
+            if all(k in orientation for k in ('roll', 'pitch', 'yaw')):
+                rotation = Rotation.from_euler('xyz', [orientation['roll'], orientation['pitch'], orientation['yaw']])
+            else:
+                rotation = Rotation.from_quat([orientation['x'], orientation['y'], orientation['z'], orientation['w']])
+        except (KeyError, TypeError, ValueError):
+            self.get_logger().fatal(
+                f"Object '{obj_id}': missing or invalid orientation {orientation or None}, "
+                "expected numeric 'roll'/'pitch'/'yaw' or a non-zero 'x'/'y'/'z'/'w'"
+            )
+            raise SystemExit(1)
+        # Stored as a normalised quaternion
+        qx, qy, qz, qw = rotation.as_quat()
+        pose['orientation'] = {'x': qx, 'y': qy, 'z': qz, 'w': qw}
+
         # Parse SHAPE (type & dimensions)
         obj_data = self.normalize_shape(obj_data, obj_id)
         
