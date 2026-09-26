@@ -33,26 +33,39 @@ This maps a plain-English object name to a full pose and shape, in meters, relat
 
 To add a new named object, add a new top-level key with `pose` and `shape`. Keys are looked up exactly as written (case-sensitive, no fuzzy matching), and this is also the exact list the proxy asks for and hands to the LLM as "objects you're allowed to reference," so anything you add here becomes something you can immediately ask the robot for in plain English. `dropoff`'s stacking-height calculation (see below) depends on `shape` being accurate, not just `position`.
 
+`pose.orientation` is required for every object (and every obstacle): either all of `roll`/`pitch`/`yaw` (radians) or all of `x`/`y`/`z`/`w`. If it's missing or incomplete, the environment mapping node logs a fatal error naming the object and exits at startup, rather than quietly assuming an orientation.
+
 Right now this file is maintained entirely by hand. Every object pose and shape the arm can reach for has to be measured and typed in here yourself. Automatically populating this file (or feeding coordinates in some equivalent way) using computer vision, so the system can detect where an object actually is instead of relying on a pre-typed coordinate, is the direction planned for later this semester, but it is not implemented anywhere in either repository yet.
 
 ## Orientation presets (middleware)
 
 **File:** `kinova_interface/data/configs/env/orientation_presets.json`
 
-Named end-effector orientations, roll/pitch/yaw in radians, that `move_arm` and `relative_move` steps can reference by name via the optional `orientation` parameter instead of an LLM ever having to produce raw angles:
+Named gripper orientations that `move_arm` and `pickup` steps can use through their `orientation` parameter, so the LLM picks a name instead of making up angles. Each one is roll/pitch/yaw in radians, for `tool_frame` relative to `base_link`:
 
 ```json
 {
-  "facing_forward": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 },
-  "tilted_for_pour": { "roll": 0.0, "pitch": 1.57, "yaw": 0.0 },
-  "facing_audience": { "roll": 0.0, "pitch": 0.0, "yaw": 3.14 }
+  "top_down": { "roll": 3.141593, "pitch": 0.0, "yaw": 1.570796 },
+  "top_down_90": { "roll": 3.141593, "pitch": 0.0, "yaw": 0.0 },
+  "side_level": { "roll": 1.570796, "pitch": 0.0, "yaw": 1.570796 }
 }
 ```
 
-For `move_arm`, a resolved preset becomes the absolute target orientation. For `relative_move`, the resolved roll/pitch/yaw are applied as a delta on top of the arm's current orientation, not absolute angles, so use small values there.
+| Preset | Gripper points | Fingers close along |
+|---|---|---|
+| `top_down` | straight down | base Y (side to side, seen from the base) |
+| `top_down_90` | straight down | base X (toward/away from the base) |
+| `side_level` | forward, level (base +X) | base Y (horizontal) |
 
-The values shipped in this file are placeholders and have not been calibrated against the physical arm; whoever tunes this on real hardware should replace them with real measured values before relying on them.
+The gripper convention behind these: the fingers point along `tool_frame` +Z and close along `tool_frame` X. The values are derived from that with `utils/geometry.orientation_from_axes`, and `test_orientation_presets_match_their_axes` fails if the file drifts from what the names say. When adding a preset, add its axes to that test too.
 
+Every arm move is planned with Pilz PTP first, which gives the same motion every time and collision-checks it. If PTP can't plan (e.g. its direct path would collide), the move is re-planned with OMPL RRT*, which routes around obstacles. Pilz needs a full target pose, so a move with no orientation goes straight to RRT*. The hardware interface client logs which planner was used.
+
+## MoveIt joint limits (middleware)
+
+**File:** `kinova_interface/data/configs/moveit/joint_limits.yaml`
+
+`launch/robot.launch.py` starts `move_group` the same way `kinova_gen3_lite_moveit_config`'s own `move_group.launch.py` does, except that it loads this file instead of that package's `joint_limits.yaml`. The only difference is that acceleration limits are enabled (1.0 rad/s² per joint, which MoveIt already assumed for joints without a limit), because the Pilz planner refuses to plan without them.
 ## Relative movements (middleware)
 
 **File:** `kinova_interface/data/configs/env/relative_movement.json`
@@ -129,7 +142,7 @@ Steps execute strictly in array order, one at a time, and execution stops immedi
 |---|---|---|---|
 | `"home"` | (none) | `speed` | Sends the arm to a fixed joint-space home pose |
 | `"move_arm"` | `"target": "<object_name>"` | `orientation`, `speed` | Looks up `<object_name>` in the object dictionary, moves there |
-| `"relative_move"` | `"vector": "<movement_name>"` | `orientation`, `speed` | Looks up `<movement_name>` in the relative-movements file, moves the arm by that offset from wherever it currently is |
+| `"relative_move"` | `"vector": "<movement_name>"` | `speed` | Looks up `<movement_name>` in the relative-movements file, moves the arm by that offset from wherever it currently is |
 | `"gripper"` | `"position": <number>` | (none) | Sends the gripper to that position |
 | `"pickup"` | `"target": "<object_name>"` | `open_position`, `close_position`, `grasp_style`, `orientation`, `grasp_offset` | Opens the gripper, moves to the object, closes the gripper, attaches the object in the planning scene. `grasp_style: "side"` computes and IK-verifies a level side grasp (needed by `pour`/`thrust`) |
 | `"dropoff"` | `"destination": "<object_name>"` | `target`, `open_position`, `place_offset` | Two-stage release onto `destination`: hover above, then lower to a small clearance before opening the gripper, so the object doesn't fall from hover height. See below. |
@@ -140,9 +153,9 @@ Steps execute strictly in array order, one at a time, and execution stops immedi
 
 > This repo's older top-level docs described the whitelist as `move_arm`, `move_gripper`, `relative_move`, `home_arm`, and missed `pickup`/`dropoff` entirely. Those old names do not appear anywhere in the actual parsing code, or in the proxy's schema. Use the ten values above.
 
-**`orientation` (optional, `move_arm` and `relative_move`):** a preset name from `orientation_presets.json`, resolved via `/get_orientation_preset`, never raw angles, that's a deliberate anti-hallucination choice so the LLM never has to produce numeric roll/pitch/yaw itself. For `move_arm` this is the absolute target orientation; for `relative_move` it's applied as a delta on top of the arm's current orientation. If omitted, the move happens with no orientation constraint, current behavior, MoveIt picks whatever orientation it wants.
+**`orientation` (optional, `move_arm` and `pickup`):** a preset name from `orientation_presets.json`, resolved via `/get_orientation_preset`, never raw angles, that's a deliberate anti-hallucination choice so the LLM never has to produce numeric roll/pitch/yaw itself. It's the absolute target orientation. If omitted, the move happens with no orientation constraint and MoveIt picks whatever orientation it wants. `relative_move` is a pure translation and ignores `orientation` (with a warning in the log).
 
-**`speed` (optional, `home`, `move_arm`, `relative_move`):** a float from `0.0` to `1.0`, used as both MoveIt's velocity and acceleration scaling factor for that move. Omit it, or use `0.0`, to fall back to the arm's configured default (10%, per `joint_limits.yaml`).
+**`speed` (optional, `home`, `move_arm`, `relative_move`):** a float from `0.0` to `1.0`, used as both MoveIt's velocity and acceleration scaling factor for that move. Omit it, or use `0.0`, for full speed.
 
 **`dropoff`'s two-stage release:** `place_offset` (default `0.1` m) is now the hover clearance for the first move, not the release height. The second move lowers to 2 cm above the computed release height before the gripper opens. If `target` is given and resolves to a tracked object, the release height is computed as the destination's top surface plus the target object's own height (from `object_dictionary.json`'s `shape`), so `dropoff` can stack one object on another, not just place onto a flat surface. If `target` is omitted, `dropoff` still performs the two-stage descent onto `destination`, it just can't update a tracked object's pose afterward.
 
