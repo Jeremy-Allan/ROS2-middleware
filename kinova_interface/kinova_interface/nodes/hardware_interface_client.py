@@ -1022,17 +1022,18 @@ class HardwareInterfaceClient(Node):
             self.gripper_movement_finished.set()
 
 def main(args=None):
-        """Start the Kinova hardware interface ROS 2 node.
+    """Start the Kinova hardware interface ROS 2 node.
 
-        Initialises rclpy, creates the hardware interface node, runs it using a
-        multi-threaded executor, and performs node and ROS 2 shutdown cleanup.
+    Initialises rclpy, creates the hardware interface node, runs it using a
+    multi-threaded executor, and performs node and ROS 2 shutdown cleanup.
 
-        Args:
-            args (list[str], optional): Command-line arguments passed to rclpy.
+    Args:
+        args (list[str], optional): Command-line arguments passed to rclpy.
 
-        Returns:
-            None
-        """
+    Returns:
+        None
+    """
+    
     rclpy.init(args=args)
     node = HardwareInterfaceClient()
 
