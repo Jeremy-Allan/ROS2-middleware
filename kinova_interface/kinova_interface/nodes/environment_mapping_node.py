@@ -756,7 +756,7 @@ class EnvironmentMappingNode(Node):
         Returns:
             CollisionObject or None: The constructed collision object, or
                 ``None`` if the configured shape type is unsupported.
-        """      
+        """   
         
         collision_obj = CollisionObject()
         collision_obj.header.frame_id = BASE_FRAME
