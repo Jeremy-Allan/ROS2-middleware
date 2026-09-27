@@ -124,7 +124,7 @@ sudo apt-get install ros-humble-rosbridge-suite
 Install the proxy's own Python dependencies:
 
 ```bash
-pip install -r src/requirements.txt
+pip install -r requirements.txt
 ```
 
 Build the proxy's internal ROS 2 bridge workspace:
