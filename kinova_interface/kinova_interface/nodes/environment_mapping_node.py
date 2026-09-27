@@ -881,7 +881,7 @@ class EnvironmentMappingNode(Node):
             return False
 
 
-def main(args=None):
+    def main(args=None):
         """Start the environment mapping ROS 2 node.
 
         Initialises rclpy, creates the environment mapping node, runs it using
@@ -894,14 +894,14 @@ def main(args=None):
             None
         """
     
-    rclpy.init(args=args)
-    node = EnvironmentMappingNode()
-    executor = rclpy.executors.MultiThreadedExecutor(num_threads=4)
-    executor.add_node(node)
-    executor.spin()
-    node.destroy_node()
-    rclpy.shutdown()
+        rclpy.init(args=args)
+        node = EnvironmentMappingNode()
+        executor = rclpy.executors.MultiThreadedExecutor(num_threads=4)
+        executor.add_node(node)
+        executor.spin()
+        node.destroy_node()
+        rclpy.shutdown()
 
 
-if __name__ == '__main__':
-    main()
+    if __name__ == '__main__':
+        main()
