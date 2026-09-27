@@ -743,7 +743,7 @@ class EnvironmentMappingNode(Node):
         return response
 
     def build_collision_object(self, obj_id, obj_data):
-          """Construct a MoveIt collision object from environment configuration.
+        """Construct a MoveIt collision object from environment configuration.
 
         The configured primitive shape, dimensions, position, and orientation
         are converted into a ``CollisionObject`` using ``BASE_FRAME`` as the
