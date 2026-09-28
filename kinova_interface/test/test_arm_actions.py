@@ -895,6 +895,47 @@ def test_dropoff_falls_back_to_held_object_when_target_omitted(actions):
     assert actions.held_object is None
 
 
+def test_dropoff_without_destination_releases_in_place(actions):
+    """Unlike push/thrust/throw, dropoff doesn't inherently need to go
+    anywhere - with no destination given, it should release right where
+    the held object already is (its own registered position), the same
+    convention 'pour' uses, not invent a destination or fail."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.update_object_pose = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
+
+    result = actions.handlers['dropoff']({"target": "red_cube"})
+
+    assert result is True
+    # release_z = the object's own z (0.02) + its own half-height (0.025)
+    hover_call = actions.call_move_service.call_args_list[0][0]
+    release_call = actions.call_move_service.call_args_list[1][0]
+    assert hover_call[0:2] == (pytest.approx(0.3), pytest.approx(0.1))
+    assert release_call[2] == pytest.approx(0.045 + 0.02)
+    actions.update_object_pose.assert_called_once_with(
+        "red_cube", pytest.approx(0.3), pytest.approx(0.1), pytest.approx(0.045), {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+    )
+    assert actions.held_object is None
+
+
+def test_dropoff_without_destination_or_target_fails_cleanly(actions):
+    """With nothing held and no destination given, there's nothing to
+    release in place against - this should fail cleanly, not crash."""
+
+    actions.held_object = None
+
+    result = actions.handlers['dropoff']({})
+
+    assert result is False
+
+
 # pour()
 def test_pour_requires_target(actions):
     """pour without a target should fail cleanly, not assume anything is held."""
