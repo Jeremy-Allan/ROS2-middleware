@@ -881,27 +881,27 @@ class EnvironmentMappingNode(Node):
             return False
 
 
-    def main(args=None):
-        """Start the environment mapping ROS 2 node.
+def main(args=None):
+    """Start the environment mapping ROS 2 node.
 
-        Initialises rclpy, creates the environment mapping node, runs it using
-        a four-threaded executor, and performs node and ROS 2 shutdown cleanup.
+    Initialises rclpy, creates the environment mapping node, runs it using
+    a four-threaded executor, and performs node and ROS 2 shutdown cleanup.
 
-        Args:
-            args (list[str], optional): Command-line arguments passed to rclpy.
+    Args:
+        args (list[str], optional): Command-line arguments passed to rclpy.
 
-        Returns:
-            None
-        """
+    Returns:
+        None
+    """
     
-        rclpy.init(args=args)
-        node = EnvironmentMappingNode()
-        executor = rclpy.executors.MultiThreadedExecutor(num_threads=4)
-        executor.add_node(node)
-        executor.spin()
-        node.destroy_node()
-        rclpy.shutdown()
+    rclpy.init(args=args)
+    node = EnvironmentMappingNode()
+    executor = rclpy.executors.MultiThreadedExecutor(num_threads=4)
+    executor.add_node(node)
+    executor.spin()
+    node.destroy_node()
+    rclpy.shutdown()
 
 
-    if __name__ == '__main__':
-        main()
+if __name__ == '__main__':
+    main()
