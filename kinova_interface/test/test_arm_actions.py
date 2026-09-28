@@ -1069,6 +1069,35 @@ def test_pour_without_destination_or_direction_pours_in_place(actions):
     assert lift_call[0:3] == (0.0, 0.0, pytest.approx(pour.POUR_DEFAULT_LIFT_HEIGHT))
 
 
+def test_pour_without_target_defaults_to_held_object(actions):
+    """'pour it'/'pour' with no target given should refer to whatever's
+    actually held, not fail just because 'target' was omitted."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.call_relative_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+
+    with patch("kinova_interface.actions.pour.time.sleep"):
+        result = actions.handlers['pour']({})
+
+    assert result is True
+
+
+def test_pour_without_target_fails_if_nothing_held(actions):
+    """With no target given and nothing actually held, there's no held
+    object to fall back to - this should fail cleanly, not crash."""
+
+    actions.held_object = None
+
+    result = actions.handlers['pour']({})
+
+    assert result is False
+
+
 def test_pour_in_place_still_lifts_and_tilts(actions):
     """An in-place pour is still a real pour - it should still lift and
     tilt, just without moving sideways first."""
@@ -1255,6 +1284,42 @@ def test_thrust_raises_spins_and_extends(actions):
     assert raise_call[0][0] == [pytest.approx(face_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
     assert spin_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
     assert extend_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.4), pytest.approx(1.5), 0.0, 0.0, 0.0]
+
+
+def test_thrust_without_target_defaults_to_held_object(actions):
+    """'thrust it'/'thrust' with no target given should refer to whatever's
+    actually held, not fail just because 'target' was omitted."""
+
+    actions.held_object = "red_cube"
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    }
+    dest_info = {
+        "pose": {"position": {"x": -0.2, "y": 0.4, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.1, 0.02]}
+    }
+    actions.get_object_info = MagicMock(side_effect=lambda name: {
+        "red_cube": target_info, "target_spot": dest_info
+    }[name])
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+
+    result = actions.handlers['thrust']({"destination": "target_spot"})
+
+    assert result is True
+
+
+def test_thrust_without_target_fails_if_nothing_held(actions):
+    """With no target given and nothing actually held, there's no held
+    object to fall back to - this should fail cleanly, not crash."""
+
+    actions.held_object = None
+
+    result = actions.handlers['thrust']({"destination": "target_spot"})
+
+    assert result is False
 
 
 def test_thrust_fails_if_raise_unsolvable(actions):
@@ -2080,6 +2145,42 @@ def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
 
     actions.detach_object.assert_called_once_with("red_cube")
     assert actions.held_object is None
+
+
+def test_throw_without_target_defaults_to_held_object(actions):
+    """'throw it'/'throw' with no target given should refer to whatever's
+    actually held, not fail just because 'target' was omitted."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
+    })
+    actions.latest_joint_positions = {
+        'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
+    }
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service_async = MagicMock(return_value=_mock_future())
+    actions.wait_for_joint_crossing = MagicMock(return_value=True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.detach_object = MagicMock(return_value=True)
+    actions.update_object_pose = MagicMock(return_value=True)
+
+    result = actions.handlers['throw']({"destination": "delivery_tray"})
+
+    assert result is True
+    actions.detach_object.assert_called_once_with("red_cube")
+
+
+def test_throw_without_target_fails_if_nothing_held(actions):
+    """With no target given and nothing actually held, there's no held
+    object to fall back to - this should fail cleanly, not crash."""
+
+    actions.held_object = None
+
+    result = actions.handlers['throw']({"destination": "delivery_tray"})
+
+    assert result is False
 
 
 def test_throw_fails_if_no_joint_state_available_to_rotate(actions):

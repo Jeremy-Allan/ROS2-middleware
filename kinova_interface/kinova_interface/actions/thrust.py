@@ -48,9 +48,12 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     the object's own original resting bearing from the arm) plus a
     'distance' - both resolved from the object's pre-pickup
     registered position, the same as 'push'."""
-    target_name = params.get('target')
+    # Fall back to whatever's actually held if the recipe step didn't name
+    # one - "thrust it"/"thrust" with no target given should refer to the
+    # currently held object, not fail just because 'target' was omitted.
+    target_name = params.get('target') or ctx.held_object
     if not target_name:
-        return ctx.fail("thrust action requires 'target' naming the held object")
+        return ctx.fail("thrust action requires a held object, but nothing is currently held")
     if target_name != ctx.held_object:
         return ctx.fail(f"Cannot thrust '{target_name}': held object is '{ctx.held_object}'")
 

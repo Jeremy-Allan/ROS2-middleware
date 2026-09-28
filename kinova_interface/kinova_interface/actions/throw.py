@@ -56,11 +56,14 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     afterward is still a rough approximation - it isn't computing
     where the object will actually land physically, just recording
     the intended target."""
-    target_name = params.get('target')
+    # Fall back to whatever's actually held if the recipe step didn't name
+    # one - "throw it"/"throw" with no target given should refer to the
+    # currently held object, not fail just because 'target' was omitted.
+    target_name = params.get('target') or ctx.held_object
     destination_name = params.get('destination')
     direction = params.get('direction')
     if not target_name:
-        return ctx.fail("throw action requires 'target' naming the held object")
+        return ctx.fail("throw action requires a held object, but nothing is currently held")
     if target_name != ctx.held_object:
         return ctx.fail(f"Cannot throw '{target_name}': held object is '{ctx.held_object}'")
     if not destination_name and not direction:

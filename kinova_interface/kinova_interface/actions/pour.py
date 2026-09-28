@@ -49,9 +49,12 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     coupling that handle_relative_move's own docstring already warns
     about (see hardware_interface_client.py) - which is what produced
     the unreachable target that made the original design fail."""
-    target_name = params.get('target')
+    # Fall back to whatever's actually held if the recipe step didn't name
+    # one - "pour it"/"pour" with no target given should refer to the
+    # currently held object, not fail just because 'target' was omitted.
+    target_name = params.get('target') or ctx.held_object
     if not target_name:
-        return ctx.fail("pour action requires 'target' naming the held object")
+        return ctx.fail("pour action requires a held object, but nothing is currently held")
     if target_name != ctx.held_object:
         return ctx.fail(f"Cannot pour '{target_name}': held object is '{ctx.held_object}'")
 
