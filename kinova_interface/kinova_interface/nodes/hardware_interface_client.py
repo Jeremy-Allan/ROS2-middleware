@@ -169,23 +169,25 @@ class HardwareInterfaceClient(Node):
     def _on_joint_state(self, msg):
         """Update the cached joint positions from a joint-state message.
 
+        Stores the latest positions for the configured robot joints so they can
+        be used by relative joint movements and other hardware interface logic.
+
         Args:
             msg (JointState): ROS 2 joint-state message containing joint names
                 and their corresponding positions.
 
         Returns:
             None
-        """
-        
+        """     
         self.latest_joint_positions = dict(zip(msg.name, msg.position))
 
     # --- Fault Controller Health Check & Helper ---
     def check_fault_controller_health(self):
-        """Update the cached joint positions from a joint-state message.
+        """Check the health of the fault controller.
 
-        Args:
-            msg (JointState): ROS 2 joint-state message containing joint names
-                and their corresponding positions.
+        Checks whether the controller-manager service is available and requests
+        the current controller list. The response is processed asynchronously by
+        ``list_controllers_callback``.
 
         Returns:
             None
