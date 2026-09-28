@@ -1,6 +1,5 @@
 import sys
 import os
-import pathlib
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
@@ -9,6 +8,8 @@ from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
 import launch.logging
+from moveit_configs_utils import MoveItConfigsBuilder
+from moveit_configs_utils.launches import generate_move_group_launch
 
 def check_hardware_args(context, *args, **kwargs):
     use_fake_hardware = LaunchConfiguration('use_fake_hardware').perform(context)
@@ -143,19 +144,16 @@ def generate_launch_description():
         }.items()
     )
 
-    # 2. Start MoveIt 2
-    move_group_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource([
-            PathJoinSubstitution([
-                FindPackageShare('kinova_gen3_lite_moveit_config'),
-                'launch',
-                'move_group.launch.py'
-            ])
-        ]),
-        launch_arguments={
-            'use_fake_hardware': use_fake_hardware
-        }.items()
+    # 2. Start MoveIt 2, with our joint_limits.yaml (Pilz needs acceleration limits)
+    joint_limits_file = os.path.join(
+        get_package_share_directory('kinova_interface'), 'data', 'configs', 'moveit', 'joint_limits.yaml'
     )
+    moveit_config = (
+        MoveItConfigsBuilder('gen3_lite_gen3_lite_2f', package_name='kinova_gen3_lite_moveit_config')
+        .joint_limits(file_path=joint_limits_file)
+        .to_moveit_configs()
+    )
+    move_group_launch = generate_move_group_launch(moveit_config)
 
     return LaunchDescription([
         SetEnvironmentVariable('ROS_LOG_DIR', launch.logging.launch_config.log_dir),

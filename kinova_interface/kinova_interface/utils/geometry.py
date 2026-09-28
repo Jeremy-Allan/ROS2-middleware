@@ -1,61 +1,24 @@
 import math
 
+import numpy as np
+from scipy.spatial.transform import Rotation
 from shape_msgs.msg import SolidPrimitive
 
 
-def euler_to_quaternion(roll, pitch, yaw):
-    """Convert roll/pitch/yaw (radians) to a quaternion, returned as (x, y, z, w)."""
-    cy, sy = math.cos(yaw * 0.5), math.sin(yaw * 0.5)
-    cp, sp = math.cos(pitch * 0.5), math.sin(pitch * 0.5)
-    cr, sr = math.cos(roll * 0.5), math.sin(roll * 0.5)
-    qw = cr * cp * cy + sr * sp * sy
-    qx = sr * cp * cy - cr * sp * sy
-    qy = cr * sp * cy + sr * cp * sy
-    qz = cr * cp * sy - sr * sp * cy
-    return qx, qy, qz, qw
-
-
-def quaternion_to_euler(x, y, z, w):
-    """Convert a quaternion (x, y, z, w) to roll/pitch/yaw (radians).
-
-    Pitch is derived via asin() and clamped to +-90deg, so this is not a
-    full-range inverse for gimbal-locked orientations - fine for this
-    project's use (deriving a yaw estimate, or composing a small rotation
-    delta onto the arm's current orientation), not for arbitrary poses.
-    """
-    sinr_cosp = 2 * (w * x + y * z)
-    cosr_cosp = 1 - 2 * (x * x + y * y)
-    roll = math.atan2(sinr_cosp, cosr_cosp)
-
-    sinp = max(-1.0, min(1.0, 2 * (w * y - z * x)))
-    pitch = math.asin(sinp)
-
-    siny_cosp = 2 * (w * z + x * y)
-    cosy_cosp = 1 - 2 * (y * y + z * z)
-    yaw = math.atan2(siny_cosp, cosy_cosp)
-    return roll, pitch, yaw
-
-
-def quat_multiply(q1, q2):
-    x1, y1, z1, w1 = q1
-    x2, y2, z2, w2 = q2
-    w = w1*w2 - x1*x2 - y1*y2 - z1*z2
-    x = w1*x2 + x1*w2 + y1*z2 - z1*y2
-    y = w1*y2 - x1*z2 + y1*w2 + z1*x2
-    z = w1*z2 + x1*y2 - y1*x2 + z1*w2
-    return (x, y, z, w)
-
-
-def quat_rotate_vector(q, v):
-    qv = (q[0], q[1], q[2])
-    qw = q[3]
-
-    def cross(a, b):
-        return (a[1]*b[2]-a[2]*b[1], a[2]*b[0]-a[0]*b[2], a[0]*b[1]-a[1]*b[0])
-
-    t = tuple(2*c for c in cross(qv, v))
-    ct = cross(qv, t)
-    return (v[0]+qw*t[0]+ct[0], v[1]+qw*t[1]+ct[1], v[2]+qw*t[2]+ct[2])
+def orientation_from_axes(approach, closing):
+    """Rotation that points the gripper along `approach` with its fingers
+    closing along `closing` (base-frame vectors, any length). tool_frame's
+    fingers point along +Z and close along X. Raises
+    ValueError if the two are parallel."""
+    z = np.asarray(approach, dtype=float)
+    z = z / np.linalg.norm(z)
+    x = np.asarray(closing, dtype=float)
+    x = x - x.dot(z) * z
+    if np.linalg.norm(x) < 1e-9:
+        raise ValueError(f"closing {closing} is parallel to approach {approach}")
+    x = x / np.linalg.norm(x)
+    # Columns are the tool's X, Y, Z axes in the base frame
+    return Rotation.from_matrix(np.column_stack([x, np.cross(z, x), z]))
 
 
 def pose_in_new_frame(pose_dict, transform):
@@ -66,11 +29,10 @@ def pose_in_new_frame(pose_dict, transform):
     orient = pose_dict['orientation']
     t = transform.transform.translation
     r = transform.transform.rotation
-    tq = (r.x, r.y, r.z, r.w)
+    rotation = Rotation.from_quat([r.x, r.y, r.z, r.w])
 
-    rotated = quat_rotate_vector(tq, (pos['x'], pos['y'], pos['z']))
-    new_pos = (rotated[0] + t.x, rotated[1] + t.y, rotated[2] + t.z)
-    new_orient = quat_multiply(tq, (orient['x'], orient['y'], orient['z'], orient['w']))
+    new_pos = rotation.apply([pos['x'], pos['y'], pos['z']]) + [t.x, t.y, t.z]
+    new_orient = (rotation * Rotation.from_quat([orient['x'], orient['y'], orient['z'], orient['w']])).as_quat()
     return {
         'position': {'x': new_pos[0], 'y': new_pos[1], 'z': new_pos[2]},
         'orientation': {'x': new_orient[0], 'y': new_orient[1], 'z': new_orient[2], 'w': new_orient[3]}

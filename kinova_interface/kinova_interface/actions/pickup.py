@@ -2,9 +2,9 @@
 import math
 from typing import TYPE_CHECKING
 
+from scipy.spatial.transform import Rotation
 from shape_msgs.msg import SolidPrimitive
 
-from kinova_interface.utils.geometry import quaternion_to_euler
 
 # Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
 # because arm_actions imports this module and that would be circular.
@@ -55,7 +55,7 @@ def compute_side_grasp_candidates(ctx: 'ArmActions', target_info):
         yaw_candidates = SIDE_GRASP_CYLINDER_YAWS
     else:
         orient = target_info['pose']['orientation']
-        _, _, object_yaw = quaternion_to_euler(orient['x'], orient['y'], orient['z'], orient['w'])
+        _, _, object_yaw = Rotation.from_quat([orient['x'], orient['y'], orient['z'], orient['w']]).as_euler('xyz')
         yaw_candidates = [object_yaw + offset for offset in SIDE_GRASP_YAW_OFFSETS]
 
     candidates = []

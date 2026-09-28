@@ -2,6 +2,8 @@ import math
 import time
 from functools import partial
 
+from scipy.spatial.transform import Rotation
+
 from geometry_msgs.msg import Quaternion, Pose, PoseStamped
 from sensor_msgs.msg import JointState
 from moveit_msgs.srv import GetPositionIK, ApplyPlanningScene, GetPositionFK, GetStateValidity, GetPlanningScene
@@ -25,7 +27,7 @@ from kinova_interfaces.msg import MotionParams
 from std_srvs.srv import Trigger
 
 from kinova_interface.actions import basic, pickup, dropoff, pour, thrust, push, throw
-from kinova_interface.utils.geometry import euler_to_quaternion, resolve_direction_offset
+from kinova_interface.utils.geometry import resolve_direction_offset
 from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES
 from kinova_interface.utils.ros import call_service, wait_for_future
 
@@ -122,8 +124,9 @@ class ArmActions:
     # hardware, where moves complete near-instantly) - using it here
     # was reporting a false "timed out/no response" failure for any real
     # move that legitimately took longer than 10s, even ones that would
-    # have gone on to succeed a few seconds later.
-    _ARM_ACTION_TIMEOUT_SEC = 35.0
+    # have gone on to succeed a few seconds later. A move can now be tried twice
+    # if Pilz PTP fails by using RRT* as a backup planner.
+    _ARM_ACTION_TIMEOUT_SEC = 65.0
     # Same idea, matching HardwareInterfaceClient.GRIPPER_TIMEOUT_SEC (10.0s).
     _GRIPPER_ACTION_TIMEOUT_SEC = 15.0
 
@@ -273,11 +276,13 @@ class ArmActions:
         pose_stamped.header.frame_id = BASE_FRAME
         pose = Pose()
         pose.position.x, pose.position.y, pose.position.z = float(x), float(y), float(z)
-        qx, qy, qz, qw = euler_to_quaternion(roll, pitch, yaw)
+        qx, qy, qz, qw = Rotation.from_euler('xyz', [roll, pitch, yaw]).as_quat()
         pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = qx, qy, qz, qw
         pose_stamped.pose = pose
         req.ik_request.pose_stamped = pose_stamped
 
+        # Use the current state (stops MoveIt's "empty JointState" error)
+        req.ik_request.robot_state.is_diff = True
         if seed_joint_positions is not None:
             seed_state = RobotState()
             seed_js = JointState()
@@ -507,12 +512,11 @@ class ArmActions:
             self.get_logger().error(f"Failed to perform Move to:{x},{y},{z}: {response.message if response else 'no response'}")
             return None
 
-    def call_relative_move_service(self, vx, vy, vz, has_orientation=False, roll_delta=0.0, pitch_delta=0.0, yaw_delta=0.0, motion_params=None):
+    def call_relative_move_service(self, vx, vy, vz, roll_delta=0.0, pitch_delta=0.0, yaw_delta=0.0, motion_params=None):
         req = RelativeMove.Request()
         req.vx = vx
         req.vy = vy
         req.vz = vz
-        req.has_orientation = has_orientation
         req.roll_delta = roll_delta
         req.pitch_delta = pitch_delta
         req.yaw_delta = yaw_delta

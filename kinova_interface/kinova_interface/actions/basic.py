@@ -36,14 +36,11 @@ def relative_move(ctx: 'ArmActions', params: dict) -> bool:
     if not vector:
         return False
 
-    orientation = ctx.resolve_orientation(params.get('orientation'))
-    if orientation is None:
-        ctx.get_logger().error(f"Unknown orientation preset '{params.get('orientation')}'")
-        return False
-    has_orientation, roll_delta, pitch_delta, yaw_delta = orientation
+    if params.get('orientation'):
+        ctx.get_logger().warn(f"relative_move ignores 'orientation' ('{params['orientation']}'); use move_arm for that")
 
     motion_params = ctx.build_motion_params(params.get('speed'))
-    result = ctx.call_relative_move_service(vector['x'], vector['y'], vector['z'], has_orientation, roll_delta, pitch_delta, yaw_delta, motion_params)
+    result = ctx.call_relative_move_service(vector['x'], vector['y'], vector['z'], motion_params=motion_params)
     return result is not None and result['success']
 
 

@@ -1,0 +1,42 @@
+# Our copy of Kinova's joint_limits.yaml, loaded by launch/robot.launch.py.
+# The only change: acceleration limits are turned on, because Pilz refuses to
+# plan without them.
+#
+# 1.0 rad/s^2 is what MoveIt already assumed when no limit was set, so
+# existing motions move exactly as before.
+joint_limits:
+  joint_1:
+    has_velocity_limits: true
+    max_velocity: 1.6000000000000001
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  joint_2:
+    has_velocity_limits: true
+    max_velocity: 1.6000000000000001
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  joint_3:
+    has_velocity_limits: true
+    max_velocity: 1.6000000000000001
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  joint_4:
+    has_velocity_limits: true
+    max_velocity: 1.6000000000000001
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  joint_5:
+    has_velocity_limits: true
+    max_velocity: 1.6000000000000001
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  joint_6:
+    has_velocity_limits: true
+    max_velocity: 3.2000000000000002
+    has_acceleration_limits: true
+    max_acceleration: 1.0
+  right_finger_bottom_joint:
+    has_velocity_limits: true
+    max_velocity: 0.59999999999999998
+    has_acceleration_limits: true
+    max_acceleration: 1.0

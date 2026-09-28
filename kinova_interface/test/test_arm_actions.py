@@ -297,7 +297,7 @@ def test_call_relative_move_service(actions):
     assert request.vx == 0.1
     assert request.vy == 0.2
     assert request.vz == 0.3
-    assert request.has_orientation is False
+    assert (request.roll_delta, request.pitch_delta, request.yaw_delta) == (0.0, 0.0, 0.0)
 
 
 #call_move_gripper_service()
@@ -345,12 +345,12 @@ def test_resolve_orientation_valid_preset(actions):
     """A valid preset name resolves to its angles with has_orientation True."""
 
     actions.get_orientation_preset = MagicMock(
-        return_value={"roll": 0.0, "pitch": 1.57, "yaw": 0.0}
+        return_value={"roll": 3.141593, "pitch": 0.0, "yaw": 1.570796}
     )
 
-    result = actions.resolve_orientation("tilted_for_pour")
+    result = actions.resolve_orientation("top_down")
 
-    assert result == (True, 0.0, 1.57, 0.0)
+    assert result == (True, 3.141593, 0.0, 1.570796)
 
 
 def test_resolve_orientation_unknown_preset(actions):
@@ -693,6 +693,22 @@ def test_verify_grasp_pose_false_on_ik_failure(actions):
     assert result is False
 
 
+def test_relative_move_ignores_orientation(actions):
+    """relative_move is a pure translation: a preset is an absolute
+    orientation, so it's no longer applied as a delta."""
+    actions.get_relative_movement_vector = MagicMock(return_value={"x": 0.0, "y": 0.0, "z": 0.1})
+    actions.get_orientation_preset = MagicMock()
+    actions.call_relative_move_service = MagicMock(return_value={"success": True})
+
+    result = actions.handlers['relative_move']({"vector": "move_upwards", "orientation": "top_down"})
+
+    assert result is True
+    actions.get_orientation_preset.assert_not_called()
+    args, kwargs = actions.call_relative_move_service.call_args
+    assert args == (0.0, 0.0, 0.1)
+    assert set(kwargs) == {"motion_params"}
+
+
 def _mock_planning_scene_response(entry_names, rows):
     """Build a MagicMock GetPlanningScene response with a real ACM -
     entry_names/entry_values need to actually be readable/iterable
@@ -977,14 +993,11 @@ def test_pour_lifts_transits_tilts_and_returns(actions):
     lift_call = actions.call_relative_move_service.call_args_list[0][0]
     transit_call = actions.call_relative_move_service.call_args_list[1][0]
 
-    # lift_call args: (vx, vy, vz, has_orientation, roll_delta, pitch_delta, yaw_delta, motion_params)
-    assert lift_call[0:3] == (0.0, 0.0, pytest.approx(0.14))
-    assert lift_call[3] is True
-    assert lift_call[4:7] == (0.0, 0.0, 0.0)  # orientation preserved, not changed
+    # No deltas, so the grasp orientation is kept
+    assert lift_call == (0.0, 0.0, pytest.approx(0.14))
 
     # moves by the vector from the held object to the destination
-    assert transit_call[0:3] == (pytest.approx(0.2), pytest.approx(0.3), 0.0)
-    assert transit_call[4:7] == (0.0, 0.0, 0.0)
+    assert transit_call == (pytest.approx(0.2), pytest.approx(0.3), 0.0)
 
     assert actions.call_joint_move_service.call_count == 2
     tilt_call = actions.call_joint_move_service.call_args_list[0]
