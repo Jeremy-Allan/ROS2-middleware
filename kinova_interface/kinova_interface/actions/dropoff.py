@@ -25,8 +25,7 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     if destination_name:
         dest_info = ctx.get_object_info(destination_name)
         if not dest_info:
-            ctx.get_logger().error(f"Could not resolve destination '{destination_name}'")
-            return False
+            return ctx.fail(f"Could not resolve destination '{destination_name}'")
 
         dest_pos = dest_info['pose']['position']
         dest_top_z = dest_pos['z'] + object_half_height(dest_info['shape'])
@@ -43,8 +42,7 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
         # "drop the cube" (naming no destination at all) forced the LLM to
         # invent one rather than actually meaning "just let go of it here".
         if not target_info:
-            ctx.get_logger().error("dropoff with no 'destination' needs a resolvable 'target' to release in place")
-            return False
+            return ctx.fail("dropoff with no 'destination' needs a resolvable 'target' to release in place")
         pos = target_info['pose']['position']
         px, py = pos['x'], pos['y']
         release_z = pos['z'] + target_half_height
@@ -52,21 +50,18 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     # 1. Move to a hover position above the destination, collision-safe approach
     r = ctx.call_move_service(px, py, release_z + hover_clearance)
     if not (r and r['success']):
-        ctx.get_logger().error('Failed to move to hover position above destination')
-        return False
+        return ctx.fail('Failed to move to hover position above destination')
 
     # 2. Lower to a small clearance above the release height before opening,
     # so the object isn't dropped from the hover height
     r = ctx.call_move_service(px, py, release_z + release_clearance)
     if not (r and r['success']):
-        ctx.get_logger().error('Failed to lower to release position')
-        return False
+        return ctx.fail('Failed to lower to release position')
 
     # 3. Open gripper to release
     rg = ctx.call_move_gripper_service(open_pos)
     if not (rg and rg['success']):
-        ctx.get_logger().error('Failed to open gripper during place')
-        return False
+        return ctx.fail('Failed to open gripper during place')
 
     if target_name:
         orient = target_info['pose']['orientation'] if target_info else None

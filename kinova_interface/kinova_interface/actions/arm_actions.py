@@ -115,6 +115,13 @@ class ArmActions:
         # fallback for dropoff's own release-height calculation.
         self.held_object = None
 
+        # The specific reason the current step failed, or None - set via
+        # fail() below, read (then reset) by json_parser_node after a step
+        # returns False, so the client sees why a step failed ("Failed to
+        # move to hover position above destination") rather than just
+        # which step and action failed.
+        self.last_error = None
+
     # Client-side wait_for_future timeouts for the real arm-moving calls
     # below (home/move/relative_move/joint_move) - must exceed
     # HardwareInterfaceClient.ACTION_TIMEOUT_SEC (30.0s), since that's how
@@ -133,6 +140,16 @@ class ArmActions:
     def wait_for_future(self, future, service_name, timeout_sec=10.0):
         """Safely wait for an async service call future to complete without deadlocking the executor."""
         return wait_for_future(future, service_name, self.get_logger(), timeout_sec)
+
+    def fail(self, message):
+        """Log an action failure and record it as last_error for
+        json_parser_node to surface back to the client, then return False -
+        so a handler can just 'return ctx.fail("...")' at its failure
+        points instead of logging and returning separately (and risking
+        the client-facing message drifting out of sync with the log)."""
+        self.get_logger().error(message)
+        self.last_error = message
+        return False
 
     def _on_joint_state(self, msg):
         self.latest_joint_positions = dict(zip(msg.name, msg.position))

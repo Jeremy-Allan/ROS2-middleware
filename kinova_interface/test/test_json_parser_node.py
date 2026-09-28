@@ -359,3 +359,71 @@ def test_execute_recipe_callback_names_failing_step(node):
 
     assert response.success is False
     assert response.message == "Recipe failed at step 1 (pickup)"
+
+
+def test_execute_recipe_callback_includes_last_error_detail(node):
+    """When a handler fails via ctx.fail() (recording a specific reason),
+    the response should include that reason, not just the generic
+    'failed at step N (action)' - this is what makes a failure
+    diagnosable from the client/TUI without needing to grep ROS logs."""
+
+    def failing_handler(params):
+        return node.arm_actions.fail("Failed to move to hover position above destination")
+
+    node.arm_actions.handlers = {'dropoff': failing_handler}
+    node.publish_status = MagicMock()
+
+    request = MagicMock()
+    request.recipe_json = json.dumps({
+        "recipe_name": "Test",
+        "steps": [{"action": "dropoff", "parameters": {"target": "blue_cube"}}]
+    })
+    response = MagicMock()
+
+    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
+        node.execute_recipe_callback(request, response)
+
+    assert response.success is False
+    assert response.message == (
+        "Recipe failed at step 1 (dropoff): "
+        "Failed to move to hover position above destination"
+    )
+
+
+def test_execute_recipe_callback_clears_last_error_between_steps(node):
+    """A step that fails without calling ctx.fail() (no specific reason
+    recorded) must not surface a *previous* step's error - stale detail
+    would be actively misleading, not just unhelpful."""
+
+    def failing_first_step(params):
+        return node.arm_actions.fail("Failed to open gripper for pickup")
+
+    def failing_second_step(params):
+        return False  # no ctx.fail() call - no specific reason this time
+
+    node.arm_actions.handlers = {
+        'pickup': failing_first_step,
+        'home': failing_second_step,
+    }
+    node.publish_status = MagicMock()
+
+    request = MagicMock()
+    request.recipe_json = json.dumps({
+        "recipe_name": "Test",
+        "steps": [
+            {"action": "pickup", "parameters": {"target": "red_cube"}},
+            {"action": "home", "parameters": {}},
+        ]
+    })
+    response = MagicMock()
+
+    # Force the first step to "succeed" so the recipe reaches step 2 -
+    # only the second step's (lack of) detail is under test here.
+    node.arm_actions.handlers['pickup'] = lambda params: True
+    node.arm_actions.last_error = "stale error from an unrelated earlier run"
+
+    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
+        node.execute_recipe_callback(request, response)
+
+    assert response.success is False
+    assert response.message == "Recipe failed at step 2 (home)"

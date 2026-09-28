@@ -90,6 +90,22 @@ def test_wait_for_future(actions):
     assert result == response
 
 
+# fail()
+def test_fail_logs_records_last_error_and_returns_false(actions):
+    """fail() is the single place an action handler reports why it
+    failed - it must log it (unchanged behaviour), record it as
+    last_error for json_parser_node to surface to the client, and return
+    False so a handler can 'return ctx.fail(...)' at its failure points."""
+
+    actions.get_logger = MagicMock()
+
+    result = actions.fail("Failed to move to hover position above destination")
+
+    assert result is False
+    assert actions.last_error == "Failed to move to hover position above destination"
+    actions.get_logger().error.assert_called_with("Failed to move to hover position above destination")
+
+
 # get_static_object_coords()
 # Note: get_static_object_coords() actually calls get_object_info() (the
 # /get_object_info service via info_client), not /get_coordinates via

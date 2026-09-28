@@ -193,6 +193,11 @@ class JsonParserNode(Node):
             f"[recipe_log] step={index+1} timestamp={timestamp:.3f} action={action} "
             f"parameters={params} accepted=True"
         )
+        # Cleared before every dispatch, so a step that fails without going
+        # through ctx.fail() (rather than a genuine bug in the failure
+        # path itself) surfaces as "no further detail", not a stale reason
+        # left over from an earlier, unrelated failure.
+        self.arm_actions.last_error = None
         success = handler(params)
         self.get_logger().info(
             f"[recipe_log] step={index+1} action={action} result={'success' if success else 'failure'}"
@@ -240,6 +245,8 @@ class JsonParserNode(Node):
             if not success:
                 self.get_logger().error(f"Failed at step {i+1}: {step.get('action')}")
                 self.status_text = f"Recipe failed at step {i+1} ({step.get('action')})"
+                if self.arm_actions.last_error:
+                    self.status_text += f": {self.arm_actions.last_error}"
                 self.command_success = False
                 self.get_logger().info(
                     f"[recipe_log] event=end timestamp={time.time():.3f} recipe={recipe_name} result=failure"
