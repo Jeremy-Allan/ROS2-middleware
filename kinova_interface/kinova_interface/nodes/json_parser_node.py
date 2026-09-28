@@ -197,19 +197,33 @@ class JsonParserNode(Node):
         self.status_pub.publish(msg)
 
     def startup_timer_callback(self):
-        """One-shot timer callback to start the initial recipe."""
+        """Start the initial recipe after the startup delay.
+
+        Cancels the one-shot startup timer and begins execution of the recipe
+        that was loaded during node initialisation.
+
+        Returns:
+            None
+        """
         self.startup_timer.cancel()
         self.get_logger().info("Starting initial recipe sequence...")
         self.execute_recipe()
 
     def execute_recipe_callback(self, request, response):
-        """Start the initial recipe after the startup delay.
+        """Handle a dynamic recipe execution service request.
 
-        Cancels the one-shot startup timer and begins execution of the recipe that
-        was loaded during node initialisation.
+        Loads the JSON recipe supplied by the service request, executes the
+        recipe, and populates the service response with the parsing and
+        execution result.
+
+        Args:
+            request (ExecuteRecipe.Request): Service request containing the JSON
+                recipe string.
+            response (ExecuteRecipe.Response): Service response populated with
+                the parsing and execution result.
 
         Returns:
-            None
+            ExecuteRecipe.Response: The populated service response.
         """
         self.get_logger().info("Received dynamic recipe execution request.")
         self.get_logger().debug(f"Payload recipe received: {request.recipe_json}")
