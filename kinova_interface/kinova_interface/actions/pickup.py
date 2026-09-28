@@ -5,6 +5,8 @@ from typing import TYPE_CHECKING
 from scipy.spatial.transform import Rotation
 from shape_msgs.msg import SolidPrimitive
 
+from kinova_interface.actions import dropoff
+
 
 # Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
 # because arm_actions imports this module and that would be circular.
@@ -123,6 +125,19 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
         target_x = coords['x'] + float(grasp_offset.get('x', 0.0))
         target_y = coords['y'] + float(grasp_offset.get('y', 0.0))
         target_z = coords['z'] + float(grasp_offset.get('z', 0.0))
+
+    # If something else is already held, release it first rather than
+    # silently dragging it along - pickup's own gripper-open step below
+    # would otherwise drop it uncontrolled wherever the arm happens to be,
+    # leaving its tracked position stale and its collision geometry
+    # permanently (and incorrectly) attached to the gripper. No destination
+    # is given, so it's released using its own registered position - which
+    # pickup never updates, so this is genuinely where it was picked up
+    # from, not the arm's current position.
+    if ctx.held_object and ctx.held_object != target_name:
+        ctx.get_logger().info(f"Releasing '{ctx.held_object}' before picking up '{target_name}'")
+        if not dropoff.run(ctx, {'target': ctx.held_object}):
+            return ctx.fail(f"Failed to release '{ctx.held_object}' before picking up '{target_name}'")
 
     # 1. Open gripper before moving
     rg = ctx.call_move_gripper_service(open_pos)

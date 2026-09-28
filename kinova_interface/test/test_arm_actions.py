@@ -500,6 +500,80 @@ def test_pickup_sets_held_object(actions):
     assert move_call == (1.0, 2.0, 3.0, False, 0.0, 0.0, 0.0)
 
 
+def test_pickup_releases_previously_held_object_first(actions):
+    """If something else is already held, pickup should release it (in
+    place, at its own registered position) before picking up the new
+    target - not silently drop it via the gripper-open step below and
+    leave it stuck attached to the gripper in the planning scene."""
+
+    actions.held_object = "red_cube"
+
+    def object_info_side_effect(name):
+        if name == "red_cube":
+            return {
+                "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+                "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+            }
+        return None
+
+    actions.get_object_info = MagicMock(side_effect=object_info_side_effect)
+    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.update_object_pose = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
+    actions.attach_object = MagicMock(return_value=True)
+
+    result = actions.handlers['pickup']({"target": "blue_cube"})
+
+    assert result is True
+    assert actions.held_object == "blue_cube"
+    # red_cube released back at its own registered position, not a fresh
+    # destination and not the arm's current position
+    actions.update_object_pose.assert_called_once_with(
+        "red_cube", pytest.approx(0.3), pytest.approx(0.1), pytest.approx(0.045),
+        {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+    )
+    actions.detach_object.assert_called_once_with("red_cube")
+    actions.attach_object.assert_called_once_with("blue_cube")
+
+
+def test_pickup_does_not_release_when_target_is_already_held(actions):
+    """Asking to pick up whatever's already held shouldn't trigger a
+    pointless release-then-repickup of the same object."""
+
+    actions.held_object = "red_cube"
+    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.update_object_pose = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
+    actions.attach_object = MagicMock(return_value=True)
+
+    result = actions.handlers['pickup']({"target": "red_cube"})
+
+    assert result is True
+    actions.update_object_pose.assert_not_called()
+    actions.detach_object.assert_not_called()
+
+
+def test_pickup_fails_cleanly_if_release_of_held_object_fails(actions):
+    """If releasing the currently-held object fails, pickup should abort
+    rather than press on and pick up the new target while still holding
+    the first (physically impossible, and would corrupt tracking)."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value=None)
+    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
+    actions.attach_object = MagicMock(return_value=True)
+
+    result = actions.handlers['pickup']({"target": "blue_cube"})
+
+    assert result is False
+    assert actions.held_object == "red_cube"
+    actions.attach_object.assert_not_called()
+
+
 def test_pickup_applies_orientation_when_explicitly_given(actions):
     """A named orientation preset should be forced on the descend move,
     for actions (like 'pour') that need a known, repeatable grasp."""
