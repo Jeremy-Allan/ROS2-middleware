@@ -91,7 +91,7 @@ class EnvironmentMappingNode(Node):
 
         The object dictionary is read from ``config_dir/object_dictionary.json``.
         Each object's pose and collision shape are normalised using
-        : meth:`parse_object_data`.
+        :meth:`parse_object_data`.
 
         Returns:
             dict: Mapping of object identifiers to their parsed configuration.
