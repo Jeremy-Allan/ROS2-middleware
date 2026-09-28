@@ -52,3 +52,15 @@ If you read nothing else, read these two pages:
 ## Support
 
 Found something in these docs that's wrong, stale, or confusing? Flag it to the team or open a PR, documentation fixes are cheap and worth making immediately.
+
+## API Reference
+
+The middleware API documentation is generated automatically from structured Python docstrings using **pdoc**.
+
+The generated reference covers the major functions in:
+
+* `environment_mapping_node`
+* `hardware_interface_client`
+* `json_parser_node`
+
+For the generated function-level documentation, see the [API Reference](api/index.html).
