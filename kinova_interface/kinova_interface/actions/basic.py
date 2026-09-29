@@ -21,8 +21,7 @@ def move_arm(ctx: 'ArmActions', params: dict) -> bool:
 
     orientation = ctx.resolve_orientation(params.get('orientation'))
     if orientation is None:
-        ctx.get_logger().error(f"Unknown orientation preset '{params.get('orientation')}'")
-        return False
+        return ctx.fail(f"Unknown orientation preset '{params.get('orientation')}'")
     has_orientation, roll, pitch, yaw = orientation
 
     motion_params = ctx.build_motion_params(params.get('speed'))

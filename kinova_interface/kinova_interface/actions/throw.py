@@ -56,37 +56,34 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     afterward is still a rough approximation - it isn't computing
     where the object will actually land physically, just recording
     the intended target."""
-    target_name = params.get('target')
+    # Fall back to whatever's actually held if the recipe step didn't name
+    # one - "throw it"/"throw" with no target given should refer to the
+    # currently held object, not fail just because 'target' was omitted.
+    target_name = params.get('target') or ctx.held_object
     destination_name = params.get('destination')
     direction = params.get('direction')
     if not target_name:
-        ctx.get_logger().error("throw action requires 'target' naming the held object")
-        return False
+        return ctx.fail("throw action requires a held object, but nothing is currently held")
     if target_name != ctx.held_object:
-        ctx.get_logger().error(f"Cannot throw '{target_name}': held object is '{ctx.held_object}'")
-        return False
+        return ctx.fail(f"Cannot throw '{target_name}': held object is '{ctx.held_object}'")
     if not destination_name and not direction:
-        ctx.get_logger().error("throw action requires either 'destination' or 'direction'")
-        return False
+        return ctx.fail("throw action requires either 'destination' or 'direction'")
 
     target_info = ctx.get_object_info(target_name)
     if not target_info:
-        ctx.get_logger().error(f"Could not resolve held object '{target_name}' for throw")
-        return False
+        return ctx.fail(f"Could not resolve held object '{target_name}' for throw")
     origin = target_info['pose']['position']
 
     if destination_name:
         dest_info = ctx.get_object_info(destination_name)
         if not dest_info:
-            ctx.get_logger().error(f"Could not resolve throw destination '{destination_name}'")
-            return False
+            return ctx.fail(f"Could not resolve throw destination '{destination_name}'")
         release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
     else:
         distance = float(params.get('distance', 0.3))
         offset = resolve_direction_offset(origin['x'], origin['y'], direction, distance)
         if offset is None:
-            ctx.get_logger().error(f"Unknown throw direction '{direction}'")
-            return False
+            return ctx.fail(f"Unknown throw direction '{direction}'")
         release_x, release_y = offset
 
     base_yaw = math.atan2(release_y, release_x)
@@ -95,25 +92,21 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     # 1. Rotate to face the throw direction - joint_1 only, current
     # shoulder/elbow/wrist (wherever pickup left them) held exactly
     if ctx.latest_joint_positions is None:
-        ctx.get_logger().error("No joint state available to rotate for throw")
-        return False
+        return ctx.fail("No joint state available to rotate for throw")
     try:
         current_arm_joints = [ctx.latest_joint_positions[f'joint_{i}'] for i in range(2, 7)]
     except KeyError as e:
-        ctx.get_logger().error(f"Missing joint {e} in latest joint state")
-        return False
+        return ctx.fail(f"Missing joint {e} in latest joint state")
     rotate_joints = [base_yaw, *current_arm_joints]
     r = ctx.call_joint_move_service(rotate_joints, motion_params=motion_params)
     if not (r and r['success']):
-        ctx.get_logger().error(f"Failed to rotate to face the throw direction for '{target_name}'")
-        return False
+        return ctx.fail(f"Failed to rotate to face the throw direction for '{target_name}'")
 
     # 2. Wind-up - go straight to the captured wind-up shape
     windup_joints = [base_yaw, *THROW_WINDUP_POSE]
     r = ctx.call_joint_move_service(windup_joints, motion_params=motion_params)
     if not (r and r['success']):
-        ctx.get_logger().error(f"Failed to wind up for throw of '{target_name}'")
-        return False
+        return ctx.fail(f"Failed to wind up for throw of '{target_name}'")
 
     # 3. Fling - one continuous swing straight to the end pose, fired
     # without waiting for any response at all (see
@@ -122,22 +115,19 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     fling_motion = ctx.build_motion_params(params.get('speed', 1.0))
     fling_future = ctx.call_joint_move_service_async(fling_joints, motion_params=fling_motion)
     if fling_future is None:
-        ctx.get_logger().error(f"Failed to start throw fling for '{target_name}'")
-        return False
+        return ctx.fail(f"Failed to start throw fling for '{target_name}'")
 
     # 4. Release the instant joint_5 crosses the captured release
     # point - a closed-loop trigger on the arm's real position
     windup_joint5 = THROW_WINDUP_POSE[3]
     crossed = ctx.wait_for_joint_crossing('joint_5', THROW_RELEASE_JOINT5, windup_joint5)
     if not crossed:
-        ctx.get_logger().error(f"Timed out waiting for the release point during throw of '{target_name}'")
-        return False
+        return ctx.fail(f"Timed out waiting for the release point during throw of '{target_name}'")
 
     open_pos = float(params.get('open_position', 0.0))
     rg = ctx.call_move_gripper_service(open_pos)
     if not (rg and rg['success']):
-        ctx.get_logger().error('Failed to release gripper during throw')
-        return False
+        return ctx.fail('Failed to release gripper during throw')
 
     ctx.detach_object(target_name)
     ctx.update_object_pose(target_name, release_x, release_y, origin['z'], None)

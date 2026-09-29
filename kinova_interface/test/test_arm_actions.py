@@ -90,6 +90,22 @@ def test_wait_for_future(actions):
     assert result == response
 
 
+# fail()
+def test_fail_logs_records_last_error_and_returns_false(actions):
+    """fail() is the single place an action handler reports why it
+    failed - it must log it (unchanged behaviour), record it as
+    last_error for json_parser_node to surface to the client, and return
+    False so a handler can 'return ctx.fail(...)' at its failure points."""
+
+    actions.get_logger = MagicMock()
+
+    result = actions.fail("Failed to move to hover position above destination")
+
+    assert result is False
+    assert actions.last_error == "Failed to move to hover position above destination"
+    actions.get_logger().error.assert_called_with("Failed to move to hover position above destination")
+
+
 # get_static_object_coords()
 # Note: get_static_object_coords() actually calls get_object_info() (the
 # /get_object_info service via info_client), not /get_coordinates via
@@ -482,6 +498,80 @@ def test_pickup_sets_held_object(actions):
     # unconstrained by default, same as before 'orientation' support was added
     move_call = actions.call_move_service.call_args[0]
     assert move_call == (1.0, 2.0, 3.0, False, 0.0, 0.0, 0.0)
+
+
+def test_pickup_releases_previously_held_object_first(actions):
+    """If something else is already held, pickup should release it (in
+    place, at its own registered position) before picking up the new
+    target - not silently drop it via the gripper-open step below and
+    leave it stuck attached to the gripper in the planning scene."""
+
+    actions.held_object = "red_cube"
+
+    def object_info_side_effect(name):
+        if name == "red_cube":
+            return {
+                "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+                "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+            }
+        return None
+
+    actions.get_object_info = MagicMock(side_effect=object_info_side_effect)
+    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.update_object_pose = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
+    actions.attach_object = MagicMock(return_value=True)
+
+    result = actions.handlers['pickup']({"target": "blue_cube"})
+
+    assert result is True
+    assert actions.held_object == "blue_cube"
+    # red_cube released back at its own registered position, not a fresh
+    # destination and not the arm's current position
+    actions.update_object_pose.assert_called_once_with(
+        "red_cube", pytest.approx(0.3), pytest.approx(0.1), pytest.approx(0.045),
+        {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+    )
+    actions.detach_object.assert_called_once_with("red_cube")
+    actions.attach_object.assert_called_once_with("blue_cube")
+
+
+def test_pickup_does_not_release_when_target_is_already_held(actions):
+    """Asking to pick up whatever's already held shouldn't trigger a
+    pointless release-then-repickup of the same object."""
+
+    actions.held_object = "red_cube"
+    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.update_object_pose = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
+    actions.attach_object = MagicMock(return_value=True)
+
+    result = actions.handlers['pickup']({"target": "red_cube"})
+
+    assert result is True
+    actions.update_object_pose.assert_not_called()
+    actions.detach_object.assert_not_called()
+
+
+def test_pickup_fails_cleanly_if_release_of_held_object_fails(actions):
+    """If releasing the currently-held object fails, pickup should abort
+    rather than press on and pick up the new target while still holding
+    the first (physically impossible, and would corrupt tracking)."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value=None)
+    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
+    actions.attach_object = MagicMock(return_value=True)
+
+    result = actions.handlers['pickup']({"target": "blue_cube"})
+
+    assert result is False
+    assert actions.held_object == "red_cube"
+    actions.attach_object.assert_not_called()
 
 
 def test_pickup_applies_orientation_when_explicitly_given(actions):
@@ -895,6 +985,47 @@ def test_dropoff_falls_back_to_held_object_when_target_omitted(actions):
     assert actions.held_object is None
 
 
+def test_dropoff_without_destination_releases_in_place(actions):
+    """Unlike push/thrust/throw, dropoff doesn't inherently need to go
+    anywhere - with no destination given, it should release right where
+    the held object already is (its own registered position), the same
+    convention 'pour' uses, not invent a destination or fail."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.call_move_service = MagicMock(return_value={"success": True})
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.update_object_pose = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
+
+    result = actions.handlers['dropoff']({"target": "red_cube"})
+
+    assert result is True
+    # release_z = the object's own z (0.02) + its own half-height (0.025)
+    hover_call = actions.call_move_service.call_args_list[0][0]
+    release_call = actions.call_move_service.call_args_list[1][0]
+    assert hover_call[0:2] == (pytest.approx(0.3), pytest.approx(0.1))
+    assert release_call[2] == pytest.approx(0.045 + 0.02)
+    actions.update_object_pose.assert_called_once_with(
+        "red_cube", pytest.approx(0.3), pytest.approx(0.1), pytest.approx(0.045), {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+    )
+    assert actions.held_object is None
+
+
+def test_dropoff_without_destination_or_target_fails_cleanly(actions):
+    """With nothing held and no destination given, there's nothing to
+    release in place against - this should fail cleanly, not crash."""
+
+    actions.held_object = None
+
+    result = actions.handlers['dropoff']({})
+
+    assert result is False
+
+
 # pour()
 def test_pour_requires_target(actions):
     """pour without a target should fail cleanly, not assume anything is held."""
@@ -936,6 +1067,35 @@ def test_pour_without_destination_or_direction_pours_in_place(actions):
     assert actions.call_relative_move_service.call_count == 1
     lift_call = actions.call_relative_move_service.call_args_list[0][0]
     assert lift_call[0:3] == (0.0, 0.0, pytest.approx(pour.POUR_DEFAULT_LIFT_HEIGHT))
+
+
+def test_pour_without_target_defaults_to_held_object(actions):
+    """'pour it'/'pour' with no target given should refer to whatever's
+    actually held, not fail just because 'target' was omitted."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.call_relative_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+
+    with patch("kinova_interface.actions.pour.time.sleep"):
+        result = actions.handlers['pour']({})
+
+    assert result is True
+
+
+def test_pour_without_target_fails_if_nothing_held(actions):
+    """With no target given and nothing actually held, there's no held
+    object to fall back to - this should fail cleanly, not crash."""
+
+    actions.held_object = None
+
+    result = actions.handlers['pour']({})
+
+    assert result is False
 
 
 def test_pour_in_place_still_lifts_and_tilts(actions):
@@ -1124,6 +1284,42 @@ def test_thrust_raises_spins_and_extends(actions):
     assert raise_call[0][0] == [pytest.approx(face_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
     assert spin_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
     assert extend_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.4), pytest.approx(1.5), 0.0, 0.0, 0.0]
+
+
+def test_thrust_without_target_defaults_to_held_object(actions):
+    """'thrust it'/'thrust' with no target given should refer to whatever's
+    actually held, not fail just because 'target' was omitted."""
+
+    actions.held_object = "red_cube"
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    }
+    dest_info = {
+        "pose": {"position": {"x": -0.2, "y": 0.4, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.1, 0.02]}
+    }
+    actions.get_object_info = MagicMock(side_effect=lambda name: {
+        "red_cube": target_info, "target_spot": dest_info
+    }[name])
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+
+    result = actions.handlers['thrust']({"destination": "target_spot"})
+
+    assert result is True
+
+
+def test_thrust_without_target_fails_if_nothing_held(actions):
+    """With no target given and nothing actually held, there's no held
+    object to fall back to - this should fail cleanly, not crash."""
+
+    actions.held_object = None
+
+    result = actions.handlers['thrust']({"destination": "target_spot"})
+
+    assert result is False
 
 
 def test_thrust_fails_if_raise_unsolvable(actions):
@@ -1949,6 +2145,42 @@ def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
 
     actions.detach_object.assert_called_once_with("red_cube")
     assert actions.held_object is None
+
+
+def test_throw_without_target_defaults_to_held_object(actions):
+    """'throw it'/'throw' with no target given should refer to whatever's
+    actually held, not fail just because 'target' was omitted."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
+    })
+    actions.latest_joint_positions = {
+        'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
+    }
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service_async = MagicMock(return_value=_mock_future())
+    actions.wait_for_joint_crossing = MagicMock(return_value=True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.detach_object = MagicMock(return_value=True)
+    actions.update_object_pose = MagicMock(return_value=True)
+
+    result = actions.handlers['throw']({"destination": "delivery_tray"})
+
+    assert result is True
+    actions.detach_object.assert_called_once_with("red_cube")
+
+
+def test_throw_without_target_fails_if_nothing_held(actions):
+    """With no target given and nothing actually held, there's no held
+    object to fall back to - this should fail cleanly, not crash."""
+
+    actions.held_object = None
+
+    result = actions.handlers['throw']({"destination": "delivery_tray"})
+
+    assert result is False
 
 
 def test_throw_fails_if_no_joint_state_available_to_rotate(actions):

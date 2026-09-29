@@ -49,35 +49,33 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     coupling that handle_relative_move's own docstring already warns
     about (see hardware_interface_client.py) - which is what produced
     the unreachable target that made the original design fail."""
-    target_name = params.get('target')
+    # Fall back to whatever's actually held if the recipe step didn't name
+    # one - "pour it"/"pour" with no target given should refer to the
+    # currently held object, not fail just because 'target' was omitted.
+    target_name = params.get('target') or ctx.held_object
     if not target_name:
-        ctx.get_logger().error("pour action requires 'target' naming the held object")
-        return False
+        return ctx.fail("pour action requires a held object, but nothing is currently held")
     if target_name != ctx.held_object:
-        ctx.get_logger().error(f"Cannot pour '{target_name}': held object is '{ctx.held_object}'")
-        return False
+        return ctx.fail(f"Cannot pour '{target_name}': held object is '{ctx.held_object}'")
 
     destination_name = params.get('destination')
     direction = params.get('direction')
 
     target_info = ctx.get_object_info(target_name)
     if not target_info:
-        ctx.get_logger().error(f"Could not resolve held object '{target_name}' for pour")
-        return False
+        return ctx.fail(f"Could not resolve held object '{target_name}' for pour")
     origin = target_info['pose']['position']
 
     if destination_name:
         dest_info = ctx.get_object_info(destination_name)
         if not dest_info:
-            ctx.get_logger().error(f"Could not resolve pour destination '{destination_name}'")
-            return False
+            return ctx.fail(f"Could not resolve pour destination '{destination_name}'")
         release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
     elif direction:
         distance = float(params.get('distance', 0.3))
         offset = resolve_direction_offset(origin['x'], origin['y'], direction, distance)
         if offset is None:
-            ctx.get_logger().error(f"Unknown pour direction '{direction}'")
-            return False
+            return ctx.fail(f"Unknown pour direction '{direction}'")
         release_x, release_y = offset
     else:
         # No destination/direction - pour stays exactly where the
@@ -92,8 +90,7 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     lift_height = float(params.get('lift_height', POUR_DEFAULT_LIFT_HEIGHT))
     r = ctx.call_relative_move_service(0.0, 0.0, lift_height, motion_params=motion_params)
     if not (r and r['success']):
-        ctx.get_logger().error('Failed to lift for pour')
-        return False
+        return ctx.fail('Failed to lift for pour')
 
     # 2. Move horizontally to hover above the destination, at that same
     # lifted height - orientation still untouched. Skipped entirely
@@ -103,16 +100,14 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     if dx != 0.0 or dy != 0.0:
         r = ctx.call_relative_move_service(dx, dy, 0.0, motion_params=motion_params)
         if not (r and r['success']):
-            ctx.get_logger().error('Failed to move above pour destination')
-            return False
+            return ctx.fail('Failed to move above pour destination')
 
     # 3. Tilt: a pure joint-space delta on joint_6 alone (see docstring)
     tilt_angle = float(params.get('tilt_angle', POUR_DEFAULT_TILT_ANGLE))
     tilt_delta = [0.0, 0.0, 0.0, 0.0, 0.0, tilt_angle]
     r = ctx.call_joint_move_service(tilt_delta, motion_params=motion_params, relative=True)
     if not (r and r['success']):
-        ctx.get_logger().error('Failed to tilt for pour')
-        return False
+        return ctx.fail('Failed to tilt for pour')
 
     # 4. Hold the tilt so contents can pour out
     dwell = float(params.get('duration', 1.5))
@@ -122,8 +117,7 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     untilt_delta = [0.0, 0.0, 0.0, 0.0, 0.0, -tilt_angle]
     r = ctx.call_joint_move_service(untilt_delta, motion_params=motion_params, relative=True)
     if not (r and r['success']):
-        ctx.get_logger().error('Failed to return to level after pour')
-        return False
+        return ctx.fail('Failed to return to level after pour')
 
     if destination_name:
         where = f"toward '{destination_name}'"
