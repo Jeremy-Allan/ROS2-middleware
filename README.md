@@ -79,10 +79,10 @@ docs/
     api/
       index.html
       search.js
-    kinova_interface/nodes/
-      environment_mapping_node.html
-      hardware_interface_client.html
-      json_parser_node.html
+      kinova_interface/nodes/
+        environment_mapping_node.html
+        hardware_interface_client.html
+        json_parser_node.html
 ```
 
 ## Contributing
