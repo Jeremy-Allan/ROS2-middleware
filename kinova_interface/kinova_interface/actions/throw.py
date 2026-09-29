@@ -56,11 +56,12 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     afterward is still a rough approximation - it isn't computing
     where the object will actually land physically, just recording
     the intended target."""
-    target_name = params.get('target')
+    # No target means the held object
+    target_name = params.get('target') or ctx.held_object
     destination_name = params.get('destination')
     direction = params.get('direction')
     if not target_name:
-        return False, "throw action requires 'target' naming the held object"
+        return False, "throw action requires a held object, but nothing is currently held"
     if target_name != ctx.held_object:
         return False, f"Cannot throw '{target_name}': held object is '{ctx.held_object}'"
     if not destination_name and not direction:

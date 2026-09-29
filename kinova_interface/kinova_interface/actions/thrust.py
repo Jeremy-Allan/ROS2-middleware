@@ -48,9 +48,10 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     the object's own original resting bearing from the arm) plus a
     'distance' - both resolved from the object's pre-pickup
     registered position, the same as 'push'."""
-    target_name = params.get('target')
+    # No target means the held object
+    target_name = params.get('target') or ctx.held_object
     if not target_name:
-        return False, "thrust action requires 'target' naming the held object"
+        return False, "thrust action requires a held object, but nothing is currently held"
     if target_name != ctx.held_object:
         return False, f"Cannot thrust '{target_name}': held object is '{ctx.held_object}'"
 

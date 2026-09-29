@@ -19,23 +19,28 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     hover_clearance = float(params.get('place_offset', 0.1))
     release_clearance = 0.02
 
-    if not destination_name:
-        return False, "dropoff action requires 'destination' object name"
-
-    dest_info = ctx.get_object_info(destination_name)
-    if not dest_info:
-        return False, f"Could not resolve destination '{destination_name}'"
-
-    dest_pos = dest_info['pose']['position']
-    dest_top_z = dest_pos['z'] + object_half_height(dest_info['shape'])
-
     target_info = ctx.get_object_info(target_name) if target_name else None
     target_half_height = object_half_height(target_info['shape']) if target_info else 0.0
 
-    # release_z is where the target object's center should end up, resting
-    # on top of the destination rather than at the destination's own center
-    release_z = dest_top_z + target_half_height
-    px, py = dest_pos['x'], dest_pos['y']
+    if destination_name:
+        dest_info = ctx.get_object_info(destination_name)
+        if not dest_info:
+            return False, f"Could not resolve destination '{destination_name}'"
+
+        dest_pos = dest_info['pose']['position']
+        dest_top_z = dest_pos['z'] + object_half_height(dest_info['shape'])
+
+        # release_z is where the target object's center should end up, resting
+        # on top of the destination rather than at the destination's own center
+        release_z = dest_top_z + target_half_height
+        px, py = dest_pos['x'], dest_pos['y']
+    else:
+        # No destination: put it back at its registered position (where it was picked up)
+        if not target_info:
+            return False, "dropoff with no 'destination' needs a resolvable 'target' to release in place"
+        pos = target_info['pose']['position']
+        px, py = pos['x'], pos['y']
+        release_z = pos['z'] + target_half_height
 
     # 1. Move to a hover position above the destination, collision-safe approach
     r = ctx.call_move_service(px, py, release_z + hover_clearance)
@@ -64,4 +69,6 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
 
     if target_name == ctx.held_object:
         ctx.held_object = None
-    return True, f"Placed '{target_name or 'object'}' at '{destination_name}'"
+    if destination_name:
+        return True, f"Placed '{target_name or 'object'}' at '{destination_name}'"
+    return True, f"Released '{target_name}' in place"

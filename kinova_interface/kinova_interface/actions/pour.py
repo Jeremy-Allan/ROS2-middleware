@@ -49,9 +49,10 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     coupling that handle_relative_move's own docstring already warns
     about (see hardware_interface_client.py) - which is what produced
     the unreachable target that made the original design fail."""
-    target_name = params.get('target')
+    # No target means the held object
+    target_name = params.get('target') or ctx.held_object
     if not target_name:
-        return False, "pour action requires 'target' naming the held object"
+        return False, "pour action requires a held object, but nothing is currently held"
     if target_name != ctx.held_object:
         return False, f"Cannot pour '{target_name}': held object is '{ctx.held_object}'"
 
