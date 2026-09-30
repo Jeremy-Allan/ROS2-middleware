@@ -10,12 +10,12 @@ calibration:
   marker_dict: 6X6_250
   marker_size: 0.095
 
-  # (static_tf_ is only used when use_static_transform=true)
+# (static_tf_ is only used when use_static_transform=true)
   static_tf_parent_frame: base_link
   static_tf_child_frame: kinect2_link
-  static_tf_x: 0.2
-  static_tf_y: -0.97
-  static_tf_z: 0.5
-  static_tf_roll: 0.9
+  static_tf_x: 0.0
+  static_tf_y: 1.0
+  static_tf_z: 0.53
+  static_tf_roll: 0.925
   static_tf_pitch: 3.1
-  static_tf_yaw: 3.3
+  static_tf_yaw: -0.05

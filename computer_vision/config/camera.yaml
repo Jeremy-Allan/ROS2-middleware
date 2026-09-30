@@ -13,3 +13,7 @@ vision_snapshot_node:
     arm_frames: ['shoulder_link', 'arm_link', 'forearm_link',
                  'lower_wrist_link', 'upper_wrist_link', 'end_effector_link']
     arm_radius: 0.12
+
+    # Fixed fixtures to ignore (The arm's mount to table)
+    #x_min, x_max, y_min, y_max, z_min, z_max.
+    exclude_boxes: [-0.09, 0.05, -0.06, 0.06, -0.20, 0.06]

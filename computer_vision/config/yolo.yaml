@@ -23,20 +23,3 @@ vision_snapshot_node:
 
     # label hygiene (comma separated strings; avoids empty-list typing problems in ROS params)
     ignore_labels: "table, chair"
-    label_alias: "cell phone:phone"
-
-    # used ONLY for depth-hole detections: [width, depth, height] in metres
-    class_dims:
-      cube:   [0.05, 0.05, 0.05]
-      pen:    [0.015, 0.15, 0.012]
-      cup:    [0.08, 0.08, 0.10]
-      bottle: [0.07, 0.07, 0.22]
-      book:   [0.15, 0.22, 0.02]
-      phone:  [0.07, 0.15, 0.01]
-
-    # MoveIt primitive for named classes (default BOX). CYLINDER = [height, radius]
-    class_shape:
-      cup: CYLINDER
-      bottle: CYLINDER
-      can: CYLINDER
-      ball: SPHERE

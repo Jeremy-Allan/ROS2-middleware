@@ -4,14 +4,13 @@ import yaml
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
-    DeclareLaunchArgument, ExecuteProcess, IncludeLaunchDescription,
-    OpaqueFunction, TimerAction,
+    DeclareLaunchArgument, IncludeLaunchDescription,
+    RegisterEventHandler, TimerAction,
 )
 from launch.conditions import IfCondition
+from launch.event_handlers import OnProcessIO
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import (
-    LaunchConfiguration, PythonExpression,
-)
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
 
 
@@ -24,87 +23,6 @@ def _load_calib():
     return {k: str(v) for k, v in raw.items()}
 
 
-def _static_publisher_when_ready(context, *args, **kwargs):
-    """Event-driven: wait for the bridge's TF via tf2_ros, then broadcast
-    the static transform in-process (no subprocess, same DDS graph as
-    every other node in the launch)."""
-    ext_cal = LaunchConfiguration('extrinsic_calibrate').perform(context)
-    use_static = LaunchConfiguration('use_static_transform').perform(context)
-    if ext_cal.lower() == 'true' or use_static.lower() != 'true':
-        return []
-
-    parent = LaunchConfiguration('static_tf_parent_frame').perform(context)
-    child  = LaunchConfiguration('static_tf_child_frame').perform(context)
-    x      = LaunchConfiguration('static_tf_x').perform(context)
-    y      = LaunchConfiguration('static_tf_y').perform(context)
-    z      = LaunchConfiguration('static_tf_z').perform(context)
-    roll   = LaunchConfiguration('static_tf_roll').perform(context)
-    pitch  = LaunchConfiguration('static_tf_pitch').perform(context)
-    yaw    = LaunchConfiguration('static_tf_yaw').perform(context)
-
-    waiter = f'''
-import math, sys
-import rclpy
-from rclpy.node import Node
-from rclpy.time import Time
-from tf2_ros import Buffer, TransformListener, StaticTransformBroadcaster
-from geometry_msgs.msg import TransformStamped
-
-
-def quat_from_euler(r, p, y):
-    cr, sr = math.cos(r / 2), math.sin(r / 2)
-    cp, sp = math.cos(p / 2), math.sin(p / 2)
-    cy, sy = math.cos(y / 2), math.sin(y / 2)
-    return (
-        sr * cp * cy - cr * sp * sy,   # qx
-        cr * sp * cy + sr * cp * sy,   # qy
-        cr * cp * sy - sr * sp * cy,   # qz
-        cr * cp * cy + sr * sp * sy,   # qw
-    )
-
-
-rclpy.init()
-node = rclpy.create_node("static_tf_waiter")
-
-buffer = Buffer()
-listener = TransformListener(buffer, node)   # noqa: F841
-
-print("[static_tf] waiting for bridge TF kinect2_link -> kinect2_rgb_optical_frame ...", flush=True)
-
-# Event-driven: spin_once returns as soon as a message arrives on /tf or /tf_static.
-# The moment the bridge publishes its first frame, can_transform flips true.
-while rclpy.ok():
-    rclpy.spin_once(node, timeout_sec=0.5)
-    if buffer.can_transform("kinect2_link", "kinect2_rgb_optical_frame", Time()):
-        print("[static_tf] bridge TF ready, broadcasting {parent} -> {child}", flush=True)
-        break
-else:
-    sys.exit(1)
-
-broadcaster = StaticTransformBroadcaster(node)
-t = TransformStamped()
-t.header.stamp = node.get_clock().now().to_msg()
-t.header.frame_id = {parent!r}
-t.child_frame_id  = {child!r}
-t.transform.translation.x = float({x!r})
-t.transform.translation.y = float({y!r})
-t.transform.translation.z = float({z!r})
-qx, qy, qz, qw = quat_from_euler(float({roll!r}), float({pitch!r}), float({yaw!r}))
-t.transform.rotation.x = qx
-t.transform.rotation.y = qy
-t.transform.rotation.z = qz
-t.transform.rotation.w = qw
-broadcaster.sendTransform(t)
-
-rclpy.spin(node)
-'''
-
-    return [ExecuteProcess(
-        cmd=['python3', '-c', waiter],
-        output='screen',
-    )]
-
-
 def generate_launch_description():
     cfg = os.path.join(get_package_share_directory('computer_vision'), 'config')
     eh2 = get_package_share_directory('easy_handeye2')
@@ -115,6 +33,11 @@ def generate_launch_description():
     publish_saved = IfCondition(PythonExpression([
         "'", LaunchConfiguration('extrinsic_calibrate'), "'.lower() == 'false' and '",
         LaunchConfiguration('use_static_transform'), "'.lower() == 'false'",
+    ]))
+
+    publish_manual = IfCondition(PythonExpression([
+        "'", LaunchConfiguration('extrinsic_calibrate'), "'.lower() == 'false' and '",
+        LaunchConfiguration('use_static_transform'), "'.lower() == 'true'",
     ]))
 
     args = [
@@ -164,15 +87,58 @@ def generate_launch_description():
     )
 
     # --- Vision node (delayed so the bridge has published its first frames) ---
-    vision = TimerAction(period=5.0, actions=[
-        Node(
-            package='computer_vision', executable='vision_node',
-            name='vision_snapshot_node', output='screen',
-            parameters=[os.path.join(cfg, 'camera.yaml'),
-                        os.path.join(cfg, 'vision.yaml'),
-                        os.path.join(cfg, 'yolo.yaml')],
-        ),
-    ])
+    vision_node = Node(
+        package='computer_vision', executable='vision_node',
+        name='vision_snapshot_node', output='screen',
+        parameters=[os.path.join(cfg, 'camera.yaml'),
+                    os.path.join(cfg, 'vision.yaml'),
+                    os.path.join(cfg, 'yolo.yaml')],
+    )
+    vision = TimerAction(period=5.0, actions=[vision_node])
+
+    # --- Manual static transform, gated on the vision node being ready ---
+    static_tf = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='kinect_static_tf',
+        output='screen',
+        condition=publish_manual,
+        arguments=[
+            '--x', LaunchConfiguration('static_tf_x'),
+            '--y', LaunchConfiguration('static_tf_y'),
+            '--z', LaunchConfiguration('static_tf_z'),
+            '--roll',  LaunchConfiguration('static_tf_roll'),
+            '--pitch', LaunchConfiguration('static_tf_pitch'),
+            '--yaw',   LaunchConfiguration('static_tf_yaw'),
+            '--frame-id',       LaunchConfiguration('static_tf_parent_frame'),
+            '--child-frame-id', LaunchConfiguration('static_tf_child_frame'),
+        ],
+    )
+
+    fired = {'done': False}
+
+    # NOTE: OnProcessIO handlers are called as handler(event) — *not*
+    # handler(event, context). Extra args must be optional.
+    def _on_vision_ready(event, *_):
+        if fired['done']:
+            return None
+        text = event.text
+        if isinstance(text, bytes):
+            text = text.decode('utf-8', 'replace')
+        if 'ready | workspace=' not in text:
+            return None
+        fired['done'] = True
+        # 1.5 s > one period of the vision node's 1 Hz /vision/workspace timer,
+        # so the static TF cannot start before the workspace has been broadcast.
+        return [TimerAction(period=1.5, actions=[static_tf])]
+
+    wait_for_vision = RegisterEventHandler(
+        OnProcessIO(
+            target_action=vision_node,
+            on_stdout=_on_vision_ready,
+            on_stderr=_on_vision_ready,   # rclpy logs go to stderr by default
+        )
+    )
 
     # --- Calibration mode: ArUco + easy_handeye2 GUI ---
     aruco = TimerAction(period=7.0, actions=[Node(
@@ -212,10 +178,11 @@ def generate_launch_description():
         }.items(),
     )
 
-    # --- Normal mode B: event-driven static transform ---
-    publish_static_node = OpaqueFunction(function=_static_publisher_when_ready)
-
     return LaunchDescription(args + [
-        kinect, vision, aruco, calibrate,
-        publish_calib, publish_static_node,
+        kinect,
+        vision,
+        wait_for_vision,
+        aruco,
+        calibrate,
+        publish_calib,
     ])
