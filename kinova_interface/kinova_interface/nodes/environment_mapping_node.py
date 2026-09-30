@@ -414,6 +414,7 @@ class EnvironmentMappingNode(Node):
         self.status_text = response.message
         self.publish_status()
         return response
+
     def get_scene_objects_callback(self, request, response):
         try:
             with self._dict_lock:
@@ -429,11 +430,8 @@ class EnvironmentMappingNode(Node):
         return response
 
     def update_scene_objects_callback(self, request, response):
-        """Merge vision objects into the dictionary and sync MoveIt with a small diff.
-        - attached objects are never touched (no detach side-effect)
-        - config objects are never auto-removed
-        - remove_missing: vision-only objects absent from the payload are removed
-          (so an empty payload + remove_missing clears all vision objects)"""
+        # add to moveit + in memoery obj dictionary (static_objects)
+        #remove_missing: only removes vision objects 
         try:
             incoming = json.loads(request.objects_json).get('objects', {})
         except (json.JSONDecodeError, AttributeError) as e:
@@ -463,7 +461,7 @@ class EnvironmentMappingNode(Node):
                 if co is not None:
                     scene.world.collision_objects.append(co)
 
-            # Drop vision-only objects not reported this time (also from MoveIt)
+            # Drop  only vision objects  (also from MoveIt)
             if request.remove_missing:
                 for obj_id in list(self.static_objects):
                     if (obj_id in incoming or obj_id in self.attached_objects
