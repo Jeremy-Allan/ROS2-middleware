@@ -12,3 +12,11 @@ GRIPPER_TOUCH_LINKS = [
     "left_finger_dist_link", "left_finger_prox_link",
     "right_finger_dist_link", "right_finger_prox_link",
 ]
+
+# Gripper commands (rad). Closing stops on the object (allow_stalling), so one closed value fits all.
+GRIPPER_OPEN = 0.0
+GRIPPER_CLOSED = 0.8
+# Gap between the finger pads when fully open (m).
+GRIPPER_MAX_OPENING = 0.109
+# How far the fingertips reach past the tool_frame origin (pad centre), roughly.
+FINGERTIP_LENGTH = 0.03
