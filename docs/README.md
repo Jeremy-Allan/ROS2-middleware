@@ -10,6 +10,7 @@ If you read nothing else, read these two pages:
 ## Pick your path
 
 - **I'm brand new to this project:** Start with [Overview](overview.md), then [Installation](installation.md). You do not need prior ROS 2 experience, both pages explain concepts as they come up.
+- **I'm not on native Ubuntu:** [Environment Setup](environment-setup.md) covers WSL2, Distrobox, and VM options before you start [Installation](installation.md).
 - **I just want to get it running:** [Installation](installation.md), then [Running the System](running.md) walks through the three terminals you need.
 - **I need to add a new object, movement, or recipe:** [Configuration](configuration.md) covers the coordinate dictionary, relative movements, obstacles, recipes, and the LLM provider/prompt setup.
 - **I'm writing or running tests:** [Testing](testing.md) covers the middleware's test suites and the proxy's LLM-output test suite, and is honest about what neither one currently catches.
@@ -24,6 +25,7 @@ If you read nothing else, read these two pages:
 | Doc | What it gives you |
 |---|---|
 | [Overview](overview.md) | What the system is, the request path end to end, the four middleware nodes, the proxy's two domains |
+| [Environment Setup](environment-setup.md) | Preparing a non-native-Ubuntu host (WSL2, Distrobox, VM) before installing |
 | [Installation](installation.md) | ROS 2, the Kinova driver stack, the middleware workspace, the proxy, an LLM provider |
 
 ### Use it day to day
@@ -41,12 +43,16 @@ If you read nothing else, read these two pages:
 |---|---|
 | [Architecture](architecture.md) | Full pipeline diagram, per-node internals, custom service/message types, package layout |
 | [Safety and Contracts](safety-and-contracts.md) | The execution contract, safety layers, failure mode table, and system readiness definition |
+| [Pour Motion Reference](pour-motion-reference.md) | The manually-verified joint-space sequence `pour`'s implementation is built against |
+| [Push Motion Reference](push-motion-reference.md) | The manually-verified joint-space sequence `push`'s implementation is built against |
+| [Throw Motion Reference](throw-motion-reference.md) | The manually-verified joint-space sequence `throw`'s implementation is built against, and why the original design was replaced |
 
 ### Reference
 
 | Doc | What it gives you |
 |---|---|
 | [Video Demos](demos.md) | Short recordings of each feature in action |
+| [API Reference](api/nodes.md) | Function-level reference generated from the code's own docstrings (nodes, actions, utils) |
 | [PROJECT-OVERVIEW](../kinova_interface/resource/PROJECT-OVERVIEW.md) | Original Sprint 1/2 design notes and history, kept where it already lived |
 
 ## Support
