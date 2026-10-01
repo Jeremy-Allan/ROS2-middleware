@@ -1,3 +1,5 @@
+"""TF/URDF frame, joint, and link name constants for the Kinova Gen3 Lite."""
+
 # TF/URDF frame, joint and link names for the Kinova Gen3 Lite.
 BASE_FRAME = 'base_link'
 TOOL_FRAME = 'tool_frame'

@@ -21,6 +21,11 @@ from kinova_interfaces.srv import ExecuteRecipe
 
 
 def main():
+    """Read a recipe file and send it to /execute_recipe, printing the result.
+
+    Exits non-zero on a usage error, a missing /execute_recipe service, no
+    response, or a failed recipe.
+    """
     if len(sys.argv) != 2:
         print(f"Usage: {sys.argv[0]} <recipe_json_path>")
         sys.exit(1)
