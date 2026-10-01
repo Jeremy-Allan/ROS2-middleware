@@ -1,3 +1,10 @@
+"""ROS 2 node that orchestrates recipe execution.
+
+Loads a recipe (from a file at startup, or dynamically via a service call),
+runs its steps one at a time through ArmActions' registered handlers, and
+reports progress and failures through telemetry and the recipe log.
+"""
+
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
@@ -16,10 +23,24 @@ from kinova_interface.actions.arm_actions import ArmActions
 class JsonParser:
     """Helper class to handle JSON loading."""
     def __init__(self, node_context):
+        """Initialise the parser.
+
+        Args:
+            node_context (Node): ROS 2 node used for logging.
+        """
         self.recipe = None
         self.node = node_context # Reference to the ROS 2 node for logging
 
     def load_recipe_from_file(self, recipe_path):
+        """Load a recipe from a JSON file on disk.
+
+        Args:
+            recipe_path (str): Path to the recipe JSON file.
+
+        Returns:
+            bool: True if the file was read and parsed successfully,
+                otherwise False.
+        """
         try:
             with open(recipe_path, 'r') as f:
                 self.recipe = json.load(f)
@@ -29,6 +50,14 @@ class JsonParser:
             return False
 
     def load_recipe_from_service(self, recipe_str):
+        """Load a recipe from a JSON string, as received by a service call.
+
+        Args:
+            recipe_str (str): JSON-encoded recipe.
+
+        Returns:
+            bool: True if the string was parsed successfully, otherwise False.
+        """
         try:
             self.recipe = json.loads(recipe_str)
             return True
@@ -37,6 +66,12 @@ class JsonParser:
             return False
 
     def get_recipe_steps(self):
+        """Return the currently loaded recipe's steps.
+
+        Returns:
+            list: The recipe's steps, or an empty list if no recipe is
+                loaded.
+        """
         if not self.recipe:
             return []
         return self.recipe.get('steps', [])
@@ -52,6 +87,13 @@ class JsonParserNode(Node):
     STEP_SETTLE_DELAY_SEC = 0.5
 
     def __init__(self):
+        """Initialise the JSON parser node.
+
+        Creates the recipe parser and ArmActions, sets up telemetry and the
+        ``/execute_recipe``/``/reset_environment`` services, and, if a static
+        ``recipe`` launch parameter was provided, loads it and schedules its
+        execution on a one-shot startup timer.
+        """
         super().__init__('json_parser_node')
 
         # 1. Callback Groups
@@ -109,7 +151,15 @@ class JsonParserNode(Node):
                 self.get_logger().error(f"Failed to load recipe from {recipe_path}")
 
     def _update_node_status(self, state=None, status_text=None, success=None):
-        """Helper to update internal telemetry state and publish immediately."""
+        """Helper to update internal telemetry state and publish immediately.
+
+        Any argument left as None keeps its current value.
+
+        Args:
+            state (int, optional): ExtendedStatus state value to set.
+            status_text (str, optional): Status message to set.
+            success (bool, optional): Most-recent-command-success flag to set.
+        """
         if state is not None:
             self.current_state = state
         if status_text is not None:
@@ -119,6 +169,11 @@ class JsonParserNode(Node):
         self.publish_status()
 
     def publish_status(self):
+        """Publish the node's current telemetry status.
+
+        The published status includes the node name, current state, status
+        message, and whether the most recent command was successful.
+        """
         msg = ExtendedStatus()
         msg.node_name = self.get_name()
         msg.state = self.current_state
@@ -133,7 +188,16 @@ class JsonParserNode(Node):
         self.execute_recipe()
 
     def execute_recipe_callback(self, request, response):
-        """Callback for the dynamic execution service."""
+        """Callback for the dynamic execution service.
+
+        Args:
+            request (ExecuteRecipe.Request): Service request containing the
+                JSON recipe string.
+            response (ExecuteRecipe.Response): Service response to populate.
+
+        Returns:
+            ExecuteRecipe.Response: The populated service response.
+        """
         self.get_logger().info("Received dynamic recipe execution request.")
         self.get_logger().debug(f"Payload recipe received: {request.recipe_json}")
 
@@ -163,7 +227,15 @@ class JsonParserNode(Node):
         """Reset objects/obstacles back to their configured defaults and
         clear held-object tracking, without a full middleware restart. In
         the same exec_cb_group as recipe execution, so it can't run
-        concurrently with (or interrupt) an in-progress recipe."""
+        concurrently with (or interrupt) an in-progress recipe.
+
+        Args:
+            request (Trigger.Request): Empty trigger request.
+            response (Trigger.Response): Service response to populate.
+
+        Returns:
+            Trigger.Response: The populated service response.
+        """
         self.get_logger().info("Received environment reset request.")
         success, message = self.arm_actions.reset_environment()
         response.success = success
@@ -176,7 +248,17 @@ class JsonParserNode(Node):
 
     def _dispatch_step(self, index, step):
         """Look up and run the handler for one recipe step, logging enough to
-        reconstruct what was attempted and what happened for the LLM safety research."""
+        reconstruct what was attempted and what happened for the LLM safety research.
+
+        Args:
+            index (int): Zero-based index of this step in the recipe.
+            step (dict): The step, with an ``action`` key and optional
+                ``parameters`` dict.
+
+        Returns:
+            bool: True if the step's handler ran and succeeded, otherwise
+                False (including when ``action`` has no registered handler).
+        """
         action = step.get('action')
         params = step.get('parameters', {})
         timestamp = time.time()
@@ -208,7 +290,12 @@ class JsonParserNode(Node):
         """Entry point for recipe execution with guaranteed exception safety
         and IDLE cleanup - an unhandled exception from a step handler is
         caught here so current_state can never get stuck on BUSY, and is
-        reported as a failed recipe rather than crashing the callback."""
+        reported as a failed recipe rather than crashing the callback.
+
+        Returns:
+            bool: True if every step in the currently loaded recipe
+                succeeded, otherwise False.
+        """
         steps = self.parser.get_recipe_steps()
         if not steps:
             self.get_logger().error("No executable steps found or recipe failed to load.")
@@ -228,7 +315,17 @@ class JsonParserNode(Node):
             self.publish_status()
 
     def _run_steps(self, steps: list) -> bool:
-        """Sequential step execution loop."""
+        """Sequential step execution loop.
+
+        Runs each step through :meth:`_dispatch_step` in order, updating
+        telemetry before and after each one, and stops at the first failure.
+
+        Args:
+            steps (list): The recipe's steps, in execution order.
+
+        Returns:
+            bool: True if every step succeeded, otherwise False.
+        """
         recipe_name = self.parser.recipe.get('recipe_name', 'Unnamed')
         self.get_logger().info(
             f"[recipe_log] event=start timestamp={time.time():.3f} recipe={recipe_name} steps={len(steps)}"
@@ -266,6 +363,11 @@ class JsonParserNode(Node):
         return True
 
 def main():
+    """Start the JSON parser ROS 2 node.
+
+    Initialises rclpy, creates the node, spins it on a multi-threaded
+    executor, and performs node and rclpy shutdown on exit.
+    """
     rclpy.init()
     node = JsonParserNode()
 
