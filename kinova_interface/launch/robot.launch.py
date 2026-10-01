@@ -1,3 +1,11 @@
+"""Launch file for the full middleware stack: Kortex control, MoveIt, and the four middleware nodes.
+
+Starts, in order, the Kinova driver and controllers (kortex_control), MoveIt
+2 (with this package's joint limits), and then the four middleware nodes
+(environment_mapping_node, hardware_interface_client, json_parser_node,
+telemetry_node).
+"""
+
 import sys
 import os
 from ament_index_python.packages import get_package_share_directory
@@ -12,6 +20,15 @@ from moveit_configs_utils import MoveItConfigsBuilder
 from moveit_configs_utils.launches import generate_move_group_launch
 
 def check_hardware_args(context, *args, **kwargs):
+    """Require an explicit robot_ip when launching against real hardware.
+
+    Args:
+        context: Launch context used to resolve launch configurations.
+
+    Raises:
+        RuntimeError: If ``use_fake_hardware`` is false and ``robot_ip``
+            wasn't explicitly provided on the command line.
+    """
     use_fake_hardware = LaunchConfiguration('use_fake_hardware').perform(context)
     
     if use_fake_hardware.lower() == 'false':
@@ -28,6 +45,16 @@ def check_hardware_args(context, *args, **kwargs):
             )
 
 def launch_setup(context, *args, **kwargs):
+    """Build the four middleware node actions, once launch arguments are resolved.
+
+    Args:
+        context: Launch context used to resolve launch configurations.
+
+    Returns:
+        list[Node]: The four middleware node launch actions
+            (environment_mapping_node, hardware_interface_client,
+            json_parser_node, telemetry_node), ready to launch.
+    """
     debug_mode = LaunchConfiguration('debug_mode').perform(context).lower() == 'true'
     core_debug = LaunchConfiguration('core_debug').perform(context).lower() == 'true'
     enable_individual_logs = LaunchConfiguration('enable_individual_logs').perform(context).lower() == 'true'
@@ -37,6 +64,7 @@ def launch_setup(context, *args, **kwargs):
         base_ros_args.extend(['--disable-external-lib-logs'])
 
     def get_ros_args(node_name):
+        """Build this node's --ros-args log-level flags from the debug settings above."""
         args = list(base_ros_args)
         if core_debug:
             args.extend(['--log-level', 'debug'])
@@ -84,6 +112,16 @@ def launch_setup(context, *args, **kwargs):
     return [environment_mapping_node, hardware_interface_client, json_parser_node, telemetry_node]
 
 def generate_launch_description():
+    """Build the full launch description for the middleware stack.
+
+    Declares the launch arguments, validates them via
+    :func:`check_hardware_args`, includes the Kortex control and MoveIt
+    launch files, and schedules the four middleware nodes via
+    :func:`launch_setup`.
+
+    Returns:
+        LaunchDescription: The complete launch description.
+    """
     debug_mode_arg = DeclareLaunchArgument(
         'debug_mode',
         default_value='false',
