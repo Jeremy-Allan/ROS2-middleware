@@ -21,10 +21,18 @@ nav:
       - Push: push-motion-reference.md
       - Throw: throw-motion-reference.md
   - Video Demos: demos.md
-  - API Reference:
+  - Middleware API Reference:
       - Nodes: api/nodes.md
       - Actions: api/actions.md
       - Utils: api/utils.md
+  - Proxy:
+      - Overview: proxy/overview.md
+      - Development: proxy/development.md
+      - API Reference:
+          - Backend: proxy/api/backend.md
+          - LLM Proxy: proxy/api/llm-proxy.md
+          - TUI: proxy/api/tui.md
+          - Shared: proxy/api/shared.md
 
 theme:
   name: material

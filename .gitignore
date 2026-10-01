@@ -12,3 +12,8 @@ __pycache__/
 # MkDocs local build output (CI builds this fresh, never commit it)
 site/
 _site/
+
+# Proxy repo content pulled in at docs-build time (see .github/workflows/docs.yml),
+# never checked into this repo
+docs/proxy/
+.proxy-src/

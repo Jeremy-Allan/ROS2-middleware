@@ -4,8 +4,8 @@ on:
   push:
     branches: [main]
   schedule:
-    # Daily rebuild, so content pulled in from other repos (once added)
-    # stays reasonably fresh even between pushes to this repo.
+    # Daily rebuild, so content pulled in from the proxy repo stays
+    # reasonably fresh even on days nobody pushes to this repo.
     - cron: "17 3 * * *"
   workflow_dispatch:
 
@@ -22,12 +22,43 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out this repo
+        uses: actions/checkout@v4
+
+      - name: Check out the proxy repo
+        uses: actions/checkout@v4
+        with:
+          repository: paul-isit/embodied-ai-proxy
+          path: .proxy-src
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.10"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+
       - name: Install docs dependencies
         run: pip install -r docs/requirements.txt
+
+      - name: Install gomarkdoc
+        run: go install github.com/princjef/gomarkdoc/cmd/gomarkdoc@latest
+
+      - name: Pull in the proxy repo's docs and generate its API reference
+        run: |
+          set -e
+          mkdir -p docs/proxy/api
+          cp .proxy-src/docs/overview.md docs/proxy/overview.md
+          cp .proxy-src/docs/development.md docs/proxy/development.md
+
+          # One combined reference page per Go module. Run from inside
+          # each module so its own go.mod (linked via the proxy repo's
+          # go.work) resolves correctly.
+          for module in backend llm-proxy tui shared; do
+            out="$GITHUB_WORKSPACE/docs/proxy/api/${module}.md"
+            ( cd ".proxy-src/${module}" && gomarkdoc --output "$out" ./... )
+          done
+
       - name: Build site
         run: mkdocs build --strict --site-dir _site
       - uses: actions/upload-pages-artifact@v3
