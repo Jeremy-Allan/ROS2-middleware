@@ -8,3 +8,7 @@ log/
 middleware_logs/
 
 __pycache__/
+
+# MkDocs local build output (CI builds this fresh, never commit it)
+site/
+_site/
