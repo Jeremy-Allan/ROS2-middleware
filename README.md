@@ -71,7 +71,7 @@ kinova_interface/
   kinova_interface/    the four ROS 2 node source files
   launch/              robot.launch.py
   recipes/             task_recipe.json, test_suite/
-  resource/            PROJECT-OVERVIEW.md
+  resource/            ament resource marker (required by every ROS 2 package)
 kinova_interfaces/
   srv/, msg/           custom ROS 2 service and message definitions
 docs/

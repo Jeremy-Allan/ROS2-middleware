@@ -53,7 +53,6 @@ If you read nothing else, read these two pages:
 |---|---|
 | [Video Demos](demos.md) | Short recordings of each feature in action |
 | [API Reference](api/nodes.md) | Function-level reference generated from the code's own docstrings (nodes, actions, utils) |
-| [PROJECT-OVERVIEW](../kinova_interface/resource/PROJECT-OVERVIEW.md) | Original Sprint 1/2 design notes and history, kept where it already lived |
 
 ## Support
 

@@ -66,13 +66,18 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-          # kinova_interface/kinova_interface is the Python package root
-          # (the outer kinova_interface/ is the ROS 2 package directory).
+          # The outer kinova_interface/ is the ROS 2 package directory; the
+          # inner kinova_interface/kinova_interface/ is the actual Python
+          # package (has __init__.py). Putting the OUTER dir on the path is
+          # what makes "kinova_interface.nodes.xyz" resolvable, putting the
+          # inner one on the path instead resolves "nodes.xyz" with no
+          # top-level package name, which mkdocstrings can't match against
+          # "kinova_interface.nodes.xyz" in the docs/api/*.md pages.
           # griffe reads this via static analysis, it does not import or
           # execute the code, so this works in CI without ROS 2 or any of
           # kinova_interface's own runtime dependencies (rclpy, MoveIt
           # messages, etc.) installed.
-          paths: [kinova_interface/kinova_interface]
+          paths: [kinova_interface]
           options:
             docstring_style: google
             show_source: true
