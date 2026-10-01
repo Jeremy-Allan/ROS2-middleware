@@ -248,18 +248,10 @@ def test_load_obstacles_dictionary(node, tmp_path):
         }
     }
 
-    with patch(
-        "kinova_interface.nodes.environment_mapping_node.get_package_share_directory",
-        return_value=str(tmp_path)
-    ):
+    node.config_dir = str(tmp_path)
+    (tmp_path / "obstacles.json").write_text(json.dumps(obstacles))
 
-        data_dir = tmp_path / "data" / "configs" / "env"
-        data_dir.mkdir(parents=True)
-
-        file_path = data_dir / "obstacles.json"
-        file_path.write_text(json.dumps(obstacles))
-
-        result = node.load_obstacles_dictionary()
+    result = node.load_obstacles_dictionary()
 
     assert "table" in result
     assert result["table"]["pose"]["position"] == {"x": 1.0, "y": 2.0, "z": 0.25}
@@ -267,19 +259,11 @@ def test_load_obstacles_dictionary(node, tmp_path):
 
 def test_load_obstacles_dictionary_invalid_json(node, tmp_path):
 
-    with patch(
-        "kinova_interface.nodes.environment_mapping_node.get_package_share_directory",
-        return_value=str(tmp_path)
-    ):
+    node.config_dir = str(tmp_path)
+    (tmp_path / "obstacles.json").write_text("invalid json")
 
-        data_dir = tmp_path / "data" / "configs" / "env"
-        data_dir.mkdir(parents=True)
-
-        file_path = data_dir / "obstacles.json"
-        file_path.write_text("invalid json")
-
-        with pytest.raises(SystemExit):
-            node.load_obstacles_dictionary()
+    with pytest.raises(SystemExit):
+        node.load_obstacles_dictionary()
 
 # get_coordinates_callback()
 def test_get_coordinates_callback_found(node):

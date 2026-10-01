@@ -1,11 +1,9 @@
 import json
-import os
 import time
 import threading
 import rclpy
 from pathlib import Path
 from rclpy.node import Node
-from ament_index_python.packages import get_package_share_directory
 from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose
 from std_srvs.srv import Trigger
 from moveit_msgs.msg import PlanningScene, CollisionObject, AttachedCollisionObject
@@ -99,8 +97,7 @@ class EnvironmentMappingNode(Node):
         return objects
     
     def load_obstacles_dictionary(self):
-        pkg_share = get_package_share_directory('kinova_interface')
-        json_path = os.path.join(pkg_share, 'data', 'configs', 'env', 'obstacles.json')
+        json_path = Path(self.config_dir) / 'obstacles.json'
         try:
             with open(json_path, 'r') as file:
                 obstacles = json.load(file)

@@ -54,17 +54,12 @@ class JsonParserNode(Node):
     def __init__(self):
         super().__init__('json_parser_node')
 
-        # 1. Callback Groups
         # Reentrant group for general service clients to allow multiple responses
         self.cb_group = ReentrantCallbackGroup()
         # Mutually exclusive group for the execution sequence to ensure one recipe at a time
         self.exec_cb_group = MutuallyExclusiveCallbackGroup()
 
-        # 2. Arm actions: owns the hardware/environment service clients and
-        # the dictionary of named action handlers ('home', 'pickup', etc.)
         self.arm_actions = ArmActions(self)
-
-        # 3. Initialize the Parser
         self.parser = JsonParser(self)
 
         # Telemetry Setup
@@ -74,14 +69,12 @@ class JsonParserNode(Node):
         self.status_text = "JSON Parser Online & Ready"
         self.command_success = True
 
-        # 4. Create Service to execute recipes dynamically
-        # Put this in the exec_cb_group so dynamic recipes don't overlap with static ones
         self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
         self.reset_srv = self.create_service(Trigger, '/reset_environment', self.reset_environment_callback, callback_group=self.exec_cb_group)
 
         self.get_logger().info("JSON Parser Node Online.")
 
-        # 5. Declare and get the recipe parameter
+        # Declare and get the recipe parameter
         self.declare_parameter('recipe', 'none')
         recipe_file = self.get_parameter('recipe').get_parameter_value().string_value
 
@@ -90,17 +83,9 @@ class JsonParserNode(Node):
             if os.path.isabs(recipe_file):
                 recipe_path = recipe_file
             else:
-                try:
-                    package_share_directory = get_package_share_directory('kinova_interface')
-                    recipe_path = os.path.join(package_share_directory, 'recipes', recipe_file)
-                except Exception as e:
-                    # Fallback for local development
-                    self.get_logger().warning(f"Could not find package share directory, falling back to local path: {e}")
-                    # nodes/ -> kinova_interface/ (python pkg) -> kinova_interface/ (ROS pkg, holds recipes/)
-                    base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                    recipe_path = os.path.join(base_path, 'recipes', recipe_file)
+                recipe_path = os.path.join(get_package_share_directory('kinova_interface'), 'recipes', recipe_file)
 
-        # 6. If a static recipe was provided, execute it on startup using a one-shot Timer
+        # If a static recipe was provided, execute it on startup using a one-shot Timer
         if recipe_path:
             self.get_logger().info(f"Loading static recipe from {recipe_path}")
             if self.parser.load_recipe_from_file(recipe_path):
