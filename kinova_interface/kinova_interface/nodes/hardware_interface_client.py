@@ -1,3 +1,11 @@
+"""ROS 2 node that is the only part of the middleware that touches the robot.
+
+Exposes the arm and gripper movement services, dispatches the underlying
+MoveIt and gripper actions, tracks hardware fault state, and reports
+telemetry. Other code may query MoveIt (IK, FK, state validity, planning
+scene) directly, but every actual movement goes through this node.
+"""
+
 import rclpy
 from rclpy.node import Node
 from rclpy.action import ActionClient
@@ -27,6 +35,15 @@ from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES
 
 
 class HardwareInterfaceClient(Node):
+    """The only node that executes motion on the real or simulated robot.
+
+    Exposes the arm and gripper movement services, dispatches the underlying
+    MoveIt and gripper actions and waits for them to finish, tracks hardware
+    fault state, and reports telemetry. Movement calls block synchronously on
+    a ``threading.Event`` until the action's result callback fires, which is
+    what makes each recipe step wait for the robot to actually finish.
+    """
+
     ACTION_TIMEOUT_SEC = 30.0
     GRIPPER_TIMEOUT_SEC = 10.0
     SERVER_WAIT_TIMEOUT_SEC = 5.0
@@ -64,6 +81,13 @@ class HardwareInterfaceClient(Node):
     }
 
     def __init__(self):
+        """Initialise the Kinova hardware interface node.
+
+        Creates the MoveIt arm and gripper action clients, the TF listener,
+        the joint-state and hardware-fault subscriptions, the fault
+        controller health-check timer, the telemetry publisher, and the five
+        movement services.
+        """
         super().__init__('kinova_hardware_client')
         self.get_logger().info('Kinova Hardware Client Online - Waiting for Service Requests...')
 
@@ -143,6 +167,11 @@ class HardwareInterfaceClient(Node):
 
     # --- Telemetry Status Publisher ---
     def publish_status(self):
+        """Publish the node's current telemetry status.
+
+        The published status includes the node name, current state, status
+        message, and whether the most recent command was successful.
+        """
         msg = ExtendedStatus()
         msg.node_name = self.get_name()
         msg.state = self.current_state
@@ -151,6 +180,11 @@ class HardwareInterfaceClient(Node):
         self.status_pub.publish(msg)
 
     def _on_joint_state(self, msg):
+        """Cache the latest joint positions from a ``/joint_states`` message.
+
+        Args:
+            msg (JointState): Joint-state message with names and positions.
+        """
         self.latest_joint_positions = dict(zip(msg.name, msg.position))
 
     # --- Fault Controller Health Check & Helper ---
@@ -169,6 +203,15 @@ class HardwareInterfaceClient(Node):
         future.add_done_callback(self.list_controllers_callback)
 
     def list_controllers_callback(self, future):
+        """Process the controller-manager health check response.
+
+        Checks whether ``fault_controller`` is present and active, and
+        raises or clears the fault-controller config warning status
+        accordingly.
+
+        Args:
+            future: Future containing the ``ListControllers`` response.
+        """
         try:
             response = future.result()
             fault_ctrl_active = False
@@ -197,7 +240,15 @@ class HardwareInterfaceClient(Node):
             self.get_logger().error(f"Failed to query controllers health: {e}")
 
     def finalize_service_status(self, response):
-        """Helper to centralize state & status updates after a service completes."""
+        """Helper to centralize state & status updates after a service completes.
+
+        Args:
+            response: Service response with populated ``success`` and
+                ``message`` fields.
+
+        Returns:
+            The same response, after node telemetry has been updated from it.
+        """
         self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
         self.command_success = response.success
         if not self.is_faulted and not self.fault_controller_warning_active:
@@ -207,7 +258,11 @@ class HardwareInterfaceClient(Node):
 
     # --- Fault Handling ---
     def fault_callback(self, msg: Bool):
-        """Asynchronously updates the internal fault status."""
+        """Asynchronously updates the internal fault status.
+
+        Args:
+            msg (Bool): Latest value of ``/fault_controller/is_faulted``.
+        """
         if msg.data and not self.is_faulted:
             self.get_logger().error("Robot entered a hardware FAULT state.")
             self.current_state = ExtendedStatus.STATE_FAULT
@@ -222,7 +277,12 @@ class HardwareInterfaceClient(Node):
         self.is_faulted = msg.data
 
     def handle_moveit_failure(self):
-        """Called when MoveIt execution fails."""
+        """Called when MoveIt execution fails.
+
+        Logs the failure and checks current fault state to tell a confirmed
+        hardware fault apart from a planning/execution failure with no
+        hardware fault behind it.
+        """
         self.get_logger().error("MoveIt trajectory execution failed. Inspecting hardware health...")
 
         if self.is_faulted:
@@ -233,7 +293,22 @@ class HardwareInterfaceClient(Node):
             self.get_logger().info("No hardware fault detected. Failure may be algorithmic (planning timeout).")
 
     def _await_action(self, event: threading.Event, timeout_sec: float, success_attr: str, message_attr: str, action_desc: str, response):
-        """Wait for an action event and populate the service response with status and message."""
+        """Wait for an action event and populate the service response with status and message.
+
+        Args:
+            event (threading.Event): Event set when the action completes.
+            timeout_sec (float): Maximum time to wait, in seconds.
+            success_attr (str): Attribute name (or callable) giving the
+                action's success state once ``event`` is set.
+            message_attr (str): Attribute name (or callable) giving the
+                action's result message once ``event`` is set.
+            action_desc (str): Human-readable description, used only in the
+                timeout log/message.
+            response: Service response to populate.
+
+        Returns:
+            The same response, with ``success`` and ``message`` populated.
+        """
         # TODO: create a request/response interface to do type constraints in functions
         finished = event.wait(timeout=timeout_sec)
         if not finished:
@@ -248,8 +323,25 @@ class HardwareInterfaceClient(Node):
     def _plan_and_move(self, send_goal, planners, action_desc, start_failure_message, response, wait=True):
         """Try each planner in turn until one works, or a failure isn't worth
         re-planning. send_goal(planner) sends the goal. With wait=False, only waits
-        long enough to catch a fast failure. Returns True if a goal was left
-        running with nobody waiting on it."""
+        long enough to catch a fast failure.
+
+        Args:
+            send_goal: Callable taking one ``planner`` and sending the goal,
+                returning whether the action server accepted dispatch.
+            planners: Ordered sequence of planners to try, most preferred first.
+            action_desc (str): Human-readable description used in timeout/log
+                messages.
+            start_failure_message (str): Message to set if ``send_goal`` itself
+                fails (e.g. action server unavailable).
+            response: Service response to populate.
+            wait (bool): If True, wait the full ``ACTION_TIMEOUT_SEC`` for
+                completion. If False, only wait
+                ``FIRE_AND_FORGET_REJECTION_WINDOW_SEC`` for a fast rejection.
+
+        Returns:
+            bool: True if a goal was left running with nobody waiting on it
+                (only possible when ``wait`` is False), otherwise False.
+        """
         for i, planner in enumerate(planners):
             if i:
                 self.get_logger().warn(
@@ -286,6 +378,16 @@ class HardwareInterfaceClient(Node):
 
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
+        """Handle a request to move the arm to its predefined home position.
+
+        Args:
+            request (HomeArm.Request): Service request with optional motion
+                parameters.
+            response (HomeArm.Response): Service response to populate.
+
+        Returns:
+            HomeArm.Response: The populated service response.
+        """
         self.get_logger().info("Service Call: Home Arm")
         self.current_state = ExtendedStatus.STATE_BUSY
         self.status_text = "Sending arm to home position"
@@ -314,7 +416,17 @@ class HardwareInterfaceClient(Node):
         releasing the gripper, partway through a genuinely still-in-progress
         motion, while still catching a fast rejection instead of treating it
         as a success. A rejection arriving after the window would still be
-        missed - this narrows that gap, it doesn't close it entirely."""
+        missed - this narrows that gap, it doesn't close it entirely.
+
+        Args:
+            request (JointMove.Request): Service request with target joint
+                positions, relative-mode flag, completion behaviour, and
+                motion parameters.
+            response (JointMove.Response): Service response to populate.
+
+        Returns:
+            JointMove.Response: The populated service response.
+        """
         joint_positions = list(request.joint_positions)
 
         if request.relative:
@@ -348,6 +460,20 @@ class HardwareInterfaceClient(Node):
         return self.finalize_service_status(response)
 
     def handle_move_arm(self, request, response):
+        """Handle a Cartesian arm movement request.
+
+        Pilz PTP is tried first when an orientation is requested (it needs a
+        full pose); position-only goals skip straight to OMPL RRT*, since
+        Pilz needs a full pose to plan against.
+
+        Args:
+            request (MoveArm.Request): Service request with target position,
+                optional orientation, and motion parameters.
+            response (MoveArm.Response): Service response to populate.
+
+        Returns:
+            MoveArm.Response: The populated service response.
+        """
         x = request.target_position.x
         y = request.target_position.y
         z = request.target_position.z
@@ -375,6 +501,22 @@ class HardwareInterfaceClient(Node):
         return self.finalize_service_status(response)
 
     def handle_relative_move(self, request, response):
+        """Handle a relative Cartesian movement request.
+
+        Looks up the tool frame's current pose via TF, adds the requested
+        position and orientation deltas to it, and sends the resulting
+        absolute target to MoveIt. Always keeps (or offsets) the current
+        orientation, so there's no ``has_orientation`` flag here the way
+        there is on :meth:`handle_move_arm`.
+
+        Args:
+            request (RelativeMove.Request): Service request with position and
+                optional orientation deltas, and motion parameters.
+            response (RelativeMove.Response): Service response to populate.
+
+        Returns:
+            RelativeMove.Response: The populated service response.
+        """
         vx = request.vx
         vy = request.vy
         vz = request.vz
@@ -433,6 +575,16 @@ class HardwareInterfaceClient(Node):
         return self.finalize_service_status(response)
 
     def handle_move_gripper(self, request, response):
+        """Handle a gripper movement request.
+
+        Args:
+            request (MoveGripper.Request): Service request with the target
+                gripper position.
+            response (MoveGripper.Response): Service response to populate.
+
+        Returns:
+            MoveGripper.Response: The populated service response.
+        """
         pos = request.position
         self.get_logger().info(f"Service Call: Move Gripper to {pos}")
         self.current_state = ExtendedStatus.STATE_BUSY
@@ -456,7 +608,16 @@ class HardwareInterfaceClient(Node):
 
     # --- Orientation / Motion Params Helpers ---
     def clamp_motion_params(self, motion_params):
-        """Clamp velocity/acceleration scale to [0.0, 1.0], warn if a caller sent something outside that range."""
+        """Clamp velocity/acceleration scale to [0.0, 1.0], warn if a caller sent something outside that range.
+
+        Args:
+            motion_params: Object with ``velocity_scale`` and
+                ``acceleration_scale`` fields.
+
+        Returns:
+            tuple[float, float]: The clamped ``(velocity_scale,
+                acceleration_scale)``.
+        """
         velocity_scale = motion_params.velocity_scale
         acceleration_scale = motion_params.acceleration_scale
 
@@ -472,7 +633,22 @@ class HardwareInterfaceClient(Node):
 
     # --- Action Client Methods ---
     def _new_arm_goal(self, planner, motion_params):
-        """An arm MoveGroup goal set up for `planner`, without constraints."""
+        """Build an arm MoveGroup goal configured for the given planner, without constraints.
+
+        Sets the planning group, pipeline, planner id, planning attempts, and
+        allowed planning time from ``planner``, and applies velocity and
+        acceleration scaling from ``motion_params`` if supplied. The caller
+        adds position/orientation/joint constraints afterwards.
+
+        Args:
+            planner: Planner configuration (pipeline id, planner id, and
+                planning-attempt settings) to build this goal for.
+            motion_params: Optional movement parameters with velocity and
+                acceleration scaling factors.
+
+        Returns:
+            MoveGroup.Goal: The constructed goal, without constraints.
+        """
         goal_msg = MoveGroup.Goal()
         request = goal_msg.request
         request.group_name = self.PLANNING_GROUP
@@ -495,7 +671,28 @@ class HardwareInterfaceClient(Node):
         return goal_msg
 
     def send_goal(self, x, y, z, planner, has_orientation=False, roll=0.0, pitch=0.0, yaw=0.0, motion_params=None):
-        """Move tool_frame to (x, y, z), optionally with a fixed orientation."""
+        """Move tool_frame to (x, y, z), optionally with a fixed orientation.
+
+        Reports only whether the goal could be dispatched; completion is
+        reported asynchronously through the action callbacks.
+
+        Args:
+            x (float): Target X position in ``BASE_FRAME``.
+            y (float): Target Y position in ``BASE_FRAME``.
+            z (float): Target Z position in ``BASE_FRAME``.
+            planner: Planner configuration used to build the underlying goal.
+            has_orientation (bool): Whether an orientation constraint should
+                be included.
+            roll (float): Target roll angle in radians.
+            pitch (float): Target pitch angle in radians.
+            yaw (float): Target yaw angle in radians.
+            motion_params: Optional movement parameters with velocity and
+                acceleration scaling factors.
+
+        Returns:
+            bool: True if the action server is available and the goal was
+                dispatched, otherwise False.
+        """
         if not self.arm_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error('Arm server not available')
             return False
@@ -541,12 +738,35 @@ class HardwareInterfaceClient(Node):
         return self._dispatch_arm_goal(goal_msg)
 
     def send_home_goal(self, planner, motion_params=None):
+        """Send a joint-space goal using the predefined home configuration.
+
+        Args:
+            planner: Planner configuration used to build the underlying goal.
+            motion_params: Optional movement parameters with velocity and
+                acceleration scaling factors.
+
+        Returns:
+            bool: True if the action server is available and the goal was
+                dispatched, otherwise False.
+        """
         return self.send_joint_goal(self.HOME_JOINT_POSITIONS, motion_params=motion_params, planner=planner)
 
     def send_joint_goal(self, joint_positions, planner, motion_params=None):
         """Plan and execute a move to an absolute target for each of
         joint_1..joint_6, the same JointConstraint-based approach send_home_goal
-        already used, just parameterized instead of hardcoded to home."""
+        already used, just parameterized instead of hardcoded to home.
+
+        Args:
+            joint_positions (list[float]): Target positions for each robot
+                joint, ordered according to ``JOINT_NAMES``.
+            planner: Planner configuration used to build the underlying goal.
+            motion_params: Optional movement parameters with velocity and
+                acceleration scaling factors.
+
+        Returns:
+            bool: True if the action server is available and the goal was
+                dispatched, otherwise False.
+        """
         if not self.arm_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error('Arm server not available (Joint Move)')
             return False
@@ -569,6 +789,18 @@ class HardwareInterfaceClient(Node):
         return self._dispatch_arm_goal(goal_msg)
 
     def _dispatch_arm_goal(self, goal_msg):
+        """Clear arm movement state and submit an arm goal asynchronously.
+
+        Shared by :meth:`send_goal` and :meth:`send_joint_goal` so both
+        reset the same wait event and error-code tracking before dispatch.
+
+        Args:
+            goal_msg (MoveGroup.Goal): Fully constructed goal to send.
+
+        Returns:
+            bool: Always True; the action server's own acceptance/rejection
+                is reported later through :meth:`goal_response_callback`.
+        """
         self.arm_movement_finished.clear()
         self.arm_action_error_code = None
         future = self.arm_client.send_goal_async(
@@ -579,6 +811,15 @@ class HardwareInterfaceClient(Node):
         return True
 
     def move_gripper(self, position):
+        """Send a target position to the gripper action server.
+
+        Args:
+            position (float): Target gripper position.
+
+        Returns:
+            bool: True if the gripper action server is available and the
+                goal was dispatched, otherwise False.
+        """
         if not self.gripper_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error('Gripper server not available')
             return False
@@ -596,6 +837,15 @@ class HardwareInterfaceClient(Node):
 
     # --- Callbacks ---
     def goal_response_callback(self, future):
+        """Handle MoveIt's accept/reject response to a dispatched arm goal.
+
+        If accepted, registers :meth:`result_callback` for the eventual
+        result. If rejected or an exception occurs, records the failure and
+        releases the movement wait event immediately.
+
+        Args:
+            future: Future containing MoveIt's goal handle.
+        """
         try:
             goal_handle = future.result()
             if not goal_handle.accepted:
@@ -615,10 +865,24 @@ class HardwareInterfaceClient(Node):
             self.arm_movement_finished.set()
 
     def arm_feedback_callback(self, feedback_msg):
+        """Log MoveIt's execution-state feedback for an in-progress arm goal.
+
+        Args:
+            feedback_msg: MoveIt action feedback message.
+        """
         feedback = feedback_msg.feedback
         self.get_logger().debug(f'[Feedback] MoveIt State: {feedback.state}')
 
     def result_callback(self, future):
+        """Process the final result of a dispatched MoveIt arm action.
+
+        Maps MoveIt's error code to a human-readable message, updates the
+        stored movement result, triggers :meth:`handle_moveit_failure` on
+        failure, and releases the movement wait event.
+
+        Args:
+            future: Future containing MoveIt's action result.
+        """
         try:
             result = future.result().result
             error_code = result.error_code.val
@@ -668,6 +932,15 @@ class HardwareInterfaceClient(Node):
             self.arm_movement_finished.set()
 
     def gripper_response_callback(self, future):
+        """Handle the gripper action server's accept/reject response.
+
+        If accepted, registers :meth:`gripper_result_callback` for the
+        eventual result. If rejected or an exception occurs, records the
+        failure and releases the gripper wait event immediately.
+
+        Args:
+            future: Future containing the gripper action's goal handle.
+        """
         try:
             goal_handle = future.result()
             if not goal_handle.accepted:
@@ -685,11 +958,25 @@ class HardwareInterfaceClient(Node):
             self.gripper_movement_finished.set()
 
     def gripper_feedback_callback(self, feedback_msg):
+        """Log the gripper's current width while a gripper goal is in progress.
+
+        Args:
+            feedback_msg: Gripper action feedback message.
+        """
         feedback = feedback_msg.feedback
         current_width = round(feedback.position, 3)
         self.get_logger().debug(f'[Feedback] Gripper Width: {current_width}')
 
     def gripper_result_callback(self, future):
+        """Process the final result of a dispatched gripper action.
+
+        Treats either reaching the goal or stalling (fingers met resistance,
+        as against a real object) as success, updates the stored result, and
+        releases the gripper wait event.
+
+        Args:
+            future: Future containing the gripper action's result.
+        """
         try:
             result = future.result().result
             self.get_logger().info(
@@ -710,6 +997,14 @@ class HardwareInterfaceClient(Node):
             self.gripper_movement_finished.set()
 
 def main(args=None):
+    """Start the Kinova hardware interface ROS 2 node.
+
+    Initialises rclpy, creates the node, spins it on a multi-threaded
+    executor, and performs node and rclpy shutdown on exit.
+
+    Args:
+        args (list[str], optional): Command-line arguments passed to rclpy.
+    """
     rclpy.init(args=args)
     node = HardwareInterfaceClient()
 
