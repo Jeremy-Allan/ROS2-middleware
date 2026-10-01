@@ -1,3 +1,12 @@
+"""ROS 2 node that is the read-mostly knowledge base for the middleware.
+
+Loads the object dictionary, obstacle dictionary, relative-movement, and
+orientation-preset configuration from disk once at startup, exposes lookup
+services against that in-memory data, and keeps the objects' and obstacles'
+representation in MoveIt's planning scene in sync, including attaching and
+detaching objects to the gripper.
+"""
+
 import json
 import os
 import time
@@ -23,7 +32,26 @@ from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, GRIPPER_TOUCH_L
 
 
 class EnvironmentMappingNode(Node):
+    """Loads environment configuration and keeps MoveIt's planning scene in sync.
+
+    Exposes lookup services for objects, relative movements, and orientation
+    presets, and manages the planning scene representation of the configured
+    obstacles and static objects, including attaching and detaching objects
+    to the gripper.
+    """
+
     def __init__(self):
+        """Initialise the environment mapping node.
+
+        Declares the ``config_dir`` parameter, loads the object, obstacle,
+        relative-movement, and orientation-preset configuration from disk,
+        creates the lookup and scene-management services, and starts the
+        background thread that publishes the initial planning scene once
+        MoveIt becomes available.
+
+        Raises:
+            SystemExit: If the ``config_dir`` parameter is not set.
+        """
         super().__init__("environment_mapping_node")
         self.declare_parameter('config_dir', '')
         self.config_dir = self.get_parameter('config_dir').value
@@ -45,7 +73,7 @@ class EnvironmentMappingNode(Node):
         self.current_state = ExtendedStatus.STATE_IDLE
         self.status_text = "Environment Mapper Active"
         self.command_success = True
-        
+
         self.static_objects = self.load_object_dictionary()
         self.relative_movements = self.load_relative_movements()
         self.orientation_presets = self.load_orientation_presets()
@@ -63,7 +91,7 @@ class EnvironmentMappingNode(Node):
         self.detach_srv = self.create_service(DetachObject, '/detach_object', self.detach_object_callback, callback_group=self.scene_cb_group)
         self.reset_srv = self.create_service(Trigger, '/reset_environment_scene', self.reset_environment_callback, callback_group=self.scene_cb_group)
 
-        self.attached_objects = set() 
+        self.attached_objects = set()
 
 
         self.scene_thread = threading.Thread(target=self.publish_planning_scene, daemon=True)
@@ -71,6 +99,11 @@ class EnvironmentMappingNode(Node):
 
 
     def publish_status(self):
+        """Publish the node's current telemetry status.
+
+        The published status includes the node name, current state, status
+        message, and whether the most recent command was successful.
+        """
         msg = ExtendedStatus()
         msg.node_name = self.get_name()
         msg.state = self.current_state
@@ -79,6 +112,19 @@ class EnvironmentMappingNode(Node):
         self.status_pub.publish(msg)
 
     def load_object_dictionary(self):
+        """Load and normalise the configured static object dictionary.
+
+        The object dictionary is read from ``config_dir/object_dictionary.json``.
+        Each object's pose and collision shape are normalised using
+        :meth:`parse_object_data`.
+
+        Returns:
+            dict: Mapping of object identifiers to their parsed configuration.
+
+        Raises:
+            SystemExit: If the configuration file is missing or contains
+                invalid JSON.
+        """
         json_path = Path(self.config_dir) / 'object_dictionary.json'
         try:
             with open(json_path, 'r') as file:
@@ -90,15 +136,28 @@ class EnvironmentMappingNode(Node):
         except json.JSONDecodeError:
             self.get_logger().fatal('Failed to decode JSON from the object dictionary file')
             raise SystemExit(1)
-        
+
         # Process each object using the helper
         for obj_id, obj_data in objects.items():
             objects[obj_id] = self.parse_object_data(obj_id, obj_data)
-        
+
         self.get_logger().info(f'Processed {len(objects)} objects')
         return objects
-    
+
     def load_obstacles_dictionary(self):
+        """Load and normalise the configured obstacle dictionary.
+
+        The obstacle configuration is loaded from the installed
+        ``kinova_interface`` package share directory and each obstacle is
+        normalised using :meth:`parse_object_data`.
+
+        Returns:
+            dict: Mapping of obstacle identifiers to their parsed configuration.
+
+        Raises:
+            SystemExit: If the configuration file is missing or contains
+                invalid JSON.
+        """
         pkg_share = get_package_share_directory('kinova_interface')
         json_path = os.path.join(pkg_share, 'data', 'configs', 'env', 'obstacles.json')
         try:
@@ -111,39 +170,53 @@ class EnvironmentMappingNode(Node):
         except json.JSONDecodeError:
             self.get_logger().fatal('Failed to decode JSON from obstacles file')
             raise SystemExit(1)
-        
+
         # Process each obstacle using the helper function
         for obs_id, obs_data in obstacles.items():
             obstacles[obs_id] = self.parse_object_data(obs_id, obs_data)
-        
+
         self.get_logger().info(f'Processed {len(obstacles)} obstacles')
         return obstacles
-    
+
     def normalize_shape(self, obj, obj_id="unknown"):
+        """Validate and normalise an object's collision shape configuration.
+
+        Supported shape types are BOX, SPHERE, CYLINDER, and CONE. Unknown
+        types and incorrectly sized dimension lists are replaced with safe
+        default BOX or shape-specific values.
+
+        Args:
+            obj (dict): Object configuration containing a ``shape`` entry.
+            obj_id (str): Object identifier used when reporting validation
+                warnings.
+
+        Returns:
+            dict: The object configuration with a normalised ``shape`` entry.
+        """
         shape = obj.get("shape", {})
         stype = shape.get("type", "BOX").upper()
-        
-        shape_info = { 
+
+        shape_info = {
         "BOX": {"count": 3, "default": [0.05, 0.05, 0.05]},
         "SPHERE": {"count": 1, "default": [0.05]},
         "CYLINDER": {"count": 2, "default": [0.05, 0.02]},
         "CONE": {"count": 2, "default": [0.05, 0.02]}
         }
-        
+
         if stype not in shape_info: #default to BOX if unknown shape type
             self.get_logger().warn(f"Object '{obj_id}': unknown shape type '{stype}', defaulting to BOX")
             stype = "BOX"
 
         info = shape_info[stype]
         dims = shape.get("dimensions", [])
-        
+
         if len(dims) != info["count"]:
             self.get_logger().warn(
                 f"Object '{obj_id}': expected {info['count']} dimensions for '{stype}', recieved {len(dims)}. "
                 f"Using defaults: {info['default']}"
             )
             dims = info["default"].copy()
-        
+
         # Store shape
         obj['shape'] = {
             'type': stype,
@@ -152,6 +225,24 @@ class EnvironmentMappingNode(Node):
         return obj
 
     def parse_object_data(self, obj_id, obj_data):
+        """Normalise an object's pose and collision shape configuration.
+
+        Orientation may be supplied as roll/pitch/yaw or as a quaternion;
+        either form is converted to a normalised quaternion. Shape
+        information is normalised using :meth:`normalize_shape`.
+
+        Args:
+            obj_id (str): Identifier of the object being parsed, used only
+                for logging.
+            obj_data (dict): Raw object configuration loaded from JSON.
+
+        Returns:
+            dict: The normalised object configuration.
+
+        Raises:
+            SystemExit: If the orientation is missing or invalid (neither a
+                complete roll/pitch/yaw nor a complete quaternion).
+        """
         # Parse POSE (position & orientation). Orientation is required, as
         # full roll/pitch/yaw or a full quaternion.
         pose = obj_data.get('pose', {})
@@ -174,11 +265,22 @@ class EnvironmentMappingNode(Node):
 
         # Parse SHAPE (type & dimensions)
         obj_data = self.normalize_shape(obj_data, obj_id)
-        
+
         return obj_data
 
 
     def load_relative_movements(self):
+        """Load configured relative-movement definitions.
+
+        The definitions are read from ``config_dir/relative_movement.json``.
+
+        Returns:
+            dict: Mapping of movement identifiers to their X, Y, and Z offsets.
+
+        Raises:
+            SystemExit: If the configuration file is missing or contains
+                invalid JSON.
+        """
         json_path = Path(self.config_dir) / 'relative_movement.json'
         try:
             with open(json_path, 'r') as file:
@@ -194,6 +296,17 @@ class EnvironmentMappingNode(Node):
 
 
     def load_orientation_presets(self):
+        """Load configured orientation presets.
+
+        The definitions are read from ``config_dir/orientation_presets.json``.
+
+        Returns:
+            dict: Mapping of preset names to roll, pitch, and yaw values.
+
+        Raises:
+            SystemExit: If the configuration file is missing or contains
+                invalid JSON.
+        """
         json_path = Path(self.config_dir) / 'orientation_presets.json'
         try:
             with open(json_path, 'r') as file:
@@ -208,6 +321,18 @@ class EnvironmentMappingNode(Node):
             raise SystemExit(1)
 
     def get_coordinates_callback(self, request, response):
+        """Resolve an object identifier to its configured position.
+
+        Args:
+            request (GetObjectCoordinates.Request): Service request containing
+                the object identifier.
+            response (GetObjectCoordinates.Response): Service response to
+                populate with the object's X, Y, and Z coordinates, or an
+                error message if the object isn't found.
+
+        Returns:
+            GetObjectCoordinates.Response: The populated service response.
+        """
         #request is the obj_id, the response will be coordinates of obj
         obj_id = request.object_id
         if obj_id in self.static_objects:
@@ -227,8 +352,20 @@ class EnvironmentMappingNode(Node):
             self.status_text = f"Failed to resolve object: {obj_id}"
         self.publish_status()
         return response
-        
+
     def get_relative_movement_callback(self, request, response):
+        """Resolve a relative-movement identifier to its configured offset.
+
+        Args:
+            request (GetRelativeMovement.Request): Service request containing
+                the movement identifier.
+            response (GetRelativeMovement.Response): Service response to
+                populate with the movement's X, Y, and Z offsets, or an error
+                message if the movement isn't found.
+
+        Returns:
+            GetRelativeMovement.Response: The populated service response.
+        """
         move_id = request.move_id
         if move_id in self.relative_movements:
             move = self.relative_movements[move_id]
@@ -248,6 +385,18 @@ class EnvironmentMappingNode(Node):
         return response
 
     def get_orientation_preset_callback(self, request, response):
+        """Resolve an orientation preset name to its configured Euler angles.
+
+        Args:
+            request (GetOrientationPreset.Request): Service request containing
+                the preset name.
+            response (GetOrientationPreset.Response): Service response to
+                populate with roll, pitch, and yaw values, or an error message
+                if the preset isn't found.
+
+        Returns:
+            GetOrientationPreset.Response: The populated service response.
+        """
         preset_name = request.preset_name
         if preset_name in self.orientation_presets:
             preset = self.orientation_presets[preset_name]
@@ -267,6 +416,20 @@ class EnvironmentMappingNode(Node):
         return response
 
     def get_robot_parameters_callback(self, request, response):
+        """Return the environment parameters available to clients.
+
+        Used by the LLM proxy to learn what objects, relative movements, and
+        orientation presets exist. Also reports table bounds when a
+        BOX-shaped ``table`` obstacle is configured.
+
+        Args:
+            request (GetRobotParameters.Request): Service request (no fields).
+            response (GetRobotParameters.Response): Service response to
+                populate with the available environment parameters.
+
+        Returns:
+            GetRobotParameters.Response: The populated service response.
+        """
         # Service for the LLM Proxy || send list of objects + relative movements + orientation presets
         response.object_list = list(self.static_objects.keys())
         response.movement_names = list(self.relative_movements.keys())
@@ -290,6 +453,18 @@ class EnvironmentMappingNode(Node):
         return response
 
     def get_object_info_callback(self, request, response):
+        """Return the configured pose and collision shape for an object.
+
+        Args:
+            request (GetObjectInfo.Request): Service request containing the
+                object identifier.
+            response (GetObjectInfo.Response): Service response to populate
+                with the object's pose, shape type, dimensions, and lookup
+                status.
+
+        Returns:
+            GetObjectInfo.Response: The populated service response.
+        """
         obj_id = request.object_id
         if obj_id in self.static_objects:
             obj_data = self.static_objects[obj_id]
@@ -329,6 +504,22 @@ class EnvironmentMappingNode(Node):
         return response
 
     def attach_object_callback(self, request, response):
+        """Attach an environment object to the robot's tool frame.
+
+        Looks up the requested object (in either the static objects or the
+        obstacles), resolves its current pose relative to the tool frame via
+        TF, and applies a MoveIt planning-scene update that attaches the
+        object to the gripper.
+
+        Args:
+            request (AttachObject.Request): Service request containing the
+                object identifier.
+            response (AttachObject.Response): Service response to populate
+                with the result of the attach operation.
+
+        Returns:
+            AttachObject.Response: The populated service response.
+        """
         obj_id = request.object_id
         if obj_id in self.attached_objects:
             self.get_logger().warn(f"Object '{obj_id}' is already attached.")
@@ -365,6 +556,17 @@ class EnvironmentMappingNode(Node):
         return response
 
     def detach_object_callback(self, request, response):
+        """Detach an object currently tracked as attached to the gripper.
+
+        Args:
+            request (DetachObject.Request): Service request containing the
+                object identifier.
+            response (DetachObject.Response): Service response to populate
+                with the result of the detach operation.
+
+        Returns:
+            DetachObject.Response: The populated service response.
+        """
         obj_id = request.object_id
         if obj_id not in self.attached_objects:
             self.get_logger().warn(f"Object '{obj_id}' is not currently attached.")
@@ -389,7 +591,16 @@ class EnvironmentMappingNode(Node):
         actions, without needing a full middleware restart. This is the
         scene-side half of a reset; json_parser_node's public
         '/reset_environment' service calls this and also clears its own
-        held-object tracking to match."""
+        held-object tracking to match.
+
+        Args:
+            request (Trigger.Request): Empty trigger request.
+            response (Trigger.Response): Service response to populate with
+                whether the reset succeeded.
+
+        Returns:
+            Trigger.Response: The populated service response.
+        """
         self.get_logger().info("Resetting environment to configured defaults...")
         self.static_objects = self.load_object_dictionary()
         self.obstacles = self.load_obstacles_dictionary()
@@ -411,7 +622,19 @@ class EnvironmentMappingNode(Node):
     def apply_attach_diff(self, obj_id, obj_data, relative_pose):
         """Remove the object from the world and add it as a real
         AttachedCollisionObject rigidly attached to tool_frame, in one diff,
-        so it actually moves with the gripper instead of just disappearing."""
+        so it actually moves with the gripper instead of just disappearing.
+
+        Args:
+            obj_id (str): Identifier of the object to attach.
+            obj_data (dict): Object configuration containing its collision
+                shape.
+            relative_pose (dict): Object pose expressed relative to the tool
+                frame.
+
+        Returns:
+            bool: True if MoveIt successfully applied the planning-scene
+                change, otherwise False.
+        """
         if not self.scene_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error('/apply_planning_scene not available')
             return False
@@ -442,7 +665,15 @@ class EnvironmentMappingNode(Node):
         """Remove the AttachedCollisionObject. MoveIt moves it back into the
         world scene automatically, at the pose implied by its attached
         relative pose and the link's current position, no separate world ADD
-        needed (same reasoning as the attach side)."""
+        needed (same reasoning as the attach side).
+
+        Args:
+            obj_id (str): Identifier of the attached object.
+
+        Returns:
+            bool: True if MoveIt successfully applied the planning-scene
+                change, otherwise False.
+        """
         if not self.scene_client.wait_for_service(timeout_sec=5.0):
             self.get_logger().error('/apply_planning_scene not available')
             return False
@@ -460,6 +691,18 @@ class EnvironmentMappingNode(Node):
         return self.send_apply_planning_scene(scene, obj_id, "detach")
 
     def send_apply_planning_scene(self, scene, obj_id, label):
+        """Submit a planning-scene diff to MoveIt and wait for the result.
+
+        Args:
+            scene (PlanningScene): Planning-scene diff to apply.
+            obj_id (str): Object identifier, used only for diagnostic logging.
+            label (str): Operation label (e.g. "attach"), used only for
+                diagnostic logging.
+
+        Returns:
+            bool: True if the service call completed successfully within 5
+                seconds, otherwise False.
+        """
         request = ApplyPlanningScene.Request()
         request.scene = scene
 
@@ -476,8 +719,23 @@ class EnvironmentMappingNode(Node):
         else:
             self.get_logger().error(f"apply_planning_scene failed for '{obj_id}' ({label})")
             return False
-    
+
     def update_object_pose_callback(self, request, response):
+        """Update the configured pose of a static environment object.
+
+        The position is always replaced. The orientation is only replaced
+        when the request supplies a non-zero quaternion, otherwise the
+        existing orientation is kept.
+
+        Args:
+            request (UpdateObjectPose.Request): Service request containing
+                the object identifier and new pose.
+            response (UpdateObjectPose.Response): Service response to
+                populate with whether the update succeeded.
+
+        Returns:
+            UpdateObjectPose.Response: The populated service response.
+        """
         obj_id = request.object_id
         if obj_id not in self.static_objects:
             response.success = False
@@ -502,7 +760,17 @@ class EnvironmentMappingNode(Node):
         return response
 
     def build_collision_object(self, obj_id, obj_data):
-        
+        """Construct a MoveIt collision object from environment configuration.
+
+        Args:
+            obj_id (str): Identifier assigned to the collision object.
+            obj_data (dict): Object configuration containing pose and shape
+                data.
+
+        Returns:
+            CollisionObject or None: The constructed collision object, or
+                None if the configured shape type is unsupported.
+        """
         collision_obj = CollisionObject()
         collision_obj.header.frame_id = BASE_FRAME
         collision_obj.id = obj_id
@@ -544,6 +812,13 @@ class EnvironmentMappingNode(Node):
         return collision_obj
 
     def publish_planning_scene(self):
+        """Wait for MoveIt and publish the initial planning scene.
+
+        Runs on the node's background scene thread. Waits for the
+        ``/apply_planning_scene`` service to become available (giving up
+        after 15 seconds, if MoveIt never comes up) before calling
+        :meth:`apply_full_scene`.
+        """
         self.get_logger().info('Waiting for /apply_planning_scene service...')
         if not self.scene_client.wait_for_service(timeout_sec=15.0):
             self.get_logger().warn('/apply_planning_scene not available. MoveIt may not be running. Skipping planning scene setup.')
@@ -559,7 +834,11 @@ class EnvironmentMappingNode(Node):
         everything ends up as a plain world object at its configured pose (a
         no-op at startup, since nothing is attached yet). Re-adding an object
         under the same id updates its pose, so this is also what the startup
-        publish and /reset_environment both use. Returns True on success."""
+        publish and /reset_environment both use.
+
+        Returns:
+            bool: True on success, otherwise False.
+        """
         scene = PlanningScene()
         scene.is_diff = True
 
@@ -614,6 +893,14 @@ class EnvironmentMappingNode(Node):
 
 
 def main(args=None):
+    """Start the environment mapping ROS 2 node.
+
+    Initialises rclpy, creates the node, spins it on a four-threaded
+    executor, and performs node and rclpy shutdown on exit.
+
+    Args:
+        args (list[str], optional): Command-line arguments passed to rclpy.
+    """
     rclpy.init(args=args)
     node = EnvironmentMappingNode()
     executor = rclpy.executors.MultiThreadedExecutor(num_threads=4)
