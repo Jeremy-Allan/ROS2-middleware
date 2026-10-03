@@ -52,11 +52,12 @@ def _orientations():
 
 
 def _check(actions, tf_buffer, x, y, z, target, args):
-    roll, pitch, yaw = target.as_euler('xyz')
     if args.ik_only:
-        if actions.find_ik_solution(x, y, z, roll, pitch, yaw) is None:
+        if actions.find_ik_solution(x, y, z, target) is None:
             return 'no IK', False
         return 'ik ok', True
+
+    roll, pitch, yaw = target.as_euler('xyz')
 
     motion_params = actions.build_motion_params(args.speed)
     result = actions.call_move_service(x, y, z, True, roll, pitch, yaw, motion_params)

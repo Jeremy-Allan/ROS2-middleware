@@ -3,11 +3,14 @@ import math
 import pytest
 
 from unittest.mock import MagicMock, patch
+from rclpy.exceptions import ParameterUninitializedException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from scipy.spatial.transform import Rotation
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from kinova_interface.actions.arm_actions import ArmActions
-from kinova_interface.actions import pickup, pour, throw
+from kinova_interface.actions import pour, throw
 from kinova_interface.utils import geometry
 
 from kinova_interfaces.srv import (
@@ -19,6 +22,7 @@ from kinova_interfaces.srv import (
     MoveGripper,
 )
 from kinova_interfaces.msg import MotionParams
+from moveit_msgs.msg import MoveItErrorCodes
 from shape_msgs.msg import SolidPrimitive
 
 
@@ -73,6 +77,25 @@ def test_actions_creates_clients_and_handlers(actions):
         'pour', 'thrust', 'push', 'throw'
     }
     assert actions.held_object is None
+
+
+# grasp_config
+def test_grasp_config_reads_parameters_live(actions):
+    assert actions.grasp_config['standoff'] == pytest.approx(0.08)
+
+    actions.node.set_parameters([Parameter('grasping.standoff', value=0.12)])
+
+    assert actions.grasp_config['standoff'] == pytest.approx(0.12)
+
+
+def test_missing_grasp_parameters_fail_at_startup(ros_context):
+    node = Node('test_no_grasp_params', use_global_arguments=False)
+    node.cb_group = ReentrantCallbackGroup()
+    try:
+        with pytest.raises(ParameterUninitializedException):
+            ArmActions(node)
+    finally:
+        node.destroy_node()
 
 
 # wait_for_future()
@@ -382,79 +405,7 @@ def test_build_motion_params_with_speed(actions):
     assert params.acceleration_scale == 0.4
 
 
-# object_half_height()
-def test_object_half_height_box(actions):
-    shape = {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.08]}
-    assert geometry.object_half_height(shape) == pytest.approx(0.04)
-
-
-def test_object_half_height_cylinder(actions):
-    shape = {"type": SolidPrimitive.CYLINDER, "dimensions": [0.1, 0.02]}
-    assert geometry.object_half_height(shape) == pytest.approx(0.05)
-
-
-def test_object_half_height_sphere(actions):
-    shape = {"type": SolidPrimitive.SPHERE, "dimensions": [0.03]}
-    assert geometry.object_half_height(shape) == pytest.approx(0.03)
-
-
-# _handle_dropoff() two-stage descent and stacking height
-def test_handle_dropoff_two_stage_descent_with_stacking(actions):
-    """dropoff should hover above, then lower to a small clearance above the
-    computed stacking height (destination top + target's own half-height),
-    not release from the hover height."""
-
-    def object_info_side_effect(name):
-        if name == "delivery_tray":
-            return {
-                "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
-                "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
-            }
-        if name == "red_cube":
-            return {
-                "pose": {"position": {"x": 0.0, "y": 0.0, "z": 0.0}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
-                "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
-            }
-        return None
-
-    actions.get_object_info = MagicMock(side_effect=object_info_side_effect)
-    actions.call_move_service = MagicMock(return_value={"success": True})
-    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
-    actions.update_object_pose = MagicMock(return_value=True)
-    actions.detach_object = MagicMock(return_value=True)
-
-    success, message = actions.handlers['dropoff']({
-        "target": "red_cube",
-        "destination": "delivery_tray",
-        "place_offset": 0.1
-    })
-
-    assert success is True
-    assert actions.call_move_service.call_count == 2
-
-    # dest top = 0.0 + 0.01 (half of 0.02 tray height) = 0.01
-    # target half height = 0.025 (half of 0.05 cube)
-    # release_z = 0.01 + 0.025 = 0.035
-    hover_call = actions.call_move_service.call_args_list[0][0]
-    release_call = actions.call_move_service.call_args_list[1][0]
-
-    assert hover_call[2] == pytest.approx(0.035 + 0.1)
-    assert release_call[2] == pytest.approx(0.035 + 0.02)
-    # the release move must be lower than the hover move, not the same height
-    assert release_call[2] < hover_call[2]
-
-
-# _handle_pickup() / _handle_move_arm() wiring through the handlers dict
-def test_handle_pickup_failure_when_coords_missing(actions):
-    """pickup should fail cleanly (not raise) when the target can't be resolved."""
-
-    actions.get_static_object_coords = MagicMock(return_value=None)
-
-    success, message = actions.handlers['pickup']({"target": "unknown_object"})
-
-    assert success is False
-
-
+# _handle_move_arm() wiring through the handlers dict
 def test_handle_move_arm_unknown_orientation_fails(actions):
     """move_arm should fail cleanly when an orientation preset can't be resolved."""
 
@@ -464,219 +415,6 @@ def test_handle_move_arm_unknown_orientation_fails(actions):
     success, message = actions.handlers['move_arm']({"target": "cube", "orientation": "not_a_real_preset"})
 
     assert success is False
-
-
-# held_object tracking: pickup sets it, dropoff clears it / falls back to it
-def test_pickup_sets_held_object(actions):
-    """A successful pickup should record what's now held."""
-
-    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
-    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
-    actions.call_move_service = MagicMock(return_value={"success": True})
-    actions.attach_object = MagicMock(return_value=True)
-
-    success, message = actions.handlers['pickup']({"target": "red_cube"})
-
-    assert success is True
-    assert actions.held_object == "red_cube"
-    # unconstrained by default, same as before 'orientation' support was added
-    move_call = actions.call_move_service.call_args[0]
-    assert move_call == (1.0, 2.0, 3.0, False, 0.0, 0.0, 0.0)
-
-
-def test_pickup_releases_previously_held_object_first(actions):
-    """If something else is already held, pickup should release it (in
-    place, at its own registered position) before picking up the new
-    target - not silently drop it via the gripper-open step below and
-    leave it stuck attached to the gripper in the planning scene."""
-
-    actions.held_object = "red_cube"
-
-    def object_info_side_effect(name):
-        if name == "red_cube":
-            return {
-                "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
-                "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
-            }
-        return None
-
-    actions.get_object_info = MagicMock(side_effect=object_info_side_effect)
-    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
-    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
-    actions.call_move_service = MagicMock(return_value={"success": True})
-    actions.update_object_pose = MagicMock(return_value=True)
-    actions.detach_object = MagicMock(return_value=True)
-    actions.attach_object = MagicMock(return_value=True)
-
-    success, message = actions.handlers['pickup']({"target": "blue_cube"})
-
-    assert success is True
-    assert actions.held_object == "blue_cube"
-    # red_cube released back at its own registered position, not a fresh
-    # destination and not the arm's current position
-    actions.update_object_pose.assert_called_once_with(
-        "red_cube", pytest.approx(0.3), pytest.approx(0.1), pytest.approx(0.045),
-        {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
-    )
-    actions.detach_object.assert_called_once_with("red_cube")
-    actions.attach_object.assert_called_once_with("blue_cube")
-
-
-def test_pickup_does_not_release_when_target_is_already_held(actions):
-    """Asking to pick up whatever's already held shouldn't trigger a
-    pointless release-then-repickup of the same object."""
-
-    actions.held_object = "red_cube"
-    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
-    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
-    actions.call_move_service = MagicMock(return_value={"success": True})
-    actions.update_object_pose = MagicMock(return_value=True)
-    actions.detach_object = MagicMock(return_value=True)
-    actions.attach_object = MagicMock(return_value=True)
-
-    success, message = actions.handlers['pickup']({"target": "red_cube"})
-
-    assert success is True
-    actions.update_object_pose.assert_not_called()
-    actions.detach_object.assert_not_called()
-
-
-def test_pickup_fails_cleanly_if_release_of_held_object_fails(actions):
-    """If releasing the currently-held object fails, pickup should abort
-    rather than press on and pick up the new target while still holding
-    the first (physically impossible, and would corrupt tracking)."""
-
-    actions.held_object = "red_cube"
-    actions.get_object_info = MagicMock(return_value=None)
-    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
-    actions.attach_object = MagicMock(return_value=True)
-
-    success, message = actions.handlers['pickup']({"target": "blue_cube"})
-
-    assert success is False
-    assert message.startswith("Failed to release 'red_cube' before picking up 'blue_cube'")
-    assert actions.held_object == "red_cube"
-    actions.attach_object.assert_not_called()
-
-
-def test_pickup_applies_orientation_when_explicitly_given(actions):
-    """A named orientation preset should be forced on the descend move,
-    for actions (like 'pour') that need a known, repeatable grasp."""
-
-    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
-    actions.get_orientation_preset = MagicMock(
-        return_value={"roll": 1.66, "pitch": -0.04, "yaw": -1.57}
-    )
-    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
-    actions.call_move_service = MagicMock(return_value={"success": True})
-    actions.attach_object = MagicMock(return_value=True)
-
-    success, message = actions.handlers['pickup']({"target": "red_cube", "orientation": "some_orientation_preset"})
-
-    assert success is True
-    move_call = actions.call_move_service.call_args[0]
-    assert move_call == (1.0, 2.0, 3.0, True, 1.66, -0.04, -1.57)
-    actions.get_orientation_preset.assert_called_once_with("some_orientation_preset")
-
-
-def test_pickup_applies_grasp_offset_from_object_center(actions):
-    """'grasp_offset' should shift the approach target away from the
-    object's registered center - needed alongside a forced 'orientation'
-    that was only demonstrated/valid at an offset point, not dead-center."""
-
-    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
-    actions.get_orientation_preset = MagicMock(
-        return_value={"roll": 1.66, "pitch": -0.04, "yaw": -1.57}
-    )
-    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
-    actions.call_move_service = MagicMock(return_value={"success": True})
-    actions.attach_object = MagicMock(return_value=True)
-
-    success, message = actions.handlers['pickup']({
-        "target": "red_cube", "orientation": "some_orientation_preset",
-        "grasp_offset": {"x": -0.04, "y": -0.01, "z": 0.007}
-    })
-
-    assert success is True
-    move_call = actions.call_move_service.call_args[0]
-    assert move_call[0:3] == (pytest.approx(0.96), pytest.approx(1.99), pytest.approx(3.007))
-
-
-def test_pickup_fails_on_unknown_orientation(actions):
-    """pickup should fail cleanly if its orientation preset can't be resolved."""
-
-    actions.get_static_object_coords = MagicMock(return_value={"x": 1.0, "y": 2.0, "z": 3.0})
-    actions.get_orientation_preset = MagicMock(return_value=None)
-
-    success, message = actions.handlers['pickup']({"target": "red_cube", "orientation": "not_a_real_preset"})
-
-    assert success is False
-
-
-# compute_side_grasp_candidates() / verify_grasp_pose()
-def test_compute_side_grasp_candidates_for_box(actions):
-    """Candidates should be generated from the object's own registered
-    shape/pose (not a fixed preset), centered on it, at each of the 4
-    candidate yaw offsets, all with the flat 'side grasp' roll."""
-
-    target_info = {
-        "pose": {
-            "position": {"x": 0.3, "y": -0.1, "z": 0.02},
-            "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}  # yaw 0
-        },
-        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.07, 0.04]}
-    }
-
-    candidates = pickup.compute_side_grasp_candidates(target_info)
-
-    assert len(candidates) >= 4
-    # first 4 candidates: object's exact center, each yaw offset
-    for cand in candidates[:4]:
-        assert cand[0:3] == (0.3, -0.1, 0.02)
-        assert cand[3] == pytest.approx(math.pi / 2.0)  # flat roll
-        assert cand[4] == 0.0
-    yaws = [c[5] for c in candidates[:4]]
-    assert yaws == pytest.approx([0.0, math.pi / 2.0, -math.pi / 2.0, math.pi])
-
-
-def test_compute_side_grasp_candidates_for_cylinder(actions):
-    """A CYLINDER is radially symmetric - unlike BOX's 4 face-aligned
-    offsets, candidates should span 8 evenly spaced absolute yaws around
-    the full circle, not tied to the object's own (otherwise meaningless,
-    for a symmetric shape) registered orientation."""
-
-    target_info = {
-        "pose": {
-            "position": {"x": -0.3255, "y": -0.1235, "z": 0.075},
-            # A non-zero registered orientation should have no effect on
-            # a cylinder's candidates - it's symmetric, there's no "face".
-            "orientation": {"x": 0.0, "y": 0.0, "z": 0.7071, "w": 0.7071}  # yaw ~90 deg
-        },
-        "shape": {"type": SolidPrimitive.CYLINDER, "dimensions": [0.25, 0.035]}
-    }
-
-    candidates = pickup.compute_side_grasp_candidates(target_info)
-
-    assert len(candidates) >= 8
-    for cand in candidates[:8]:
-        assert cand[0:3] == (-0.3255, -0.1235, 0.075)
-        assert cand[3] == pytest.approx(math.pi / 2.0)  # flat roll
-        assert cand[4] == 0.0
-    yaws = [c[5] for c in candidates[:8]]
-    expected = [math.radians(a) for a in range(0, 360, 45)]
-    assert yaws == pytest.approx(expected)
-
-
-def test_compute_side_grasp_candidates_rejects_unsupported_shape(actions):
-    """Only BOX/CYLINDER shapes are supported currently - fail cleanly
-    (empty list), not guess, for anything else."""
-
-    target_info = {
-        "pose": {"position": {"x": 0.0, "y": 0.0, "z": 0.0}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
-        "shape": {"type": SolidPrimitive.SPHERE, "dimensions": [0.03]}
-    }
-
-    assert pickup.compute_side_grasp_candidates(target_info) == []
 
 
 def _mock_ik_response(error_code, joint_positions=None):
@@ -689,25 +427,6 @@ def _mock_ik_response(error_code, joint_positions=None):
     response.solution.joint_state.name = ['joint_1', 'joint_2', 'joint_3', 'joint_4', 'joint_5', 'joint_6']
     response.solution.joint_state.position = joint_positions or [0.0] * 6
     return response
-
-
-def test_verify_grasp_pose_true_on_ik_success(actions):
-    """verify_grasp_pose should call /compute_ik with collision-avoidance
-    on, and report True only on a genuine SUCCESS error code."""
-
-    actions.compute_ik_client.wait_for_service = MagicMock(return_value=True)
-    response = _mock_ik_response(1)
-    future = MagicMock()
-    future.done.return_value = True
-    future.result.return_value = response
-    actions.compute_ik_client.call_async = MagicMock(return_value=future)
-
-    result = actions.verify_grasp_pose(0.3, -0.1, 0.02, math.pi / 2.0, 0.0, 0.0)
-
-    assert result is True
-    request = actions.compute_ik_client.call_async.call_args[0][0]
-    assert request.ik_request.avoid_collisions is True
-    assert request.ik_request.pose_stamped.pose.position.x == pytest.approx(0.3)
 
 
 def test_find_ik_solution_returns_joint_positions_in_order(actions):
@@ -726,7 +445,7 @@ def test_find_ik_solution_returns_joint_positions_in_order(actions):
     future.result.return_value = response
     actions.compute_ik_client.call_async = MagicMock(return_value=future)
 
-    result = actions.find_ik_solution(0.3, -0.1, 0.02, 0.0, 0.0, 0.0)
+    result = actions.find_ik_solution(0.3, -0.1, 0.02, Rotation.identity())
 
     assert result == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
 
@@ -744,28 +463,289 @@ def test_find_ik_solution_passes_seed_when_given(actions):
     actions.compute_ik_client.call_async = MagicMock(return_value=future)
 
     seed = [0.1, 0.2, 0.3, 0.4, 0.5, 0.6]
-    actions.find_ik_solution(0.3, -0.1, 0.02, 0.0, 0.0, 0.0, seed_joint_positions=seed)
+    actions.find_ik_solution(0.3, -0.1, 0.02, Rotation.identity(), seed_joint_positions=seed)
 
     request = actions.compute_ik_client.call_async.call_args[0][0]
     assert list(request.ik_request.robot_state.joint_state.position) == pytest.approx(seed)
+    # keeps the attached object in the state
+    assert request.ik_request.robot_state.is_diff is True
 
 
-def test_verify_grasp_pose_false_on_ik_failure(actions):
-    """A non-SUCCESS error code (e.g. NO_IK_SOLUTION or in-collision)
-    should report as not verified, not raise or assume success."""
-
+def _ik_request_for(actions, **kwargs):
     actions.compute_ik_client.wait_for_service = MagicMock(return_value=True)
-    response = MagicMock()
-    response.error_code.val = -31
-    response.error_code.SUCCESS = 1
     future = MagicMock()
     future.done.return_value = True
-    future.result.return_value = response
+    future.result.return_value = _mock_ik_response(1)
     actions.compute_ik_client.call_async = MagicMock(return_value=future)
+    actions.find_ik_solution(0.3, -0.1, 0.02, Rotation.identity(), **kwargs)
+    return actions.compute_ik_client.call_async.call_args[0][0].ik_request
 
-    result = actions.verify_grasp_pose(0.3, -0.1, 0.02, math.pi / 2.0, 0.0, 0.0)
 
-    assert result is False
+def test_find_ik_solution_defaults_to_collision_checked_1s(actions):
+    request = _ik_request_for(actions)
+    assert request.avoid_collisions is True
+    assert (request.timeout.sec, request.timeout.nanosec) == (1, 0)
+
+
+def test_find_ik_solution_passes_avoid_collisions_and_sub_second_timeout(actions):
+    request = _ik_request_for(actions, avoid_collisions=False, timeout_sec=0.1)
+    assert request.avoid_collisions is False
+    assert request.timeout.sec == 0
+    assert request.timeout.nanosec == pytest.approx(1e8, abs=1)
+
+
+# pickup()
+CUBE_INFO = {
+    "pose": {"position": {"x": 0.4, "y": 0.0, "z": 0.025}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+    "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]},
+}
+PRE, GRASP, LIFT = [0.0] * 6, [0.1] * 6, [0.2] * 6
+OK = {"success": True, "message": ""}
+NO_PLAN = {"success": False, "message": "no plan", "error_code": MoveItErrorCodes.PLANNING_FAILED}
+ABORTED = {"success": False, "message": "aborted", "error_code": MoveItErrorCodes.CONTROL_FAILED}
+HOMED = " (arm returned home)"
+
+
+def _mock_pickup(actions, info=CUBE_INFO, ik=None):
+    """Everything succeeds unless overridden. ik is find_ik_solution's side_effect."""
+    actions.get_object_info = MagicMock(return_value=info)
+    actions.find_ik_solution = MagicMock(side_effect=ik or [PRE, GRASP, LIFT])
+    actions.call_move_gripper_service = MagicMock(return_value=OK)
+    actions.call_joint_move_service = MagicMock(return_value=OK)
+    actions.attach_object = MagicMock(return_value=True)
+    actions.call_home_service = MagicMock(return_value=OK)
+
+
+def _joint_goals(actions):
+    return [c[0][0] for c in actions.call_joint_move_service.call_args_list]
+
+
+def test_pickup_runs_pre_grasp_grasp_close_attach_lift(actions):
+    _mock_pickup(actions)
+
+    success, message = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is True, message
+    assert message == "Picked up 'cube' with a top grasp"
+    assert _joint_goals(actions) == [PRE, GRASP, LIFT]
+    assert [c[0][0] for c in actions.call_move_gripper_service.call_args_list] == [0.0, 0.8]
+    actions.attach_object.assert_called_once_with("cube")
+    assert actions.held_object == "cube"
+
+
+def test_pickup_checks_ik_in_a_chain_and_lift_without_collisions(actions):
+    _mock_pickup(actions)
+
+    actions.handlers['pickup']({"target": "cube"})
+
+    pre_call, grasp_call, lift_call = actions.find_ik_solution.call_args_list
+    assert pre_call.kwargs.get('seed_joint_positions') is None
+    assert grasp_call.kwargs['seed_joint_positions'] == PRE
+    assert lift_call.kwargs['seed_joint_positions'] == GRASP
+    assert grasp_call.kwargs['avoid_collisions'] is True
+    assert lift_call.kwargs['avoid_collisions'] is False
+    assert lift_call.kwargs['timeout_sec'] == actions.grasp_config['ik_timeout_sec']
+
+
+def test_pickup_stores_object_pose_in_tool_frame(actions):
+    _mock_pickup(actions)
+
+    actions.handlers['pickup']({"target": "cube"})
+
+    held = actions.held_grasp
+    # Pads sit 1.5 cm above the cube's centre, and tool +Z points down
+    assert held['object_position'] == pytest.approx([0.0, 0.0, 0.015], abs=1e-9)
+    assert (held['tool_rotation'] * held['object_rotation']).magnitude() == pytest.approx(0.0, abs=1e-9)
+
+
+def test_pickup_tries_next_candidate_after_no_ik(actions):
+    _mock_pickup(actions, ik=[None, PRE, GRASP, LIFT])
+
+    success, _ = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is True
+    assert actions.find_ik_solution.call_count == 4
+
+
+def test_pickup_tries_next_candidate_after_wrist_flip(actions):
+    _mock_pickup(actions, ik=[PRE, [2.0] * 6, PRE, GRASP, LIFT])
+
+    success, _ = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is True
+    assert actions.find_ik_solution.call_count == 5
+
+
+def test_pickup_tries_next_candidate_if_planning_fails(actions):
+    _mock_pickup(actions, ik=[PRE, GRASP, LIFT] * 2)
+    actions.call_joint_move_service.side_effect = [NO_PLAN, OK, OK, OK]
+
+    success, _ = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is True
+    assert actions.find_ik_solution.call_count == 6
+
+
+def test_pickup_goes_home_if_pre_grasp_move_fails_partway(actions):
+    _mock_pickup(actions, ik=[PRE, GRASP, LIFT] * 2)
+    actions.call_joint_move_service.return_value = ABORTED
+
+    success, message = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is False
+    assert message == "Failed partway to the pre-grasp for 'cube': aborted" + HOMED
+    assert actions.call_joint_move_service.call_count == 1
+    actions.call_home_service.assert_called_once()
+    actions.attach_object.assert_not_called()
+
+
+def test_pickup_tries_next_candidate_if_planning_to_the_grasp_fails(actions):
+    _mock_pickup(actions, ik=[PRE, GRASP, LIFT] * 2)
+    actions.call_joint_move_service.side_effect = [OK, NO_PLAN, OK, OK, OK]
+
+    success, _ = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is True
+    assert _joint_goals(actions) == [PRE, GRASP, PRE, GRASP, LIFT]
+    actions.call_home_service.assert_not_called()
+
+
+@pytest.mark.parametrize("step", ["grasp_move", "close", "attach"])
+def test_pickup_backs_off_to_pre_grasp_then_goes_home_if_grasping_fails(actions, step):
+    _mock_pickup(actions)
+    if step == "grasp_move":
+        actions.call_joint_move_service.side_effect = [OK, ABORTED, OK]
+    elif step == "close":
+        actions.call_move_gripper_service.side_effect = [OK, {"success": False, "message": "nope"}, OK]
+    else:
+        actions.attach_object.return_value = False
+
+    success, message = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is False
+    assert message.endswith(HOMED)
+    assert _joint_goals(actions)[-1] == PRE
+    assert actions.call_move_gripper_service.call_args[0][0] == 0.0
+    actions.call_home_service.assert_called_once()
+    assert actions.held_object is None
+
+
+def test_pickup_stays_put_if_backing_off_fails(actions):
+    _mock_pickup(actions)
+    actions.call_joint_move_service.side_effect = [OK, OK, {"success": False, "message": "blocked"}]
+    actions.attach_object.return_value = False
+
+    success, message = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is False
+    assert message == "Failed to attach 'cube' after closing; failed to back off to the pre-grasp: blocked"
+    actions.call_home_service.assert_not_called()
+
+
+def test_pickup_reports_when_going_home_also_fails(actions):
+    _mock_pickup(actions)
+    actions.call_joint_move_service.return_value = ABORTED
+    actions.call_home_service.return_value = {"success": False, "message": "timed out"}
+
+    success, message = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is False
+    assert message == "Failed partway to the pre-grasp for 'cube': aborted (returning home also failed: timed out)"
+
+
+def test_pickup_counts_as_held_if_only_the_lift_fails(actions):
+    _mock_pickup(actions)
+    actions.call_joint_move_service.side_effect = [OK, OK, {"success": False, "message": "start state in collision"}]
+
+    success, message = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is False
+    assert message == "Grasped 'cube' but failed to lift it: start state in collision" + HOMED
+    assert actions.held_object == "cube"
+
+
+def test_pickup_failure_message_counts_reasons_per_style(actions):
+    long_box = {**CUBE_INFO, "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.2, 0.05, 0.05]}}
+    _mock_pickup(actions, info=long_box, ik=lambda *a, **k: None)
+
+    success, message = actions.handlers['pickup']({"target": "box"})
+
+    assert success is False
+    assert message == ("No reachable grasp for 'box': side 16 tried (4 too wide: 0.200 m > max 0.094; 12 no IK at pre-grasp), "
+                       "top 4 tried (2 too wide: 0.200 m > max 0.094; 2 no IK at pre-grasp)" + HOMED)
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_pickup_forced_style_only_tries_and_reports_that_style(actions):
+    _mock_pickup(actions, ik=lambda *a, **k: None)
+
+    success, message = actions.handlers['pickup']({"target": "cube", "grasp_style": "top"})
+
+    assert success is False
+    assert message == "No reachable grasp for 'cube': top 4 tried (4 no IK at pre-grasp)" + HOMED
+
+
+def test_pickup_rejects_unknown_grasp_style(actions):
+    _mock_pickup(actions)
+
+    success, message = actions.handlers['pickup']({"target": "cube", "grasp_style": "sideways"})
+
+    assert success is False
+    assert "Unknown grasp_style 'sideways'" in message
+
+
+def test_pickup_fails_cleanly_for_unknown_target_or_unsupported_shape(actions):
+    _mock_pickup(actions, info=None)
+    assert actions.handlers['pickup']({"target": "ghost"}) == (False, "Could not resolve pickup target 'ghost'")
+
+    sphere = {**CUBE_INFO, "shape": {"type": SolidPrimitive.SPHERE, "dimensions": [0.03]}}
+    _mock_pickup(actions, info=sphere)
+    success, message = actions.handlers['pickup']({"target": "ball"})
+    assert success is False
+    assert message.startswith("Can't grasp 'ball': unsupported shape")
+
+
+def _holding(actions, name):
+    """Pick up `name` (a CUBE_INFO cube) with everything mocked to succeed."""
+    _mock_pickup(actions, ik=lambda *a, **k: [0.0] * 6)
+    actions.update_object_pose = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
+    assert actions.handlers['pickup']({"target": name})[0]
+    actions.attach_object.reset_mock()
+
+
+def test_pickup_releases_previously_held_object_first(actions):
+    """Put the held one back where it was picked up before picking up another."""
+    _holding(actions, "red_cube")
+
+    success, _ = actions.handlers['pickup']({"target": "blue_cube"})
+
+    assert success is True
+    actions.detach_object.assert_called_once_with("red_cube")
+    assert actions.update_object_pose.call_args[0][3] == pytest.approx(0.025 + actions.grasp_config['place_clearance'])
+    actions.attach_object.assert_called_once_with("blue_cube")
+    assert actions.held_object == "blue_cube"
+
+
+def test_pickup_does_not_release_when_target_is_already_held(actions):
+    _holding(actions, "cube")
+
+    success, _ = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is True
+    actions.detach_object.assert_not_called()
+
+
+def test_pickup_fails_cleanly_if_release_of_held_object_fails(actions):
+    _holding(actions, "red_cube")
+    actions.find_ik_solution.side_effect = lambda *a, **k: None
+
+    success, message = actions.handlers['pickup']({"target": "blue_cube"})
+
+    assert success is False
+    assert message.startswith("Failed to release 'red_cube' before picking up 'blue_cube'")
+    assert actions.held_object == "red_cube"
+    actions.attach_object.assert_not_called()
 
 
 def test_relative_move_ignores_orientation(actions):
@@ -873,142 +853,157 @@ def test_set_collision_allowed_reverts_existing_object_row(actions):
     assert list(acm.entry_values[1].enabled) == [False, False]
 
 
-def test_pickup_side_grasp_uses_first_verified_candidate(actions):
-    """pickup with grasp_style='side' should try candidates in order and
-    use the first one that actually verifies, not just the first one
-    generated."""
+# dropoff()
+TRAY_INFO = {
+    "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.01}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+    "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]},
+}
 
-    actions.get_object_info = MagicMock(return_value={
-        "pose": {"position": {"x": 0.3, "y": -0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
-        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.07, 0.04]}
-    })
-    # first 3 candidates fail verification, the 4th succeeds
-    actions.verify_grasp_pose = MagicMock(side_effect=[False, False, False, True])
-    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
-    actions.call_move_service = MagicMock(return_value={"success": True})
-    actions.attach_object = MagicMock(return_value=True)
 
-    success, message = actions.handlers['pickup']({"target": "box", "grasp_style": "side"})
+def _holding_cube_over_tray(actions, ik=None):
+    """Holding 'cube' (top grasp), with 'tray' known and everything mocked to succeed."""
+    _holding(actions, "cube")
+    actions.get_object_info = MagicMock(side_effect=lambda name: {"cube": CUBE_INFO, "tray": TRAY_INFO}.get(name))
+    actions.find_ik_solution = MagicMock(side_effect=ik or (lambda *a, **k: [0.0] * 6))
+    actions.call_joint_move_service = MagicMock(return_value=OK)
+    actions.call_move_gripper_service = MagicMock(return_value=OK)
+
+
+def test_dropoff_places_on_destination_top_centre(actions):
+    _holding_cube_over_tray(actions)
+
+    success, message = actions.handlers['dropoff']({"destination": "tray"})
+
+    assert (success, message) == (True, "Placed 'cube' on 'tray'")
+    # tray top 0.02 + clearance + half the cube
+    x, y, z, orientation = actions.update_object_pose.call_args[0][1:]
+    assert (x, y, z) == pytest.approx((0.5, 0.1, 0.02 + actions.grasp_config['place_clearance'] + 0.025))
+    q = orientation
+    assert Rotation.from_quat([q["x"], q["y"], q["z"], q["w"]]).magnitude() == pytest.approx(0.0, abs=1e-9)
+    assert actions.call_joint_move_service.call_count == 4  # hover, release, back, up
+    assert actions.held_object is None and actions.held_grasp is None
+
+
+def test_dropoff_checks_hover_and_release_with_collisions_and_retreat_for_reach(actions):
+    _holding_cube_over_tray(actions)
+
+    actions.handlers['dropoff']({"destination": "tray"})
+
+    avoid = [c.kwargs['avoid_collisions'] for c in actions.find_ik_solution.call_args_list]
+    assert avoid == [True, True, False, False]
+
+
+def test_dropoff_detaches_before_backing_away(actions):
+    _holding_cube_over_tray(actions)
+    calls = []
+    actions.call_joint_move_service.side_effect = lambda joints: calls.append('move') or OK
+    actions.detach_object = MagicMock(side_effect=lambda name: calls.append('detach') or True)
+
+    actions.handlers['dropoff']({"destination": "tray"})
+
+    assert calls == ['move', 'move', 'detach', 'move', 'move']
+
+
+def test_dropoff_tries_the_next_yaw_if_the_pickup_one_has_no_ik(actions):
+    _holding_cube_over_tray(actions, ik=[None] + [[0.0] * 6] * 4)
+
+    success, _ = actions.handlers['dropoff']({"destination": "tray"})
 
     assert success is True
-    assert actions.verify_grasp_pose.call_count == 4
-    move_call = actions.call_move_service.call_args[0]
-    expected = pickup.compute_side_grasp_candidates(actions.get_object_info.return_value)[3]
-    assert move_call[0:3] == expected[0:3]
-    assert move_call[3] is True
+    first, second = (c[0][3] for c in actions.find_ik_solution.call_args_list[:2])
+    assert (second * first.inv()).as_euler('xyz', degrees=True)[2] == pytest.approx(actions.grasp_config['yaw_step_deg'])
 
 
-def test_pickup_side_grasp_fails_if_no_candidate_verifies(actions):
-    """If nothing in the candidate search verifies, pickup should fail
-    cleanly rather than attempt an unverified pose."""
+def test_dropoff_tries_the_next_yaw_if_planning_fails(actions):
+    _holding_cube_over_tray(actions)
+    actions.call_joint_move_service.side_effect = [NO_PLAN, OK, OK, OK, OK]
 
-    actions.get_object_info = MagicMock(return_value={
-        "pose": {"position": {"x": 0.3, "y": -0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
-        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.1, 0.07, 0.04]}
-    })
-    actions.verify_grasp_pose = MagicMock(return_value=False)
-    actions.call_move_service = MagicMock(return_value={"success": True})
+    success, _ = actions.handlers['dropoff']({"destination": "tray"})
 
-    success, message = actions.handlers['pickup']({"target": "box", "grasp_style": "side"})
+    assert success is True
+    assert actions.find_ik_solution.call_count == 8
+
+
+def test_dropoff_moves_by_direction_and_distance_but_stays_on_the_destination(actions):
+    _holding_cube_over_tray(actions)
+
+    success, _ = actions.handlers['dropoff']({"destination": "tray", "direction": "forward", "distance": 0.1})
+    assert success is True
+    assert actions.update_object_pose.call_args[0][1] > 0.5
+
+    _holding_cube_over_tray(actions)
+    success, message = actions.handlers['dropoff']({"destination": "tray", "direction": "forward", "distance": 0.5})
+    assert success is False
+    assert message == "Release point is off 'tray', try a smaller distance"
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_dropoff_direction_needs_a_distance(actions):
+    _holding_cube_over_tray(actions)
+
+    success, message = actions.handlers['dropoff']({"destination": "tray", "direction": "left"})
 
     assert success is False
-    actions.call_move_service.assert_not_called()
+    assert "needs a 'distance'" in message
 
 
-def test_dropoff_clears_held_object(actions):
-    """A successful dropoff of the held object should clear held_object."""
-
-    actions.held_object = "red_cube"
-    actions.get_object_info = MagicMock(return_value={
-        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
-        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
-    })
-    actions.call_move_service = MagicMock(return_value={"success": True})
-    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
-    actions.update_object_pose = MagicMock(return_value=True)
-    actions.detach_object = MagicMock(return_value=True)
-
-    success, message = actions.handlers['dropoff']({"target": "red_cube", "destination": "delivery_tray"})
-
-    assert success is True
-    assert actions.held_object is None
-
-
-def test_dropoff_falls_back_to_held_object_when_target_omitted(actions):
-    """Regression: a dropoff step missing 'target' must still use the actually
-    held object's height for the release calculation, not silently default to 0."""
-
-    actions.held_object = "red_cube"
-
-    def object_info_side_effect(name):
-        if name == "delivery_tray":
-            return {
-                "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
-                "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
-            }
-        if name == "red_cube":
-            return {
-                "pose": {"position": {"x": 0.0, "y": 0.0, "z": 0.0}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
-                "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
-            }
-        return None
-
-    actions.get_object_info = MagicMock(side_effect=object_info_side_effect)
-    actions.call_move_service = MagicMock(return_value={"success": True})
-    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
-    actions.update_object_pose = MagicMock(return_value=True)
-    actions.detach_object = MagicMock(return_value=True)
-
-    success, message = actions.handlers['dropoff']({"destination": "delivery_tray"})
-
-    assert success is True
-    # Same release_z as test_handle_dropoff_two_stage_descent_with_stacking:
-    # dest top 0.01 + held cube's half-height 0.025 = 0.035, not 0.01 (which
-    # is what a silent target_half_height=0.0 fallback would have produced).
-    release_call = actions.call_move_service.call_args_list[1][0]
-    assert release_call[2] == pytest.approx(0.035 + 0.02)
-    assert actions.held_object is None
-
-
-def test_dropoff_without_destination_releases_in_place(actions):
-    """Unlike push/thrust/throw, dropoff doesn't inherently need to go
-    anywhere - with no destination given, it should release right where
-    the held object already is (its own registered position), the same
-    convention 'pour' uses, not invent a destination or fail."""
-
-    actions.held_object = "red_cube"
-    actions.get_object_info = MagicMock(return_value={
-        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
-        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
-    })
-    actions.call_move_service = MagicMock(return_value={"success": True})
-    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
-    actions.update_object_pose = MagicMock(return_value=True)
-    actions.detach_object = MagicMock(return_value=True)
-
-    success, message = actions.handlers['dropoff']({"target": "red_cube"})
-
-    assert success is True
-    # release_z = the object's own z (0.02) + its own half-height (0.025)
-    hover_call = actions.call_move_service.call_args_list[0][0]
-    release_call = actions.call_move_service.call_args_list[1][0]
-    assert hover_call[0:2] == (pytest.approx(0.3), pytest.approx(0.1))
-    assert release_call[2] == pytest.approx(0.045 + 0.02)
-    actions.update_object_pose.assert_called_once_with(
-        "red_cube", pytest.approx(0.3), pytest.approx(0.1), pytest.approx(0.045), {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
-    )
-    assert actions.held_object is None
-
-
-def test_dropoff_without_destination_or_target_fails_cleanly(actions):
-    """With nothing held and no destination given, there's nothing to
-    release in place against - this should fail cleanly, not crash."""
+def test_dropoff_fails_if_not_holding_the_target(actions):
+    _holding_cube_over_tray(actions)
+    assert actions.handlers['dropoff']({"target": "tray"}) == (False, "Not holding 'tray' (holding 'cube')")
 
     actions.held_object = None
+    assert actions.handlers['dropoff']({})[0] is False
 
-    success, message = actions.handlers['dropoff']({})
+
+def test_dropoff_failure_message_when_no_yaw_works(actions):
+    _holding_cube_over_tray(actions, ik=lambda *a, **k: None)
+
+    success, message = actions.handlers['dropoff']({"destination": "tray"})
 
     assert success is False
+    assert message == "No reachable place pose for 'cube': 12 tried (12 no IK at hover)" + HOMED
+    assert actions.held_object == "cube"
+
+
+def test_dropoff_still_counts_as_placed_if_backing_away_fails(actions):
+    _holding_cube_over_tray(actions)
+    actions.call_joint_move_service.side_effect = [OK, OK, {"success": False, "message": "blocked"}]
+
+    success, message = actions.handlers['dropoff']({"destination": "tray"})
+
+    assert success is False
+    assert message == "Placed 'cube' on 'tray' but failed to back away: blocked" + HOMED
+    assert actions.held_object is None
+
+
+def test_dropoff_tries_the_next_yaw_if_planning_to_the_release_fails(actions):
+    _holding_cube_over_tray(actions)
+    actions.call_joint_move_service.side_effect = [OK, NO_PLAN, OK, OK, OK, OK]
+
+    success, _ = actions.handlers['dropoff']({"destination": "tray"})
+
+    assert success is True
+    actions.call_home_service.assert_not_called()
+
+
+@pytest.mark.parametrize("step", ["release_move", "open", "detach"])
+def test_dropoff_backs_off_to_hover_then_goes_home_if_releasing_fails(actions, step):
+    _holding_cube_over_tray(actions)
+    hover = [0.5] * 6
+    actions.find_ik_solution.side_effect = [hover, [0.0] * 6, [0.0] * 6, [0.0] * 6]
+    actions.detach_object = MagicMock(return_value=step != "detach")
+    if step == "release_move":
+        actions.call_joint_move_service.side_effect = [OK, ABORTED, OK]
+    elif step == "open":
+        actions.call_move_gripper_service.return_value = {"success": False, "message": "nope"}
+
+    success, message = actions.handlers['dropoff']({"destination": "tray"})
+
+    assert success is False
+    assert message.endswith(HOMED)
+    assert _joint_goals(actions)[-1] == hover
+    actions.call_home_service.assert_called_once()
+    assert actions.held_object == "cube"
 
 
 # pour()
@@ -2443,3 +2438,11 @@ def test_reset_environment_clears_held_object_even_on_failure(actions):
 
     assert success is False
     assert actions.held_object is None
+
+
+def test_every_moveit_error_code_has_a_name():
+    from kinova_interface.utils.robot import MOVEIT_ERRORS, moveit_error
+    codes = {getattr(MoveItErrorCodes, k) for k in dir(MoveItErrorCodes)
+             if k.isupper() and isinstance(getattr(MoveItErrorCodes, k), int)} - {MoveItErrorCodes.SUCCESS}
+    assert set(MOVEIT_ERRORS) == codes
+    assert moveit_error(-999) == 'unknown MoveIt error code -999'

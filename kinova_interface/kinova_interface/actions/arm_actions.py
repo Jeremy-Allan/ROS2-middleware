@@ -2,7 +2,7 @@ import math
 import time
 from functools import partial
 
-from scipy.spatial.transform import Rotation
+from rclpy.parameter import Parameter
 
 from geometry_msgs.msg import Quaternion, Pose, PoseStamped
 from sensor_msgs.msg import JointState
@@ -28,7 +28,8 @@ from std_srvs.srv import Trigger
 
 from kinova_interface.actions import basic, pickup, dropoff, pour, thrust, push, throw
 from kinova_interface.utils.geometry import resolve_direction_offset
-from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES
+from kinova_interface.utils.grasping import CONFIG_KEYS
+from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES, max_joint_change, moveit_error
 from kinova_interface.utils.ros import call_service, wait_for_future
 
 
@@ -66,10 +67,8 @@ class ArmActions:
         self.update_pose_client = node.create_client(UpdateObjectPose, '/update_object_pose', callback_group=cb_group)
         self.reset_scene_client = node.create_client(Trigger, '/reset_environment_scene', callback_group=cb_group)
 
-        # For verifying a computed grasp candidate is actually reachable and
-        # collision-free before trusting it (see compute_side_grasp_candidates/
-        # verify_grasp_pose) - not exposed to MoveIt's own move_group action,
-        # a plain service so it can be checked cheaply before ever moving.
+        # For checking a grasp candidate is reachable and collision-free
+        # before moving (see find_ik_solution)
         self.compute_ik_client = node.create_client(GetPositionIK, '/compute_ik', callback_group=cb_group)
 
         # For temporarily permitting deliberate gripper/object contact
@@ -114,6 +113,14 @@ class ArmActions:
         # to verify 'pour'/'thrust' aren't invoked on nothing, and as a
         # fallback for dropoff's own release-height calculation.
         self.held_object = None
+        # How it's held (set by pickup), so dropoff can place it with the same grasp
+        self.held_grasp = None
+
+        # Grasp settings from data/configs/grasping.yaml, which launch passes in as parameters.
+        # One at a time: Humble's declare_parameters(namespace, ...) misses the file's values.
+        for key in CONFIG_KEYS:
+            node.declare_parameter(f'grasping.{key}', Parameter.Type.DOUBLE)
+        self.grasp_config  # raises now, not at the first pickup, if a value is missing
 
     # Client-side wait_for_future timeouts for the real arm-moving calls
     # below (home/move/relative_move/joint_move) - must exceed
@@ -129,6 +136,11 @@ class ArmActions:
     _ARM_ACTION_TIMEOUT_SEC = 65.0
     # Same idea, matching HardwareInterfaceClient.GRIPPER_TIMEOUT_SEC (10.0s).
     _GRIPPER_ACTION_TIMEOUT_SEC = 15.0
+
+    @property
+    def grasp_config(self):
+        """Current grasp settings, read fresh so `ros2 param set` applies to the next pickup."""
+        return {key: self.node.get_parameter(f'grasping.{key}').value for key in CONFIG_KEYS}
 
     def wait_for_future(self, future, service_name, timeout_sec=10.0):
         """Safely wait for an async service call future to complete without deadlocking the executor."""
@@ -247,36 +259,25 @@ class ArmActions:
             params.acceleration_scale = float(speed)
         return params
 
-    def find_ik_solution(self, x, y, z, roll, pitch, yaw, seed_joint_positions=None):
-        """Check whether a Cartesian pose is actually reachable and
-        collision-free via IK (with collision-avoidance on), rather than
-        trusting a computed/geometric candidate blindly - this is exactly
-        what caught a plausible-looking but actually-in-collision pose
-        during testing (see docs/pour-motion-reference.md), a manually
-        demonstrated pose that turned out to have never really been
-        validated at all. Returns the solved [joint_1..joint_6] positions,
-        or None if unreachable/in collision.
+    def find_ik_solution(self, x, y, z, rotation, seed_joint_positions=None,
+                         avoid_collisions=True, timeout_sec=1.0):
+        """IK for tool_frame at (x, y, z) with 'rotation' in base_link.
+        Returns [joint_1..joint_6], or None if unreachable or in collision.
 
-        'seed_joint_positions', if given, is used as the IK search's
-        starting point instead of the current robot state - KDL (the
-        default IK plugin here) is a local numerical solver, so seeding it
-        near an already-known-good configuration (e.g. 'push's contact
-        pose, when solving for the pose it extends to) reliably converges
-        to a nearby solution differing only in the joints that actually
-        need to move, rather than jumping to an unrelated configuration
-        branch. Seeding from a very different configuration (e.g. home)
-        is what caused a real, physically-reachable pose to report
-        NO_IK_SOLUTION during testing - see docs/pour-motion-reference.md."""
+        'seed_joint_positions' starts the search there instead of the current state. KDL is a
+        local solver, so a nearby seed keeps it on the same arm configuration.
+        'avoid_collisions' False only checks the pose is reachable."""
         req = GetPositionIK.Request()
         req.ik_request.group_name = 'arm'
-        req.ik_request.avoid_collisions = True
-        req.ik_request.timeout.sec = 1
+        req.ik_request.avoid_collisions = avoid_collisions
+        req.ik_request.timeout.sec = int(timeout_sec)
+        req.ik_request.timeout.nanosec = int((timeout_sec % 1) * 1e9)
 
         pose_stamped = PoseStamped()
         pose_stamped.header.frame_id = BASE_FRAME
         pose = Pose()
         pose.position.x, pose.position.y, pose.position.z = float(x), float(y), float(z)
-        qx, qy, qz, qw = Rotation.from_euler('xyz', [roll, pitch, yaw]).as_quat()
+        qx, qy, qz, qw = rotation.as_quat()
         pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = qx, qy, qz, qw
         pose_stamped.pose = pose
         req.ik_request.pose_stamped = pose_stamped
@@ -284,26 +285,29 @@ class ArmActions:
         # Use the current state (stops MoveIt's "empty JointState" error)
         req.ik_request.robot_state.is_diff = True
         if seed_joint_positions is not None:
+            # is_diff keeps the rest of the current state, including an attached object.
+            # Without it MoveIt drops attached objects and won't check them for collisions.
             seed_state = RobotState()
+            seed_state.is_diff = True
             seed_js = JointState()
             seed_js.name = list(JOINT_NAMES)
             seed_js.position = [float(p) for p in seed_joint_positions]
             seed_state.joint_state = seed_js
             req.ik_request.robot_state = seed_state
 
+        start = time.monotonic()
         response = call_service(self.compute_ik_client, req, '/compute_ik', self.get_logger())
-        if response is None or response.error_code.val != response.error_code.SUCCESS:
+        if response is None:
+            return None
+        if response.error_code.val != response.error_code.SUCCESS:
+            self.get_logger().debug(
+                f"/compute_ik failed ({moveit_error(response.error_code.val)}) at ({x:.3f}, {y:.3f}, {z:.3f}), "
+                f"avoid_collisions={avoid_collisions}, took {time.monotonic() - start:.3f}s of {timeout_sec}s")
             return None
 
         names = list(response.solution.joint_state.name)
         positions = list(response.solution.joint_state.position)
         return [positions[names.index(name)] for name in JOINT_NAMES]
-
-    def verify_grasp_pose(self, x, y, z, roll, pitch, yaw):
-        """True/False convenience wrapper around find_ik_solution, for
-        callers that only need to know whether a candidate is valid, not
-        its actual joint solution (e.g. pickup's grasp_style='side')."""
-        return self.find_ik_solution(x, y, z, roll, pitch, yaw) is not None
 
     def set_collision_allowed(self, object_id, allowed):
         """Temporarily allow (or restore disallowing) collision between
@@ -386,7 +390,10 @@ class ArmActions:
         req.robot_state = state
 
         response = call_service(self.compute_fk_client, req, '/compute_fk', self.get_logger())
-        if response is None or response.error_code.val != response.error_code.SUCCESS:
+        if response is None:
+            return None
+        if response.error_code.val != response.error_code.SUCCESS:
+            self.get_logger().debug(f"/compute_fk failed: {moveit_error(response.error_code.val)}")
             return None
         p = response.pose_stamped[0].pose.position
         return (p.x, p.y, p.z)
@@ -533,21 +540,11 @@ class ArmActions:
         return self._service_result(response)
 
     def call_joint_move_service(self, joint_positions, motion_params=None, wait_for_completion=True, relative=False):
-        """Move to a joint-space target - absolute by default, or a delta
-        from whatever the current joint state actually is if relative=True
-        (e.g. 'pour's tilt: a delta on joint_6 alone, without needing to
-        know or recompute the other five joints' current values).
+        """Move to [joint_1..joint_6], or by that much from the current joints if relative=True.
+        Returns {'success', 'message', 'error_code'}, error_code being MoveIt's (0 if it never answered).
 
-        With wait_for_completion False, this still blocks the caller for
-        up to HardwareInterfaceClient.FIRE_AND_FORGET_REJECTION_WINDOW_SEC
-        (the server's own bounded wait to catch a fast rejection) before
-        returning - fine for a caller that only cares the motion started
-        without also needing precise timing of what happens next. A
-        caller that needs to react to the motion in real time as it
-        happens (e.g. throw's release trigger) should use
-        call_joint_move_service_async instead, which doesn't wait for
-        anything at all - see that method's docstring for why this
-        distinction turned out to matter in practice."""
+        wait_for_completion=False still blocks for up to FIRE_AND_FORGET_REJECTION_WINDOW_SEC
+        to catch a fast rejection. Use call_joint_move_service_async to not wait at all."""
         req = JointMove.Request()
         req.joint_positions = [float(p) for p in joint_positions]
         req.wait_for_completion = wait_for_completion
@@ -555,8 +552,34 @@ class ArmActions:
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
         response = call_service(self.joint_move_client, req, '/kinova_hardware_client/joint_move', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
+        result = self._service_result(response)
+        result['error_code'] = response.error_code.val if response else 0
+        return result
 
-        return self._service_result(response)
+    def solve_ik_chain(self, candidate):
+        """Joints for each of a grasp or place candidate's waypoints, each seeded from the one before.
+        Returns ({waypoint name: joints}, None), or (None, reason) if one can't be reached."""
+        grasp_config = self.grasp_config
+        solutions, seed = {}, None
+        for waypoint in candidate.waypoints:
+            joints = self.find_ik_solution(*waypoint.position, candidate.rotation, seed_joint_positions=seed,
+                                           avoid_collisions=waypoint.avoid_collisions,
+                                           timeout_sec=grasp_config['ik_timeout_sec'])
+            if joints is None:
+                return None, f'no IK at {waypoint.name}'
+            # A big jump between waypoints means the wrist would swing round on the way
+            if seed is not None and max_joint_change(seed, joints) > grasp_config['wrist_flip_threshold_rad']:
+                self.get_logger().debug(f"Wrist flip before {waypoint.name}: {max_joint_change(seed, joints):.2f} rad")
+                return None, f'wrist flip before {waypoint.name}'
+            solutions[waypoint.name] = seed = joints
+        return solutions, None
+
+    def fail_at_home(self, message):
+        """Send the arm home so a failed action doesn't leave it mid-motion, then fail with `message`."""
+        home_result = self.call_home_service()
+        if not home_result['success']:
+            return False, f"{message} (returning home also failed: {home_result['message']})"
+        return False, f"{message} (arm returned home)"
 
     def call_joint_move_service_async(self, joint_positions, motion_params=None):
         """Fire a joint-space move without waiting for any response at
@@ -652,6 +675,7 @@ class ArmActions:
         response = self.wait_for_future(future, '/reset_environment_scene')
 
         self.held_object = None
+        self.held_grasp = None
 
         if response and response.success:
             return True, response.message

@@ -130,5 +130,6 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     ctx.detach_object(target_name)
     ctx.update_object_pose(target_name, release_x, release_y, origin['z'], None)
     ctx.held_object = None
+    ctx.held_grasp = None
     where = f"toward '{destination_name}'" if destination_name else direction
     return True, f"Threw '{target_name}' {where}"

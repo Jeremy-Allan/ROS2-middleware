@@ -45,6 +45,7 @@ def launch_setup(context, *args, **kwargs):
         return args
 
     recipe = LaunchConfiguration('recipe')
+    grasping_params = PathJoinSubstitution([FindPackageShare('kinova_interface'), 'data', 'configs', 'grasping.yaml'])
     env_dir = PathJoinSubstitution([FindPackageShare('kinova_interface'), 'data', 'configs', 'env'])
 
     environment_mapping_node = Node(
@@ -69,7 +70,7 @@ def launch_setup(context, *args, **kwargs):
         executable='json_parser_node',
         name='json_parser_node',
         output='log',
-        parameters=[{'recipe': recipe}],
+        parameters=[{'recipe': recipe}, grasping_params],
         ros_arguments=get_ros_args('json_parser_node')
     )
 

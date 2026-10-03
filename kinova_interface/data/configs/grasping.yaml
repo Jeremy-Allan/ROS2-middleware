@@ -1,20 +1,25 @@
-# Settings for object-aware pickup and dropoff. Distances in metres, angles as noted.
-# Loaded once at startup, so restart after changing anything.
+# How the arm picks up and puts down objects. Distances in metres.
+# Change a value while running with `ros2 param set /json_parser_node grasping.<name> <value>`,
+# it applies from the next pickup or dropoff.
+# Always write decimals (0.1, 30.0), whole numbers like 30 are rejected.
 
-ik_timeout_sec: 0.1             # time limit per /compute_ik call; a failed call uses all of it
-wrist_flip_threshold_rad: 1.5   # reject a grasp if any joint swings more than this between pre-grasp and grasp
+/**:
+  ros__parameters:
+    grasping:
+      ik_timeout_sec: 0.1             # how long to spend checking if one grasp is reachable; lower = faster, but may miss some
+      wrist_flip_threshold_rad: 1.5   # skip a grasp if the wrist would swing this far mid-motion
 
-yaw_step_deg: 30                # angle between cylinder grasps around its axis; bigger = fewer candidates, faster
+      yaw_step_deg: 30.0              # angle between grasps tried around an object; bigger = fewer tries, faster
 
-standoff: 0.08                  # pre-grasp distance back from the grasp, along the approach
-lift_height: 0.10               # how far to lift straight up after grasping
+      standoff: 0.08                  # how far back from the object to line up before going in
+      lift_height: 0.10               # how far to lift after grabbing, and to rise after letting go
 
-top_grasp_depth: 0.02           # top grasp: finger pads this far below the object's top
-tip_clearance: 0.01             # top grasp: keep the fingertips at least this far above the object's bottom
-tall_grip_height: 0.06          # side grasp: never grip higher than this above the object's bottom
+      top_grasp_depth: 0.02           # top grasp: how far below the object's top the fingers grip
+      tip_clearance: 0.01             # top grasp: keep the fingertips at least this far above the bottom of the object
+      tall_grip_height: 0.06          # side grasp: grip tall objects no higher than this above their bottom
 
-tall_ratio: 2.0                 # 'auto' picks a side grasp when height > tall_ratio x footprint width
-width_margin: 0.015             # skip grasps wider than the full gripper opening minus this
-min_width: 0.01                 # skip grasps narrower than this; the closed gripper can't hold them
+      tall_ratio: 2.0                 # 'auto' grasps from the side when the object is this many times taller than wide
+      width_margin: 0.015             # skip grasps where the object is nearly as wide as the open gripper
+      min_width: 0.01                 # skip grasps where the object is too thin to hold
 
-place_clearance: 0.02           # release with the object's bottom this far above the surface
+      place_clearance: 0.02           # let go with the object this far above the surface
