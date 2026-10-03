@@ -24,7 +24,9 @@ Test in simulation first, always.
 
 | File | What it validates |
 |---|---|
-| `recipe_pickup.json`, `recipe_dropoff.json` | Pickup of `water_bottle`, then place it on `delivery_tray` |
+| `recipe_pickup.json` | `auto` grasps (top for `blue_cube`, side for `water_bottle`), and putting a held object back before the next pickup |
+| `recipe_grasp_styles.json` | Forced `top`/`side` grasps, each object put back after |
+| `recipe_dropoff.json` | Pick up `water_bottle` and stand it on the centre of `delivery_tray` |
 | `recipe_pour.json`, `recipe_push.json`, `recipe_thrust.json`, `recipe_throw.json` | One composite action each (see the `*-motion-reference.md` docs) |
 
 Run them like any other recipe (see [Running the System](running.md)):

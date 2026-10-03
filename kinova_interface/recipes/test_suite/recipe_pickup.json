@@ -1,8 +1,11 @@
 {
-  "recipe_name": "Pickup - Water Bottle",
-  "description": "Simple pickup test: home, then pick up the water bottle",
+  "recipe_name": "Pickup - Auto Grasp and Put Back",
+  "description": "Pick up the cube (top grasp), then the bottle (side grasp), which puts the cube back first, then put the bottle back",
   "steps": [
     { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
-    { "step_id": 2, "action": "pickup", "parameters": { "target": "water_bottle" }, "description": "Pick up the water bottle" }
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "blue_cube" }, "description": "Pick up the blue cube, auto should choose a top grasp" },
+    { "step_id": 3, "action": "pickup", "parameters": { "target": "water_bottle" }, "description": "Put the cube back, then pick up the bottle, auto should choose a side grasp" },
+    { "step_id": 4, "action": "dropoff", "description": "Put the bottle back where it was picked up" },
+    { "step_id": 5, "action": "home", "description": "Return home" }
   ]
 }
