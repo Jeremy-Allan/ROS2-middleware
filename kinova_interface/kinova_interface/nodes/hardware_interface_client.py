@@ -7,7 +7,7 @@ import threading
 from collections import namedtuple
 
 from moveit_msgs.action import MoveGroup
-from moveit_msgs.msg import Constraints, PositionConstraint, OrientationConstraint, JointConstraint, MoveItErrorCodes
+from moveit_msgs.msg import Constraints, PositionConstraint, OrientationConstraint, JointConstraint
 from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose
 from control_msgs.action import GripperCommand
@@ -23,7 +23,7 @@ from scipy.spatial.transform import Rotation
 from kinova_interfaces.msg import ExtendedStatus
 from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
 
-from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES
+from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES, BEFORE_MOTION_ERRORS, moveit_error
 
 
 class HardwareInterfaceClient(Node):
@@ -54,14 +54,6 @@ class HardwareInterfaceClient(Node):
     PILZ_PTP = Planner('pilz_industrial_motion_planner', 'PTP', 4, 'Pilz PTP')
     # 4 attempts = one parallel batch, so about ALLOWED_PLANNING_TIME_SEC total
     RRT_STAR = Planner('ompl', 'RRTstarkConfigDefault', 4, 'OMPL RRT*')
-    # Failed before anything moved, so it's safe to re-plan
-    REPLANNABLE_ERROR_CODES = {
-        MoveItErrorCodes.FAILURE,
-        MoveItErrorCodes.PLANNING_FAILED,
-        MoveItErrorCodes.INVALID_MOTION_PLAN,
-        MoveItErrorCodes.NO_IK_SOLUTION,
-        MoveItErrorCodes.INVALID_GOAL_CONSTRAINTS,
-    }
 
     def __init__(self):
         super().__init__('kinova_hardware_client')
@@ -256,6 +248,7 @@ class HardwareInterfaceClient(Node):
                     f"{planners[i - 1].label} could not plan ({response.message}), re-planning with {planner.label}"
                 )
             if not send_goal(planner):
+                self.arm_action_error_code = None  # nothing reached MoveIt, so no code
                 response.success = False
                 response.message = start_failure_message
                 return False
@@ -280,7 +273,7 @@ class HardwareInterfaceClient(Node):
             if response.success:
                 response.message += f" (planned with {planner.label})"
                 return False
-            if self.arm_action_error_code not in self.REPLANNABLE_ERROR_CODES:
+            if self.arm_action_error_code not in BEFORE_MOTION_ERRORS:
                 return False
         return False
 
@@ -343,6 +336,7 @@ class HardwareInterfaceClient(Node):
             response,
             wait=request.wait_for_completion,
         )
+        response.error_code.val = self.arm_action_error_code or 0
         if still_running:
             return response
         return self.finalize_service_status(response)
@@ -630,25 +624,7 @@ class HardwareInterfaceClient(Node):
                 self.arm_action_message = 'Movement complete'
             else:
                 self.arm_action_successful = False
-
-                match error_code:
-                    case result.error_code.NO_IK_SOLUTION:
-                        msg = "Coordinates out of reach (no inverse kinematics solution)"
-                    case result.error_code.PLANNING_FAILED:
-                        msg = "Planning failed (path blocked by obstacle or self-collision)"
-                    case result.error_code.TIMED_OUT:
-                        msg = "MoveIt planning/movement timed out"
-                    case result.error_code.GOAL_IN_COLLISION:
-                        msg = "Goal is in collision (target position inside an obstacle)"
-                    case result.error_code.START_STATE_IN_COLLISION:
-                        msg = "Start state is in collision (robot currently in collision)"
-                    case result.error_code.CONTROL_FAILED:
-                        msg = "Control failed during execution (hardware error)"
-                    case result.error_code.ABORT:
-                        msg = "Movement was aborted by MoveIt"
-                    case _:
-                        msg = f"MoveIt failed with error code: {error_code}"
-
+                msg = moveit_error(error_code)
                 self.get_logger().error(f"ERROR: {msg}")
                 self.arm_action_message = msg
                 self.handle_moveit_failure()

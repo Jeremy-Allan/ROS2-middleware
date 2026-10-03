@@ -410,6 +410,21 @@ def test_handle_joint_move_failure_to_start(node):
     assert result.message == "Failed to initiate joint move"
 
 
+def test_handle_joint_move_reports_the_moveit_error_code(node):
+    node.send_joint_goal = _goal_results(node, [
+        (False, "planning failed", MoveItErrorCodes.PLANNING_FAILED),
+        (False, "control failed", MoveItErrorCodes.CONTROL_FAILED),
+    ])
+    request = JointMove.Request()
+    request.joint_positions = [0.0] * 6
+    request.wait_for_completion = True
+
+    result = node.handle_joint_move(request, JointMove.Response())
+
+    assert result.success is False
+    assert result.error_code.val == MoveItErrorCodes.CONTROL_FAILED
+
+
 def test_on_joint_state_caches_latest_positions(node):
     """_on_joint_state should cache the latest name->position mapping,
     for relative joint moves to read current values from."""
@@ -1110,7 +1125,7 @@ def test_result_callback_failure(node):
 
     result = MagicMock()
 
-    result.error_code.val = result.error_code.PLANNING_FAILED
+    result.error_code.val = MoveItErrorCodes.PLANNING_FAILED
 
     future = MagicMock()
     future.result.return_value.result = result
@@ -1120,6 +1135,7 @@ def test_result_callback_failure(node):
     node.result_callback(future)
 
     assert node.arm_action_successful is False
+    assert node.arm_action_message.startswith('planning failed')
     assert node.arm_movement_finished.is_set()
     assert node.current_state == ExtendedStatus.STATE_IDLE
     assert node.status_text == "Movement failed"

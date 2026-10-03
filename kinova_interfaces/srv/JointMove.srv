@@ -5,3 +5,4 @@ kinova_interfaces/MotionParams motion_params
 ---
 bool success
 string message
+moveit_msgs/MoveItErrorCodes error_code  # why MoveIt failed, val 0 if it never answered

@@ -74,7 +74,7 @@ The proxy's own components (`llm_proxy.py`, the LLM adapters, `ros2_bridge_ws`, 
 | `GetRelativeMovement` | `move_id` (string) | `x`, `y`, `z`, `success`, `message` |
 | `GetOrientationPreset` | `preset_name` (string) | `roll`, `pitch`, `yaw`, `success`, `message` |
 | `GetRobotParameters` | (none) | `object_list[]`, `movement_names[]`, `orientation_names[]` |
-| `JointMove` | `joint_positions[]` (float64), `wait_for_completion` (bool), `relative` (bool), `motion_params` (`MotionParams`) | `success`, `message` |
+| `JointMove` | `joint_positions[]` (float64), `wait_for_completion` (bool), `relative` (bool), `motion_params` (`MotionParams`) | `success`, `message`, `error_code` (`moveit_msgs/MoveItErrorCodes`, 0 if MoveIt never answered) |
 | `ExecuteRecipe` | `recipe_json` (string) | `success`, `message` (the failing step, action and reason on failure) |
 
 `MoveArm`'s `has_orientation` defaults to `false`: no orientation constraint, MoveIt picks the orientation, and the move is planned with OMPL RRT* since Pilz needs a full pose. `RelativeMove` always keeps the current orientation (plus any deltas), so it has no such flag.
