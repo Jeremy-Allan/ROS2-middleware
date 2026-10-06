@@ -34,6 +34,11 @@ SIDE_MAX_Z = math.sin(math.radians(SIDE_MAX_RISE_DEG))
 # Signs for "either end of an axis": which face, or wrist turned 0/180 deg
 BOTH_WAYS = (1, -1)
 
+# base_link axis indices, for half_extent
+X, Y, Z = 0, 1, 2
+# tool_frame +Z, the way the gripper points
+TOOL_APPROACH = np.array([0.0, 0.0, 1.0])
+
 # (approach, closing, width) in the object's own frame
 ObjectGrasp = tuple[np.ndarray, np.ndarray, float]
 
@@ -69,8 +74,8 @@ def object_rotation(pose: dict) -> Rotation:
     return Rotation.from_quat([q['x'], q['y'], q['z'], q['w']])
 
 
-def half_extent(shape: dict, rotation: Rotation, axis: int = 2) -> float:
-    """Half the object's size along base axis 0/1/2 (x/y/z), for any orientation."""
+def half_extent(shape: dict, rotation: Rotation, axis: int = Z) -> float:
+    """Half the object's size along base axis X, Y or Z, for any orientation."""
     R = rotation.as_matrix()
     d = shape['dimensions']
     if shape['type'] == SolidPrimitive.BOX:
@@ -129,7 +134,7 @@ def grasp_candidates(target_info: dict, grasp_config: dict,
     shape = target_info['shape']
     centre = object_centre(target_info['pose'])
     rot = object_rotation(target_info['pose'])
-    h = half_extent(shape, rot, 2)
+    h = half_extent(shape, rot, Z)
     top_z, floor_z = centre[2] + h, centre[2] - h
 
     max_width = GRIPPER_MAX_OPENING - grasp_config['width_margin']
@@ -179,8 +184,8 @@ def preferred_style(target_info: dict, grasp_config: dict) -> str:
     """'side' for tall, thin objects, otherwise 'top'."""
     shape = target_info['shape']
     rot = object_rotation(target_info['pose'])
-    height = 2 * half_extent(shape, rot, 2)
-    width = 2 * min(half_extent(shape, rot, 0), half_extent(shape, rot, 1))
+    height = 2 * half_extent(shape, rot, Z)
+    width = 2 * min(half_extent(shape, rot, X), half_extent(shape, rot, Y))
     return 'side' if height > grasp_config['tall_ratio'] * width else 'top'
 
 
@@ -260,10 +265,11 @@ def place_candidates(held_grasp: dict, shape: dict, point: np.ndarray, grasp_con
     for yaw in yaw_offsets(grasp_config['yaw_step_deg']):
         tool = Rotation.from_euler('z', yaw, degrees=True) * held_grasp['tool_rotation']
         obj = tool * held_grasp['object_rotation']
-        centre = point + [0.0, 0.0, grasp_config['place_clearance'] + half_extent(shape, obj, 2)]
+        resting = point + [0.0, 0.0, half_extent(shape, obj, Z)]
+        centre = resting + [0.0, 0.0, grasp_config['place_clearance']]
         release = centre - tool.apply(held_grasp['object_position'])
         # Retreat reverses the approach, then goes up
-        back = release - grasp_config['standoff'] * tool.apply([0.0, 0.0, 1.0])
+        back = release - grasp_config['standoff'] * tool.apply(TOOL_APPROACH)
         yield PlaceCandidate(
             yaw_deg=yaw,
             rotation=tool,
@@ -271,6 +277,6 @@ def place_candidates(held_grasp: dict, shape: dict, point: np.ndarray, grasp_con
             release=release,
             back=back,
             up=back + [0.0, 0.0, grasp_config['lift_height']],
-            object_centre=centre,
+            object_centre=resting,
             object_rotation=obj,
         )

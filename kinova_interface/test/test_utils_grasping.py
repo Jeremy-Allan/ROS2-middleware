@@ -9,7 +9,7 @@ from shape_msgs.msg import SolidPrimitive
 
 from kinova_interface.utils import grasping
 from kinova_interface.utils.grasping import (
-    contains_xy, grasp_candidates, half_extent, place_candidates, preferred_style, rank, yaw_offsets,
+    Y, Z, contains_xy, grasp_candidates, half_extent, place_candidates, preferred_style, rank, yaw_offsets,
 )
 
 GRASP_CONFIG = yaml.safe_load((Path(__file__).parent.parent / 'data' / 'configs' / 'grasping.yaml').read_text())['/**']['ros__parameters']['grasping']
@@ -44,16 +44,16 @@ def test_config_has_every_key():
 
 # half_extent()
 def test_half_extent_upright_and_lying_cylinder():
-    assert half_extent(BOTTLE, Rotation.identity(), 2) == pytest.approx(0.1)
-    assert half_extent(BOTTLE, LYING, 2) == pytest.approx(0.03)
-    assert half_extent(BOTTLE, LYING, 1) == pytest.approx(0.1)
+    assert half_extent(BOTTLE, Rotation.identity(), Z) == pytest.approx(0.1)
+    assert half_extent(BOTTLE, LYING, Z) == pytest.approx(0.03)
+    assert half_extent(BOTTLE, LYING, Y) == pytest.approx(0.1)
 
 
 def test_half_extent_box_on_its_side_and_tilted():
     box = {'type': SolidPrimitive.BOX, 'dimensions': [0.1, 0.06, 0.02]}
-    assert half_extent(box, Rotation.from_euler('y', 90, degrees=True), 2) == pytest.approx(0.05)
+    assert half_extent(box, Rotation.from_euler('y', 90, degrees=True), Z) == pytest.approx(0.05)
     tilted = Rotation.from_euler('x', 45, degrees=True)
-    assert half_extent(box, tilted, 2) == pytest.approx((0.06 + 0.02) / 2 * math.sqrt(0.5))
+    assert half_extent(box, tilted, Z) == pytest.approx((0.06 + 0.02) / 2 * math.sqrt(0.5))
 
 
 def test_unsupported_shape_raises():
@@ -214,7 +214,7 @@ def test_place_at_the_pickup_spot_repeats_the_grasp():
     lifted = [0.0, 0.0, GRASP_CONFIG['place_clearance']]
     assert first.release == pytest.approx(grasp.grasp + lifted)
     assert (first.rotation * grasp.rotation.inv()).magnitude() == pytest.approx(0.0, abs=1e-9)
-    assert first.object_centre == pytest.approx([0.4, 0.0, 0.1 + GRASP_CONFIG['place_clearance']])
+    assert first.object_centre == pytest.approx([0.4, 0.0, 0.1])  # resting on the point, not at the release height
     assert first.hover == pytest.approx(first.release + [0.0, 0.0, 0.1])
 
 
@@ -230,6 +230,7 @@ def test_place_candidates_keep_the_tilt_and_retreat_back_then_up():
         approach = c.rotation.apply([0, 0, 1])
         assert approach[2] == pytest.approx(0.0, abs=1e-9)  # still a side grasp
         assert c.object_centre[:2] == pytest.approx(point[:2])
-        assert c.release == pytest.approx(c.object_centre - c.rotation.apply(held['object_position']))
+        lifted = c.object_centre + [0, 0, GRASP_CONFIG['place_clearance']]
+        assert c.release == pytest.approx(lifted - c.rotation.apply(held['object_position']))
         assert c.back == pytest.approx(c.release - GRASP_CONFIG['standoff'] * approach)
         assert c.up == pytest.approx(c.back + [0, 0, GRASP_CONFIG['lift_height']])

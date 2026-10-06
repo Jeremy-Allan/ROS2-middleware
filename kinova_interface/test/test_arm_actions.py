@@ -722,7 +722,7 @@ def test_pickup_releases_previously_held_object_first(actions):
 
     assert success is True
     actions.detach_object.assert_called_once_with("red_cube")
-    assert actions.update_object_pose.call_args[0][3] == pytest.approx(0.025 + actions.grasp_config['place_clearance'])
+    assert actions.update_object_pose.call_args[0][3] == pytest.approx(0.025)  # back on the table, not at the release height
     actions.attach_object.assert_called_once_with("blue_cube")
     assert actions.held_object == "blue_cube"
 
@@ -875,9 +875,9 @@ def test_dropoff_places_on_destination_top_centre(actions):
     success, message = actions.handlers['dropoff']({"destination": "tray"})
 
     assert (success, message) == (True, "Placed 'cube' on 'tray'")
-    # tray top 0.02 + clearance + half the cube
+    # tray top 0.02 + half the cube, resting on it
     x, y, z, orientation = actions.update_object_pose.call_args[0][1:]
-    assert (x, y, z) == pytest.approx((0.5, 0.1, 0.02 + actions.grasp_config['place_clearance'] + 0.025))
+    assert (x, y, z) == pytest.approx((0.5, 0.1, 0.02 + 0.025))
     q = orientation
     assert Rotation.from_quat([q["x"], q["y"], q["z"], q["w"]]).magnitude() == pytest.approx(0.0, abs=1e-9)
     assert actions.call_joint_move_service.call_count == 4  # hover, release, back, up
