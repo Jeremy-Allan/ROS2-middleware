@@ -619,7 +619,8 @@ class ArmActions:
             self.get_logger().info(f"Attached object '{obj_id}' (removed from scene)")
             return True
         else:
-            self.get_logger().error(f"Failed to attach '{obj_id}'")
+            detail = f": {response.message}" if response and getattr(response, 'message', None) else ""
+            self.get_logger().error(f"Failed to attach '{obj_id}'{detail}")
             return False
 
     def detach_object(self, obj_id):
@@ -631,7 +632,8 @@ class ArmActions:
             self.get_logger().info(f"Detached object '{obj_id}' (added back to scene)")
             return True
         else:
-            self.get_logger().error(f"Failed to detach '{obj_id}'")
+            detail = f": {response.message}" if response and getattr(response, 'message', None) else ""
+            self.get_logger().error(f"Failed to detach '{obj_id}'{detail}")
             return False
 
     def update_object_pose(self, obj_id, x, y, z, orientation=None):
