@@ -31,12 +31,17 @@ def _summary(rejected: Counter) -> str:
 def _back_off(ctx: 'ArmActions', pre_grasp: list[float], message: str) -> tuple[bool, str]:
     """Let go and return to the pre-grasp, then go home and fail.
     If the arm can't get clear of the object, it stays put rather than dragging it."""
+    ctx.get_logger().warn("Executing pickup recovery: opening gripper to back off...")
     gripper_response = ctx.call_move_gripper_service(GRIPPER_OPEN)
     if not gripper_response['success']:
+        ctx.get_logger().error(f"Failed to open gripper to back off: {gripper_response['message']}")
         return False, f"{message}; failed to open the gripper to back off: {gripper_response['message']}"
+    ctx.get_logger().warn("Executing pickup recovery: backing off to pre-grasp pose...")
     move_service_result = ctx.call_joint_move_service(pre_grasp)
     if not move_service_result['success']:
+        ctx.get_logger().error(f"Failed to back off to pre-grasp: {move_service_result['message']}")
         return False, f"{message}; failed to back off to the pre-grasp: {move_service_result['message']}"
+    ctx.get_logger().info("Successfully backed off to pre-grasp pose, now returning home...")
     return ctx.fail_at_home(message)
 
 
@@ -44,12 +49,15 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     """'grasp_style' can be 'auto' (default, top or side from the object's shape), 'top' or 'side'."""
     target_name = params['target']
     style = params.get('grasp_style', 'auto')
+    ctx.get_logger().debug(f"Pickup initiated: target='{target_name}', grasp_style='{style}', params={params}")
+
     if style not in GRASP_STYLES:
         return False, f"Unknown grasp_style '{style}', expected one of {', '.join(GRASP_STYLES)}"
 
     target_info = ctx.get_object_info(target_name)
     if not target_info:
         return False, f"Could not resolve pickup target '{target_name}'"
+    ctx.get_logger().debug(f"Target '{target_name}' info: pose={target_info.get('pose')}, shape={target_info.get('shape')}")
 
     grasp_config = ctx.grasp_config
     try:
@@ -70,23 +78,48 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
             return False, f"Failed to release '{held}' before picking up '{target_name}': {message}"
 
     # Open first so the IK checks see the fingers open
+    ctx.get_logger().info("Opening gripper for pickup approach...")
     gripper_response = ctx.call_move_gripper_service(GRIPPER_OPEN)
+    ctx.get_logger().debug(f"Gripper open result: {gripper_response}")
     if not gripper_response['success']:
+        ctx.get_logger().error(f"Failed to open gripper for pickup: {gripper_response['message']}")
         return ctx.fail_at_home(f"Failed to open gripper for pickup: {gripper_response['message']}")
 
     # Move in through the pre-grasp of the first candidate that checks out
-    for grasp_candidate in ranked_grasps:
+    ctx.get_logger().info(f"Checking {len(ranked_grasps)} grasp candidate(s) for '{target_name}'...")
+    for idx, grasp_candidate in enumerate(ranked_grasps):
+        ctx.get_logger().debug(
+            f"Checking grasp candidate [{idx+1}/{len(ranked_grasps)}] ({grasp_candidate.style}): "
+            f"grasp={np.round(grasp_candidate.grasp, 3).tolist()}, "
+            f"pre_grasp={np.round(grasp_candidate.pre_grasp, 3).tolist()}, "
+            f"lift={np.round(grasp_candidate.lift, 3).tolist()}")
         joints, reason = ctx.solve_ik_chain(grasp_candidate)
         if joints is None:
-            ctx.get_logger().debug(f"{grasp_candidate.style} grasp at {np.round(grasp_candidate.grasp, 3).tolist()} rejected: {reason}")
+            ctx.get_logger().debug(
+                f"Candidate [{idx+1}/{len(ranked_grasps)}] ({grasp_candidate.style} at "
+                f"{np.round(grasp_candidate.grasp, 3).tolist()}) rejected: {reason}")
             rejected_grasps[(grasp_candidate.style, reason)] += 1
             continue
+
+        ctx.get_logger().debug(
+            f"Candidate [{idx+1}/{len(ranked_grasps)}] ({grasp_candidate.style}) passed IK pre-check for all waypoints")
+        ctx.get_logger().info(
+            f"Selected {grasp_candidate.style} grasp at {np.round(grasp_candidate.grasp, 3).tolist()}. Starting pickup motion...")
+
         failed_at = None
         for waypoint in ('pre-grasp', 'grasp'):
+            target_pos = grasp_candidate.pre_grasp if waypoint == 'pre-grasp' else grasp_candidate.grasp
+            ctx.get_logger().info(f"Moving to {waypoint} pose at {np.round(target_pos, 3).tolist()} ({grasp_candidate.style} grasp)...")
+            ctx.get_logger().debug(f"Calling joint_move for {waypoint} with joints={np.round(joints[waypoint], 3).tolist()}")
             move_service_result = ctx.call_joint_move_service(joints[waypoint])
             if not move_service_result['success']:
                 failed_at = waypoint
+                ctx.get_logger().warn(
+                    f"Failed to move to {waypoint} pose: {move_service_result['message']} "
+                    f"(error_code={move_service_result.get('error_code')})")
                 break
+            ctx.get_logger().debug(f"Successfully reached {waypoint} pose")
+
         if failed_at is None:
             break
         # The arm didn't move, so it's still clear of the object and can try the next grasp from here
@@ -96,20 +129,27 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
             rejected_grasps[(grasp_candidate.style, f'planning failed to {failed_at}')] += 1
             continue
         message = f"Failed partway to the {failed_at} for '{target_name}': {move_service_result['message']}"
+        ctx.get_logger().error(f"Execution failed partway while moving to {failed_at}: {move_service_result['message']}")
         if failed_at == 'pre-grasp':
             return ctx.fail_at_home(message)
         return _back_off(ctx, joints['pre-grasp'], message)
     else:
+        ctx.get_logger().error(f"Pickup candidate pre-check failed: no reachable grasp found for '{target_name}'. Reasons: {_summary(rejected_grasps)}")
         return ctx.fail_at_home(f"No reachable grasp for '{target_name}': {_summary(rejected_grasps)}")
 
     pre_grasp = joints['pre-grasp']
     ctx.get_logger().info(f"Picking '{target_name}' with a {grasp_candidate.style} grasp at {np.round(grasp_candidate.grasp, 3).tolist()}")
 
+    ctx.get_logger().info(f"Closing gripper on '{target_name}'...")
     gripper_move_service_result = ctx.call_move_gripper_service(GRIPPER_CLOSED)
+    ctx.get_logger().debug(f"Gripper close result: {gripper_move_service_result}")
     if not gripper_move_service_result['success']:
+        ctx.get_logger().error(f"Failed to close gripper on '{target_name}': {gripper_move_service_result['message']}")
         return _back_off(ctx, pre_grasp, f"Failed to close gripper on '{target_name}': {gripper_move_service_result['message']}")
 
+    ctx.get_logger().info(f"Attaching '{target_name}' to robot in planning scene...")
     if not ctx.attach_object(target_name):
+        ctx.get_logger().error(f"Failed to attach '{target_name}' after closing")
         return _back_off(ctx, pre_grasp, f"Failed to attach '{target_name}' after closing")
 
     # Held from here on, even if the lift fails, so a dropoff can still put it down
@@ -126,7 +166,11 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         'object_rotation': grasp_candidate.rotation.inv() * object_rotation(target_info['pose']),
     }
 
+    ctx.get_logger().info(f"Lifting '{target_name}' to {np.round(grasp_candidate.lift, 3).tolist()}...")
+    ctx.get_logger().debug(f"Calling joint_move for lift with joints={np.round(joints['lift'], 3).tolist()}")
     move_service_result = ctx.call_joint_move_service(joints['lift'])
     if not move_service_result['success']:
+        ctx.get_logger().error(f"Failed to lift '{target_name}': {move_service_result['message']}")
         return ctx.fail_at_home(f"Grasped '{target_name}' but failed to lift it: {move_service_result['message']}")
+    ctx.get_logger().info(f"Successfully picked up '{target_name}' with a {grasp_candidate.style} grasp")
     return True, f"Picked up '{target_name}' with a {grasp_candidate.style} grasp"
