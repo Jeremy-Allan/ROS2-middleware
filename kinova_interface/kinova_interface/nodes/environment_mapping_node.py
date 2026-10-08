@@ -15,7 +15,7 @@ import rclpy
 from pathlib import Path
 from rclpy.node import Node
 from ament_index_python.packages import get_package_share_directory
-from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose
+from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose,GetSceneObjects, UpdateSceneObjects
 from std_srvs.srv import Trigger
 from moveit_msgs.msg import PlanningScene, CollisionObject, AttachedCollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
@@ -75,9 +75,11 @@ class EnvironmentMappingNode(Node):
         self.command_success = True
         
         self.static_objects = self.load_object_dictionary()
+        self.config_object_ids = set(self.static_objects.keys())
         self.relative_movements = self.load_relative_movements()
         self.orientation_presets = self.load_orientation_presets()
         self.obstacles = self.load_obstacles_dictionary()
+         
 
         self.srv_coords = self.create_service(GetObjectCoordinates, '/get_coordinates', self.get_coordinates_callback)
         self.srv_move = self.create_service(GetRelativeMovement, '/get_relative_movement', self.get_relative_movement_callback)
@@ -90,9 +92,14 @@ class EnvironmentMappingNode(Node):
         self.attach_srv = self.create_service(AttachObject, '/attach_object', self.attach_object_callback, callback_group=self.scene_cb_group)
         self.detach_srv = self.create_service(DetachObject, '/detach_object', self.detach_object_callback, callback_group=self.scene_cb_group)
         self.reset_srv = self.create_service(Trigger, '/reset_environment_scene', self.reset_environment_callback, callback_group=self.scene_cb_group)
+        self.srv_get_scene = self.create_service(GetSceneObjects, '/get_scene_objects',
+        self.get_scene_objects_callback, callback_group=self.scene_cb_group)
+        self.srv_update_scene = self.create_service(UpdateSceneObjects, '/update_scene_objects',
+        self.update_scene_objects_callback, callback_group=self.scene_cb_group)
 
         self.attached_objects = set() 
-
+        
+        self._dict_lock = threading.Lock()
 
         self.scene_thread = threading.Thread(target=self.publish_planning_scene, daemon=True)
         self.scene_thread.start()
@@ -615,6 +622,85 @@ class EnvironmentMappingNode(Node):
             self.get_logger().error(response.message)
 
         self.command_success = response.success
+        self.status_text = response.message
+        self.publish_status()
+        return response
+
+    def get_scene_objects_callback(self, request, response):
+        try:
+            with self._dict_lock:
+                objects = {k: {kk: vv for kk, vv in v.items() if not kk.startswith('_')}
+                        for k, v in self.static_objects.items()}
+                attached = sorted(self.attached_objects)
+            response.objects_json = json.dumps({'objects': objects, 'attached': attached})
+            response.success = True
+        except Exception as e:
+            self.get_logger().error(f'get_scene_objects failed: {e}')
+            response.success = False
+            response.objects_json = '{}'
+        return response
+
+    def update_scene_objects_callback(self, request, response):
+        # add to moveit + in memoery obj dictionary (static_objects)
+        #remove_missing: only removes vision objects 
+        try:
+            incoming = json.loads(request.objects_json).get('objects', {})
+        except (json.JSONDecodeError, AttributeError) as e:
+            response.success = False
+            response.message = f"Malformed objects_json: {e}"
+            self.get_logger().error(response.message)
+            return response
+
+        scene = PlanningScene()
+        scene.is_diff = True
+        added, updated, removed, skipped = [], [], [], []
+
+        with self._dict_lock:
+            # Add or update
+            for obj_id, obj_data in incoming.items():
+                if obj_id in self.attached_objects:
+                    skipped.append(obj_id)
+                    continue
+                obj_data = self.parse_object_data(obj_id, obj_data)
+                if obj_id in self.static_objects:
+                    self.static_objects[obj_id].update(obj_data)
+                    updated.append(obj_id)
+                else:
+                    self.static_objects[obj_id] = obj_data
+                    added.append(obj_id)
+                co = self.build_collision_object(obj_id, self.static_objects[obj_id])
+                if co is not None:
+                    scene.world.collision_objects.append(co)
+
+            # Drop  only vision objects  (also from MoveIt)
+            if request.remove_missing:
+                for obj_id in list(self.static_objects):
+                    if (obj_id in incoming or obj_id in self.attached_objects
+                            or obj_id in self.config_object_ids):
+                        continue
+                    del self.static_objects[obj_id]
+                    rm = CollisionObject()
+                    rm.header.frame_id = BASE_FRAME
+                    rm.id = obj_id
+                    rm.operation = CollisionObject.REMOVE
+                    scene.world.collision_objects.append(rm)
+                    removed.append(obj_id)
+        ok = True
+        if scene.world.collision_objects:
+            ok = self.send_apply_planning_scene(scene, 'vision', 'vision update')
+
+        response.success = ok
+        response.added, response.updated = added, updated
+        response.removed, response.skipped = removed, skipped
+        response.message = (f"Scene updated: {len(added)} added, {len(updated)} updated, "
+                            f"{len(removed)} removed, {len(self.static_objects)} total"
+                            if ok else "Failed to apply planning scene")
+        if removed:
+            self.get_logger().info(f"  removed vision objects: {removed}")
+        if not ok:
+            self.get_logger().error(response.message)
+
+        self.command_success = ok
         self.status_text = response.message
         self.publish_status()
         return response
