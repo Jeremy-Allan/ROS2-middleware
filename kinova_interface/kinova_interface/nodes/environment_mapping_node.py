@@ -627,6 +627,24 @@ class EnvironmentMappingNode(Node):
         return response
 
     def get_scene_objects_callback(self, request, response):
+        """Return the current scene objects and which of them are attached.
+
+        Serialises every entry in the in-memory object dictionary, including
+        objects added at runtime by :meth:`update_scene_objects_callback`,
+        dropping any internal keys that start with an underscore. The
+        snapshot is taken under the dictionary lock.
+
+        Args:
+            request (GetSceneObjects.Request): Service request (no fields).
+            response (GetSceneObjects.Response): Service response to populate
+                with ``objects_json``, a JSON string of the form
+                ``{"objects": {<id>: <config>}, "attached": [<id>, ...]}``.
+                On failure ``success`` is False and ``objects_json`` is
+                ``"{}"``.
+
+        Returns:
+            GetSceneObjects.Response: The populated service response.
+        """
         try:
             with self._dict_lock:
                 objects = {k: {kk: vv for kk, vv in v.items() if not kk.startswith('_')}
@@ -641,6 +659,38 @@ class EnvironmentMappingNode(Node):
         return response
 
     def update_scene_objects_callback(self, request, response):
+        """Add, update, or remove scene objects in bulk, in memory and in MoveIt.
+
+        Used to feed objects detected at runtime (for example by computer
+        vision) into the object dictionary and the planning scene. Each
+        incoming object is normalised with :meth:`parse_object_data`. An
+        existing id is updated in place and a new id is added. An object that
+        is currently attached to the gripper is skipped and left untouched.
+
+        When ``remove_missing`` is set, objects absent from the incoming set
+        are deleted from the dictionary and from MoveIt, except objects that
+        are attached and objects loaded from ``object_dictionary.json`` at
+        startup, so only runtime-added objects can be removed this way. All
+        changes are applied to MoveIt as one planning-scene diff, and the
+        dictionary is modified under the dictionary lock.
+
+        Args:
+            request (UpdateSceneObjects.Request): Service request with
+                ``objects_json``, a JSON string of the form
+                ``{"objects": {<id>: <config>}}``, and ``remove_missing``.
+            response (UpdateSceneObjects.Response): Service response to
+                populate with ``success``, a summary ``message``, and the
+                ``added``, ``updated``, ``removed`` and ``skipped`` id lists.
+                ``success`` is False if ``objects_json`` is malformed or the
+                planning-scene update fails.
+
+        Returns:
+            UpdateSceneObjects.Response: The populated service response.
+
+        Raises:
+            SystemExit: If an incoming object's orientation is missing or
+                invalid (raised by :meth:`parse_object_data`).
+        """
         # add to moveit + in memoery obj dictionary (static_objects)
         #remove_missing: only removes vision objects 
         try:
