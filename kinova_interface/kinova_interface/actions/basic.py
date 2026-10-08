@@ -8,12 +8,32 @@ if TYPE_CHECKING:
 
 
 def home(ctx: 'ArmActions', params: dict) -> bool:
+    """Move the arm to its predefined home joint configuration.
+
+    Args:
+        ctx (ArmActions): Shared action context.
+        params (dict): Recipe step parameters. Optional ``speed`` (0.0-1.0).
+
+    Returns:
+        bool: True if the move succeeded, otherwise False.
+    """
     motion_params = ctx.build_motion_params(params.get('speed'))
     result = ctx.call_home_service(motion_params)
     return result is not None and result['success']
 
 
 def move_arm(ctx: 'ArmActions', params: dict) -> bool:
+    """Move the arm to a named object's position, with an optional orientation.
+
+    Args:
+        ctx (ArmActions): Shared action context.
+        params (dict): Recipe step parameters. Required ``target`` (object
+            id). Optional ``orientation`` (preset name) and ``speed``
+            (0.0-1.0).
+
+    Returns:
+        bool: True if the move succeeded, otherwise False.
+    """
     target_name = params['target']
     coords = ctx.get_static_object_coords(target_name)
     if not coords:
@@ -30,6 +50,17 @@ def move_arm(ctx: 'ArmActions', params: dict) -> bool:
 
 
 def relative_move(ctx: 'ArmActions', params: dict) -> bool:
+    """Move the arm by a named relative offset, keeping its current orientation.
+
+    Args:
+        ctx (ArmActions): Shared action context.
+        params (dict): Recipe step parameters. Required ``vector`` (movement
+            id). Optional ``speed`` (0.0-1.0). An ``orientation`` key is
+            ignored (logged as a warning); use ``move_arm`` for that.
+
+    Returns:
+        bool: True if the move succeeded, otherwise False.
+    """
     vector_name = params['vector']
     vector = ctx.get_relative_movement_vector(vector_name)
     if not vector:
@@ -44,6 +75,15 @@ def relative_move(ctx: 'ArmActions', params: dict) -> bool:
 
 
 def gripper(ctx: 'ArmActions', params: dict) -> bool:
+    """Move the gripper to a target position.
+
+    Args:
+        ctx (ArmActions): Shared action context.
+        params (dict): Recipe step parameters. Required ``position``.
+
+    Returns:
+        bool: True if the move succeeded, otherwise False.
+    """
     gripper = float(params['position'])
     result = ctx.call_move_gripper_service(gripper)
     return result is not None and result['success']

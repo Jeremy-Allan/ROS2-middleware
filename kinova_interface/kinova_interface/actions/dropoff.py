@@ -10,6 +10,26 @@ if TYPE_CHECKING:
 
 
 def run(ctx: 'ArmActions', params: dict) -> bool:
+    """Release the held (or named) object, stacked on a destination or in place.
+
+    Two-stage descent: hovers above the computed release height first, then
+    lowers to a small clearance above it before opening the gripper, so the
+    object isn't dropped from the full hover height. When a destination is
+    given, the release height is computed to stack the target on top of it
+    rather than inside it; with no destination, it releases at the target's
+    own current position.
+
+    Args:
+        ctx (ArmActions): Shared action context.
+        params (dict): Recipe step parameters. Optional ``target`` (object
+            id, defaults to ``ctx.held_object``), ``destination`` (object
+            id to stack on), ``open_position`` (gripper open position,
+            default 0.0), ``place_offset`` (hover clearance in meters,
+            default 0.1).
+
+    Returns:
+        bool: True if the release succeeded, otherwise False.
+    """
     # Fall back to the object we actually know is held if the recipe
     # step didn't name one - the release-height math below needs the
     # held object's height to avoid releasing into the destination.

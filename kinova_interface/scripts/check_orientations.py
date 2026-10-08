@@ -52,6 +52,22 @@ def _orientations():
 
 
 def _check(actions, tf_buffer, x, y, z, target, args):
+    """Move to (x, y, z) with orientation `target` (or just check IK) and report the result.
+
+    Args:
+        actions (ArmActions): Shared action context.
+        tf_buffer (Buffer): TF buffer used to read the reached tool pose.
+        x (float): Target X position.
+        y (float): Target Y position.
+        z (float): Target Z position.
+        target (Rotation): Desired tool orientation.
+        args (argparse.Namespace): Parsed CLI args (``ik_only``, ``speed``,
+            ``tolerance_deg``).
+
+    Returns:
+        tuple[str, bool]: A one-line result label (e.g. ``'ok 0.8 P'``), and
+            whether the attempt counted as reached.
+    """
     roll, pitch, yaw = target.as_euler('xyz')
     if args.ik_only:
         if actions.find_ik_solution(x, y, z, roll, pitch, yaw) is None:
@@ -74,6 +90,12 @@ def _check(actions, tf_buffer, x, y, z, target, args):
 
 
 def main():
+    """Run the orientation/reachability sweep and exit non-zero if any cell failed.
+
+    Parses CLI args, spins up a standalone node and ArmActions context, then
+    checks every orientation preset against every grid position via
+    :func:`_check`, printing one result line per combination.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--ik-only', action='store_true', help='only check IK reachability, never move the arm')
     parser.add_argument('--speed', type=float, default=0.2, help='velocity/acceleration scale, 0.0-1.0')

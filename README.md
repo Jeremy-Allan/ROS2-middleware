@@ -51,6 +51,7 @@ That launches the full stack in simulation and waits for a recipe. See [docs/run
 **Start here:** the [Documentation Home](docs/README.md) maps everything.
 
 - [Overview](docs/overview.md): what this system is, the request path end to end
+- [Environment Setup](docs/environment-setup.md): preparing a non-native-Ubuntu host before installing
 - [Installation](docs/installation.md): ROS 2, the driver stack, the middleware, the proxy, an LLM provider
 - [Running the System](docs/running.md): the three-terminal startup, running the middleware alone
 - [Configuration](docs/configuration.md): coordinate dictionary, recipes, LLM provider and prompt setup
@@ -58,7 +59,9 @@ That launches the full stack in simulation and waits for a recipe. See [docs/run
 - [Troubleshooting](docs/troubleshooting.md): symptom-first fixes
 - [Architecture](docs/architecture.md): full pipeline diagram, per-node internals, interface types
 - [Safety and Contracts](docs/safety-and-contracts.md): execution contract, safety layers, failure modes
+- Motion references: [Pour](docs/pour-motion-reference.md), [Push](docs/push-motion-reference.md), [Throw](docs/throw-motion-reference.md)
 - [Video Demos](docs/demos.md): short recordings per feature
+- [API Reference](docs/api/nodes.md): function-level reference generated from the code's own docstrings
 
 ## Repository layout
 
@@ -68,14 +71,17 @@ kinova_interface/
   kinova_interface/    the four ROS 2 node source files
   launch/              robot.launch.py
   recipes/             task_recipe.json, test_suite/
-  resource/            PROJECT-OVERVIEW.md
+  resource/            ament resource marker (required by every ROS 2 package)
 kinova_interfaces/
   srv/, msg/           custom ROS 2 service and message definitions
 docs/
   README.md            documentation home, start here
-  overview.md, installation.md, running.md, configuration.md
-  testing.md, troubleshooting.md, architecture.md
+  overview.md, environment-setup.md, installation.md, running.md
+  configuration.md, testing.md, troubleshooting.md, architecture.md
   safety-and-contracts.md, demos.md
+  pour-motion-reference.md, push-motion-reference.md, throw-motion-reference.md
+  api/                 generated API reference pages (mkdocstrings)
+mkdocs.yml              web manual build config (MkDocs + Material)
 ```
 
 ## Contributing
