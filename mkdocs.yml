@@ -27,7 +27,6 @@ nav:
       - Utils: api/utils.md
   - Proxy:
       - Overview: proxy/overview.md
-      - Development: proxy/development.md
       - API Reference:
           - Backend: proxy/api/backend.md
           - LLM Proxy: proxy/api/llm-proxy.md
