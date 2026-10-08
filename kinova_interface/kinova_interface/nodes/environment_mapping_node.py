@@ -73,7 +73,7 @@ class EnvironmentMappingNode(Node):
         self.current_state = ExtendedStatus.STATE_IDLE
         self.status_text = "Environment Mapper Active"
         self.command_success = True
-
+        
         self.static_objects = self.load_object_dictionary()
         self.relative_movements = self.load_relative_movements()
         self.orientation_presets = self.load_orientation_presets()
@@ -91,7 +91,7 @@ class EnvironmentMappingNode(Node):
         self.detach_srv = self.create_service(DetachObject, '/detach_object', self.detach_object_callback, callback_group=self.scene_cb_group)
         self.reset_srv = self.create_service(Trigger, '/reset_environment_scene', self.reset_environment_callback, callback_group=self.scene_cb_group)
 
-        self.attached_objects = set()
+        self.attached_objects = set() 
 
 
         self.scene_thread = threading.Thread(target=self.publish_planning_scene, daemon=True)
@@ -136,14 +136,14 @@ class EnvironmentMappingNode(Node):
         except json.JSONDecodeError:
             self.get_logger().fatal('Failed to decode JSON from the object dictionary file')
             raise SystemExit(1)
-
+        
         # Process each object using the helper
         for obj_id, obj_data in objects.items():
             objects[obj_id] = self.parse_object_data(obj_id, obj_data)
-
+        
         self.get_logger().info(f'Processed {len(objects)} objects')
         return objects
-
+    
     def load_obstacles_dictionary(self):
         """Load and normalise the configured obstacle dictionary.
 
@@ -170,14 +170,14 @@ class EnvironmentMappingNode(Node):
         except json.JSONDecodeError:
             self.get_logger().fatal('Failed to decode JSON from obstacles file')
             raise SystemExit(1)
-
+        
         # Process each obstacle using the helper function
         for obs_id, obs_data in obstacles.items():
             obstacles[obs_id] = self.parse_object_data(obs_id, obs_data)
-
+        
         self.get_logger().info(f'Processed {len(obstacles)} obstacles')
         return obstacles
-
+    
     def normalize_shape(self, obj, obj_id="unknown"):
         """Validate and normalise an object's collision shape configuration.
 
@@ -195,28 +195,28 @@ class EnvironmentMappingNode(Node):
         """
         shape = obj.get("shape", {})
         stype = shape.get("type", "BOX").upper()
-
-        shape_info = {
+        
+        shape_info = { 
         "BOX": {"count": 3, "default": [0.05, 0.05, 0.05]},
         "SPHERE": {"count": 1, "default": [0.05]},
         "CYLINDER": {"count": 2, "default": [0.05, 0.02]},
         "CONE": {"count": 2, "default": [0.05, 0.02]}
         }
-
+        
         if stype not in shape_info: #default to BOX if unknown shape type
             self.get_logger().warn(f"Object '{obj_id}': unknown shape type '{stype}', defaulting to BOX")
             stype = "BOX"
 
         info = shape_info[stype]
         dims = shape.get("dimensions", [])
-
+        
         if len(dims) != info["count"]:
             self.get_logger().warn(
                 f"Object '{obj_id}': expected {info['count']} dimensions for '{stype}', recieved {len(dims)}. "
                 f"Using defaults: {info['default']}"
             )
             dims = info["default"].copy()
-
+        
         # Store shape
         obj['shape'] = {
             'type': stype,
@@ -265,7 +265,7 @@ class EnvironmentMappingNode(Node):
 
         # Parse SHAPE (type & dimensions)
         obj_data = self.normalize_shape(obj_data, obj_id)
-
+        
         return obj_data
 
 
@@ -352,7 +352,7 @@ class EnvironmentMappingNode(Node):
             self.status_text = f"Failed to resolve object: {obj_id}"
         self.publish_status()
         return response
-
+        
     def get_relative_movement_callback(self, request, response):
         """Resolve a relative-movement identifier to its configured offset.
 
@@ -719,7 +719,7 @@ class EnvironmentMappingNode(Node):
         else:
             self.get_logger().error(f"apply_planning_scene failed for '{obj_id}' ({label})")
             return False
-
+    
     def update_object_pose_callback(self, request, response):
         """Update the configured pose of a static environment object.
 
@@ -761,7 +761,7 @@ class EnvironmentMappingNode(Node):
 
     def build_collision_object(self, obj_id, obj_data):
         """Construct a MoveIt collision object from environment configuration.
-
+        
         Args:
             obj_id (str): Identifier assigned to the collision object.
             obj_data (dict): Object configuration containing pose and shape
