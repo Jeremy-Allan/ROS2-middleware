@@ -42,13 +42,13 @@
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Status bar shows "DISCONNECTED" | `rosbridge` isn't running, or died | Confirm Terminal 1 in [Running the System](running.md) is still up and listening on port 9090 |
-| "ROS service /execute_recipe not found" | `json_parser_node` isn't running | Confirm Terminal 2 launched successfully with no errors |
+| Status bar shows "DISCONNECTED" | `rosbridge` isn't running, or died | It starts with the middleware launch (Terminal 1 in [Running the System](running.md)); check that's still up and listening on port 9090 |
+| "ROS service /execute_recipe not found" | `json_parser_node` isn't running | Confirm Terminal 1 launched successfully with no errors |
 | "ROS service /get_robot_parameters not found" | `environment_mapping_node` isn't running | Same as above; the proxy will still proceed with an empty object list rather than crash |
 | LLM not responding, or times out | Wrong `base_url`, missing/invalid API key, or Ollama not running | Check `llm_config.json` (see [Configuration](configuration.md)); for Ollama, confirm `ollama serve` is running and `curl http://localhost:11434` responds |
 | "Failed to parse LLM output as JSON" | The model produced malformed or non-JSON output | Usually a `temperature` that's too high, or a local model too small to reliably follow the schema; try a larger model or lower temperature |
 | Import errors running `main.py` or `evaluate_proxy.py` | `PYTHONPATH` not set, or not running from the repo root | Confirm `PYTHONPATH=.` is set (see [Installation](installation.md)) and you're in the `embodied-ai-proxy` directory |
-| Recipe looks correct in the log panel but the robot doesn't move | Middleware not fully initialized, or the recipe failed partway through | Check Terminal 2's logs; the log panel shows "Dispatched to middleware successfully" only on real success |
+| Recipe looks correct in the log panel but the robot doesn't move | Middleware not fully initialized, or the recipe failed partway through | Check Terminal 1's logs; the log panel shows "Dispatched to middleware successfully" only on real success |
 
 ## Simulation-specific quirks
 

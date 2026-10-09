@@ -29,6 +29,7 @@
   <exec_depend>moveit_configs_utils</exec_depend>
   <exec_depend>kinova_gen3_lite_moveit_config</exec_depend>
   <exec_depend>pilz_industrial_motion_planner</exec_depend>
+  <exec_depend>rosbridge_server</exec_depend>
 
   <!-- Custom Services Package -->
   <depend>kinova_interfaces</depend>

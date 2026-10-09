@@ -114,7 +114,7 @@ git clone https://github.com/paul-isit/embodied-ai-proxy.git
 cd embodied-ai-proxy
 ```
 
-Install the system-level bridge dependency:
+Install `rosbridge_suite`, which the middleware launch starts so the proxy can reach it over a websocket:
 
 ```bash
 sudo apt-get update
@@ -125,14 +125,6 @@ Install the proxy's own Python dependencies:
 
 ```bash
 pip install -r src/requirements.txt
-```
-
-Build the proxy's internal ROS 2 bridge workspace:
-
-```bash
-cd ros2_bridge_ws
-colcon build
-cd ..
 ```
 
 Set `PYTHONPATH` so the proxy's own internal imports resolve correctly:

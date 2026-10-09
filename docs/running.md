@@ -2,24 +2,9 @@
 
 # Running the System
 
-Running the full pipeline needs three terminals running at once: the bridge, the middleware, and the proxy. Start them in that order.
+Running the full pipeline needs two terminals running at once: the middleware, then the proxy.
 
-## Terminal 1: start the ROS bridge
-
-The bridge needs to see the middleware's custom message and service types, so source the middleware workspace first, then launch the bridge:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/workspace/ros2_kortex_ws/install/setup.bash
-
-cd ~/workspace/embodied-ai-proxy/ros2_bridge_ws
-source install/setup.bash
-ros2 launch custom_bridge_pkg proxy_bridge.launch.py
-```
-
-The bridge is now listening on `ws://localhost:9090`. Leave this terminal running.
-
-## Terminal 2: start the middleware
+## Terminal 1: start the middleware
 
 By default ROS 2 writes logs to a hidden folder (`~/.ros/log`). Redirecting them somewhere visible first is recommended, not required:
 
@@ -35,7 +20,7 @@ source ~/workspace/ros2_kortex_ws/install/setup.bash
 ros2 launch kinova_interface robot.launch.py
 ```
 
-This single command starts all four middleware nodes plus the Kinova driver stack plus MoveIt 2 plus RViz (the 3D visualizer), all wired together. By default it boots in simulation (`use_fake_hardware:=true`), no physical robot required.
+This single command starts all four middleware nodes plus the Kinova driver stack plus MoveIt 2 plus RViz (the 3D visualizer), all wired together. Once `json_parser_node` is up it also starts `rosbridge_server`, the websocket the proxy connects to, on `ws://localhost:9090` (change it with `bridge_port:=<port>`). By default it boots in simulation (`use_fake_hardware:=true`), no physical robot required.
 
 To run against the real arm instead, once you've verified everything in simulation first:
 
@@ -47,7 +32,7 @@ Replace `192.168.1.10` with your arm's actual IP. You must provide `robot_ip` ex
 
 Leave this terminal running.
 
-## Terminal 3: start the proxy and give it a command
+## Terminal 2: start the proxy and give it a command
 
 ```bash
 cd ~/workspace/embodied-ai-proxy
@@ -62,7 +47,7 @@ Toolbar buttons across the top let you cycle how much detail is shown (recipe on
 
 ## Running the middleware alone, without the proxy
 
-Useful for testing or debugging just the robot side, without involving an LLM at all. With the middleware already running (Terminal 2 above), you can execute a specific recipe file automatically from launch:
+Useful for testing or debugging just the robot side, without involving an LLM at all. With the middleware already running (Terminal 1 above), you can execute a specific recipe file automatically from launch:
 
 ```bash
 ros2 launch kinova_interface robot.launch.py recipe:=task_recipe.json

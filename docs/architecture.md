@@ -57,7 +57,7 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 
 ## Proxy internals
 
-The proxy's own components (`llm_proxy.py`, the LLM adapters, `ros2_bridge_ws`, the Textual terminal interface) are documented in the embodied-ai-proxy repository itself: [github.com/paul-isit/embodied-ai-proxy](https://github.com/paul-isit/embodied-ai-proxy). This page covers this middleware's own internals in depth; the pipeline diagram above is the shared context between the two.
+The proxy's own components (`llm_proxy.py`, the LLM adapters, the Textual terminal interface) are documented in the embodied-ai-proxy repository itself: [github.com/paul-isit/embodied-ai-proxy](https://github.com/paul-isit/embodied-ai-proxy). This page covers this middleware's own internals in depth; the pipeline diagram above is the shared context between the two.
 
 ## Custom interface types (middleware)
 
@@ -101,7 +101,6 @@ flowchart TD
     SRC --> RK["ros2_kortex/<br/>Kinova's official driver + MoveIt config"]
     SRC --> MID["ROS2-middleware/<br/>this repo"]
 
-    PROXY --> BRIDGE["ros2_bridge_ws/<br/>src/custom_bridge_pkg/"]
     PROXY --> PSRC["src/, configs/, tests/"]
 ```
 
@@ -121,7 +120,7 @@ ROS2-middleware/
       utils/                      shared pure helpers: robot.py (frame, joint and link names), geometry.py (math), ros.py (service-call helpers)
     scripts/run_recipe.py         send a recipe file to /execute_recipe (ros2 run kinova_interface run_recipe.py <file>)
     scripts/check_orientations.py move to a grid of poses per orientation preset and check the reached orientation (see testing.md)
-    launch/robot.launch.py
+    launch/robot.launch.py        the whole stack, including rosbridge_server for the proxy
     recipes/                      task_recipe.json, test_suite/
   kinova_interfaces/
     srv/, msg/                    custom service and message definitions
@@ -133,8 +132,6 @@ embodied-ai-proxy/
     llm_config.json                LLM provider configuration
     system_prompt.md               LLM behavior rules and few-shot examples
     json_schema.json               strict output schema
-  ros2_bridge_ws/
-    src/custom_bridge_pkg/         launches rosbridge_server
   src/
     backend/
       llm_proxy.py                 main orchestrator
