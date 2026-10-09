@@ -21,7 +21,7 @@ GRIPPER_JOINT = 'right_finger_bottom_joint'
 GRIPPER_OPEN = 0.0
 GRIPPER_CLOSED = 0.8
 # Gap between the finger pads when fully open (m).
-GRIPPER_MAX_OPENING = 0.109
+GRIPPER_MAX_OPENING = 0.145
 # How far the fingertips reach past the tool_frame origin (pad centre), roughly.
 FINGERTIP_LENGTH = 0.03
 
