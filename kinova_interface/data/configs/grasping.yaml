@@ -6,8 +6,9 @@
 /**:
   ros__parameters:
     grasping:
-      ik_timeout_sec: 0.1             # how long to spend checking if one grasp is reachable; lower = faster, but may miss some
-      wrist_flip_threshold_rad: 1.5   # skip a grasp if the wrist would swing this far mid-motion
+      velocity_scale: 0.5             # arm speed for pickup and dropoff moves, as a fraction of its max (0-1]
+      acceleration_scale: 0.2         # how hard it speeds up and slows down (0-1]; Pilz LIN needs this low to stay within joint limits
+      fallback_planning_time: 1.0     # seconds RRT* gets when Pilz can't plan a move; RRT* always uses all of it
 
       yaw_step_deg: 30.0              # angle between grasps tried around an object; bigger = fewer tries, faster
 

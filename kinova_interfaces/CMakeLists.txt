@@ -23,6 +23,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/HomeArm.srv"
   "srv/UpdateObjectPose.srv"
   "srv/JointMove.srv"
+  "srv/ExecuteTrajectory.srv"
 
   "srv/GetSceneObjects.srv"
   "srv/Snapshot.srv"

@@ -6,7 +6,7 @@ from rclpy.executors import MultiThreadedExecutor
 import threading
 from collections import namedtuple
 
-from moveit_msgs.action import MoveGroup
+from moveit_msgs.action import MoveGroup, ExecuteTrajectory as MoveItExecuteTrajectory
 from moveit_msgs.msg import Constraints, PositionConstraint, OrientationConstraint, JointConstraint
 from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose
@@ -21,7 +21,7 @@ from tf2_ros import Buffer, TransformListener
 from scipy.spatial.transform import Rotation
 
 from kinova_interfaces.msg import ExtendedStatus
-from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
+from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove, ExecuteTrajectory
 
 from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES, BEFORE_MOTION_ERRORS, moveit_error
 
@@ -65,6 +65,11 @@ class HardwareInterfaceClient(Node):
         # Action Clients (The "Skills")
         self.arm_client = ActionClient(
             self, MoveGroup, 'move_action',
+            callback_group=self.callback_group
+        )
+        # Runs trajectories planned elsewhere (pickup/dropoff plan them with MoveIt first)
+        self.execute_client = ActionClient(
+            self, MoveItExecuteTrajectory, 'execute_trajectory',
             callback_group=self.callback_group
         )
         self.gripper_client = ActionClient(
@@ -132,6 +137,7 @@ class HardwareInterfaceClient(Node):
         self.move_gripper_srv = self.create_service(MoveGripper, '~/move_gripper', self.handle_move_gripper, callback_group=self.callback_group)
         self.relative_move_srv = self.create_service(RelativeMove, '~/relative_move', self.handle_relative_move, callback_group=self.callback_group)
         self.joint_move_srv = self.create_service(JointMove, '~/joint_move', self.handle_joint_move, callback_group=self.callback_group)
+        self.execute_trajectory_srv = self.create_service(ExecuteTrajectory, '~/execute_trajectory', self.handle_execute_trajectory, callback_group=self.callback_group)
 
     # --- Telemetry Status Publisher ---
     def publish_status(self):
@@ -339,6 +345,40 @@ class HardwareInterfaceClient(Node):
         response.error_code.val = self.arm_action_error_code or 0
         if still_running:
             return response
+        return self.finalize_service_status(response)
+
+    def handle_execute_trajectory(self, request, response):
+        """Run an already planned trajectory through MoveIt's /execute_trajectory, no re-planning."""
+        points = request.trajectory.joint_trajectory.points
+        duration = points[-1].time_from_start.sec + points[-1].time_from_start.nanosec * 1e-9 if points else 0.0
+        self.get_logger().info(f"Service Call: Execute Trajectory ({len(points)} points, {duration:.2f} s)")
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = f"Executing a {duration:.2f} s trajectory..."
+        self.publish_status()
+
+        if not points:
+            response.success = False
+            response.message = "Trajectory has no points"
+            return self.finalize_service_status(response)
+
+        if not self.execute_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
+            self.get_logger().error('Execute trajectory server not available')
+            response.success = False
+            response.message = "Failed to start execution (execute_trajectory action server unavailable)"
+            return self.finalize_service_status(response)
+
+        goal = MoveItExecuteTrajectory.Goal()
+        goal.trajectory = request.trajectory
+        self._dispatch_arm_goal(goal, self.execute_client)
+        self._await_action(
+            self.arm_movement_finished,
+            duration + self.ACTION_TIMEOUT_SEC,
+            'arm_action_successful',
+            'arm_action_message',
+            "Trajectory execution",
+            response,
+        )
+        response.error_code.val = self.arm_action_error_code or 0
         return self.finalize_service_status(response)
 
     def handle_move_arm(self, request, response):
@@ -562,10 +602,12 @@ class HardwareInterfaceClient(Node):
         goal_msg.request.goal_constraints.append(goal_constraints)
         return self._dispatch_arm_goal(goal_msg)
 
-    def _dispatch_arm_goal(self, goal_msg):
+    def _dispatch_arm_goal(self, goal_msg, client=None):
+        """Send a MoveGroup goal, or an ExecuteTrajectory goal with client=execute_client.
+        Both results carry a MoveIt error_code, so they share the callbacks below."""
         self.arm_movement_finished.clear()
         self.arm_action_error_code = None
-        future = self.arm_client.send_goal_async(
+        future = (client or self.arm_client).send_goal_async(
             goal_msg,
             feedback_callback=self.arm_feedback_callback
         )

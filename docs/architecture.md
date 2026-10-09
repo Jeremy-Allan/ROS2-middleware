@@ -33,9 +33,9 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 ## Middleware node deep dive
 
 **`hardware_interface_client.py`, the only node that touches the robot:**
-- Exposes five services under its private namespace: `/kinova_hardware_client/home_arm`, `move_arm`, `move_gripper`, `relative_move`, `joint_move`.
+- Exposes six services under its private namespace: `/kinova_hardware_client/home_arm`, `move_arm`, `move_gripper`, `relative_move`, `joint_move`, `execute_trajectory`.
 - The only node that *executes* motion. Other code may query MoveIt (IK, FK, state validity, planning scene), but every arm or gripper movement goes through this node.
-- Internally a client of two ROS 2 actions: `move_action` (MoveIt 2's `MoveGroup`, for Cartesian moves and the fixed joint-space `home` pose) and `/gen3_lite_2f_gripper_controller/gripper_cmd` (direct gripper control, bypassing MoveIt entirely).
+- Internally a client of three ROS 2 actions: `move_action` (MoveIt 2's `MoveGroup`, plans and moves in one go, for `move_arm`, `joint_move` and `home`), `execute_trajectory` (MoveIt 2's `ExecuteTrajectory`, runs a trajectory that pickup or dropoff already planned) and `/gen3_lite_2f_gripper_controller/gripper_cmd` (direct gripper control, bypassing MoveIt entirely).
 - Movement calls block synchronously on a `threading.Event()` until the action's result callback fires, which is what makes each recipe step wait for the robot to actually finish.
 - Subscribes to `/fault_controller/is_faulted` to know instantly if the arm enters a hardware fault state.
 
@@ -47,7 +47,7 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 **`json_parser_node.py`, orchestration:**
 - Loads a recipe two ways: a static file via the `recipe` launch parameter, or a dynamic JSON string via the `/execute_recipe` service, which is exactly what the proxy calls at runtime.
 - Iterates recipe steps in order, stopping at the first failure.
-- Dispatches each step to an action in `kinova_interface/actions/` (see the layout below). Actions call the hardware and environment nodes' services, and query MoveIt services directly (`/compute_ik`, `/compute_fk`, `/check_state_validity`, `/get_planning_scene`, `/apply_planning_scene`), but never execute motion themselves.
+- Dispatches each step to an action in `kinova_interface/actions/` (see the layout below). Actions call the hardware and environment nodes' services, and query MoveIt services directly (`/compute_ik`, `/compute_fk`, `/check_state_validity`, `/get_planning_scene`, `/apply_planning_scene`), but never execute motion themselves. Pickup and dropoff plan their moves with `/plan_kinematic_path` (Pilz PTP/LIN, OMPL RRT\* fallback) and `/compute_cartesian_path` (straight-line fallback), checking a whole pick or place before the arm moves, then run each plan through `execute_trajectory`. See `actions/motion.py`.
 - Each action returns `(success, message)`. On failure, `/execute_recipe` returns the failing step, its action and the reason, for example `Recipe failed at step 2 (pickup): Failed to move to object position: <MoveIt error>`.
 
 **`telemetry_node.py`, pure aggregation:**
@@ -75,6 +75,7 @@ The proxy's own components (`llm_proxy.py`, the LLM adapters, `ros2_bridge_ws`, 
 | `GetOrientationPreset` | `preset_name` (string) | `roll`, `pitch`, `yaw`, `success`, `message` |
 | `GetRobotParameters` | (none) | `object_list[]`, `movement_names[]`, `orientation_names[]` |
 | `JointMove` | `joint_positions[]` (float64), `wait_for_completion` (bool), `relative` (bool), `motion_params` (`MotionParams`) | `success`, `message`, `error_code` (`moveit_msgs/MoveItErrorCodes`, 0 if MoveIt never answered) |
+| `ExecuteTrajectory` | `trajectory` (`moveit_msgs/RobotTrajectory`, already planned) | `success`, `message`, `error_code` (`moveit_msgs/MoveItErrorCodes`, 0 if MoveIt never answered) |
 | `ExecuteRecipe` | `recipe_json` (string) | `success`, `message` (the failing step, action and reason on failure) |
 
 `MoveArm`'s `has_orientation` defaults to `false`: no orientation constraint, MoveIt picks the orientation, and the move is planned with OMPL RRT* since Pilz needs a full pose. `RelativeMove` always keeps the current orientation (plus any deltas), so it has no such flag.

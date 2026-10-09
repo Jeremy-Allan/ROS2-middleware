@@ -27,9 +27,10 @@ from kinova_interfaces.msg import MotionParams
 from std_srvs.srv import Trigger
 
 from kinova_interface.actions import basic, pickup, dropoff, pour, thrust, push, throw
+from kinova_interface.actions.motion import Motion
 from kinova_interface.utils.geometry import resolve_direction_offset
 from kinova_interface.utils.grasping import CONFIG_KEYS
-from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES, max_joint_change, moveit_error
+from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES, moveit_error
 from kinova_interface.utils.ros import call_service, wait_for_future
 
 
@@ -108,10 +109,10 @@ class ArmActions:
             'throw': partial(throw.run, self),
         }
 
-        # Name of the object currently grasped by the gripper, or None.
-        # Set by a successful pickup, cleared by a successful dropoff; used
-        # to verify 'pour'/'thrust' aren't invoked on nothing, and as a
-        # fallback for dropoff's own release-height calculation.
+        # Pickup and dropoff plan with MoveIt and run trajectories through the hardware interface
+        self.motion = Motion(node)
+
+        # Name of the object in the gripper, or None. Set by pickup, cleared by dropoff.
         self.held_object = None
         # How it's held (set by pickup), so dropoff can place it with the same grasp
         self.held_grasp = None
@@ -556,24 +557,6 @@ class ArmActions:
         result['error_code'] = response.error_code.val if response else 0
         return result
 
-    def solve_ik_chain(self, candidate):
-        """Joints for each of a grasp or place candidate's waypoints, each seeded from the one before.
-        Returns ({waypoint name: joints}, None), or (None, reason) if one can't be reached."""
-        grasp_config = self.grasp_config
-        solutions, seed = {}, None
-        for waypoint in candidate.waypoints:
-            joints = self.find_ik_solution(*waypoint.position, candidate.rotation, seed_joint_positions=seed,
-                                           avoid_collisions=waypoint.avoid_collisions,
-                                           timeout_sec=grasp_config['ik_timeout_sec'])
-            if joints is None:
-                return None, f'no IK at {waypoint.name}'
-            # A big jump between waypoints means the wrist would swing round on the way
-            if seed is not None and max_joint_change(seed, joints) > grasp_config['wrist_flip_threshold_rad']:
-                self.get_logger().debug(f"Wrist flip before {waypoint.name}: {max_joint_change(seed, joints):.2f} rad")
-                return None, f'wrist flip before {waypoint.name}'
-            solutions[waypoint.name] = seed = joints
-        return solutions, None
-
     def fail_at_home(self, message):
         """Send the arm home so a failed action doesn't leave it mid-motion, then fail with `message`."""
         home_result = self.call_home_service()
@@ -611,12 +594,12 @@ class ArmActions:
         return self.joint_move_client.call_async(req)
 
     def attach_object(self, obj_id):
-        """Remove object from planning scene (allow collision) via the environment mapping node."""
+        """Attach the object to the gripper in the planning scene, via the environment mapping node."""
         req = AttachObject.Request()
         req.object_id = obj_id
         response = call_service(self.attach_client, req, '/attach_object', self.get_logger())
         if response and response.success:
-            self.get_logger().info(f"Attached object '{obj_id}' (removed from scene)")
+            self.get_logger().info(f"Attached '{obj_id}' to the gripper")
             return True
         else:
             detail = f": {response.message}" if response and getattr(response, 'message', None) else ""
@@ -624,12 +607,12 @@ class ArmActions:
             return False
 
     def detach_object(self, obj_id):
-        """Add object back to planning scene via the environment mapping node."""
+        """Detach the object from the gripper, leaving it in the planning scene where it is."""
         req = DetachObject.Request()
         req.object_id = obj_id
         response = call_service(self.detach_client, req, '/detach_object', self.get_logger())
         if response and response.success:
-            self.get_logger().info(f"Detached object '{obj_id}' (added back to scene)")
+            self.get_logger().info(f"Detached '{obj_id}' from the gripper")
             return True
         else:
             detail = f": {response.message}" if response and getattr(response, 'message', None) else ""

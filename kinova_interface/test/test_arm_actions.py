@@ -1,4 +1,5 @@
 import math
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +11,7 @@ from scipy.spatial.transform import Rotation
 from rclpy.callback_groups import ReentrantCallbackGroup
 
 from kinova_interface.actions.arm_actions import ArmActions
+from kinova_interface.actions.motion import MotionUnavailable
 from kinova_interface.actions import pour, throw
 from kinova_interface.utils import geometry
 
@@ -499,52 +501,83 @@ CUBE_INFO = {
     "pose": {"position": {"x": 0.4, "y": 0.0, "z": 0.025}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
     "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]},
 }
-PRE, GRASP, LIFT = [0.0] * 6, [0.1] * 6, [0.2] * 6
 OK = {"success": True, "message": ""}
-NO_PLAN = {"success": False, "message": "no plan", "error_code": MoveItErrorCodes.PLANNING_FAILED}
-ABORTED = {"success": False, "message": "aborted", "error_code": MoveItErrorCodes.CONTROL_FAILED}
 HOMED = " (arm returned home)"
+NO_PATH = "no path to pre-grasp (out of reach (no IK solution))"
 
 
-def _mock_pickup(actions, info=CUBE_INFO, ik=None):
-    """Everything succeeds unless overridden. ik is find_ik_solution's side_effect."""
+class FakeMotion:
+    """Stands in for Motion. Every chain plans unless `reject(waypoint)` gives a reason,
+    and every move works unless `fail` names it. Records each move in `ran`."""
+
+    def __init__(self, reject=None, fail=None, supports=()):
+        self.reject = reject or (lambda waypoint: None)
+        self.fail = dict(fail or {})
+        self.supports = list(supports)
+        self.chains = []
+        self.ran = []
+        self.allowed = []   # (object, others, allowed) in call order
+
+    def touching(self, object_id):
+        return self.supports
+
+    def allow_contact(self, object_id, others, allowed):
+        self.allowed.append((object_id, list(others), allowed))
+        return True
+
+    def plan_chain(self, waypoints, rotation, config):
+        self.chains.append((waypoints, rotation))
+        for waypoint in waypoints:
+            reason = self.reject(waypoint)
+            if reason:
+                return None, reason
+        return {w.name: SimpleNamespace(name=w.name, planner='Pilz') for w in waypoints}, None
+
+    def _run(self, name):
+        self.ran.append(name)
+        message = self.fail.pop(name, None)
+        return (False, message) if message else (True, "Movement complete")
+
+    def execute(self, plan):
+        return self._run(plan.name)
+
+    def move(self, waypoint, rotation, config):
+        return self._run(waypoint.name)
+
+
+def _mock_pickup(actions, info=CUBE_INFO, motion=None):
+    """Everything succeeds unless overridden."""
     actions.get_object_info = MagicMock(return_value=info)
-    actions.find_ik_solution = MagicMock(side_effect=ik or [PRE, GRASP, LIFT])
+    actions.motion = motion or FakeMotion()
     actions.call_move_gripper_service = MagicMock(return_value=OK)
-    actions.call_joint_move_service = MagicMock(return_value=OK)
     actions.attach_object = MagicMock(return_value=True)
     actions.call_home_service = MagicMock(return_value=OK)
 
 
-def _joint_goals(actions):
-    return [c[0][0] for c in actions.call_joint_move_service.call_args_list]
+def _gripper_commands(actions):
+    return [c[0][0] for c in actions.call_move_gripper_service.call_args_list]
 
 
-def test_pickup_runs_pre_grasp_grasp_close_attach_lift(actions):
+def test_pickup_runs_pre_grasp_approach_close_attach_lift(actions):
     _mock_pickup(actions)
 
     success, message = actions.handlers['pickup']({"target": "cube"})
 
-    assert success is True, message
-    assert message == "Picked up 'cube' with a top grasp"
-    assert _joint_goals(actions) == [PRE, GRASP, LIFT]
-    assert [c[0][0] for c in actions.call_move_gripper_service.call_args_list] == [0.0, 0.8]
+    assert (success, message) == (True, "Picked up 'cube' with a top grasp")
+    assert actions.motion.ran == ['pre-grasp', 'grasp', 'lift']
+    assert _gripper_commands(actions) == [0.0, 0.8]
     actions.attach_object.assert_called_once_with("cube")
     assert actions.held_object == "cube"
+    actions.call_home_service.assert_not_called()
 
 
-def test_pickup_checks_ik_in_a_chain_and_lift_without_collisions(actions):
+def test_pickup_plans_the_whole_chain_before_moving(actions):
     _mock_pickup(actions)
 
     actions.handlers['pickup']({"target": "cube"})
 
-    pre_call, grasp_call, lift_call = actions.find_ik_solution.call_args_list
-    assert pre_call.kwargs.get('seed_joint_positions') is None
-    assert grasp_call.kwargs['seed_joint_positions'] == PRE
-    assert lift_call.kwargs['seed_joint_positions'] == GRASP
-    assert grasp_call.kwargs['avoid_collisions'] is True
-    assert lift_call.kwargs['avoid_collisions'] is False
-    assert lift_call.kwargs['timeout_sec'] == actions.grasp_config['ik_timeout_sec']
+    (waypoints, _), = actions.motion.chains
+    assert [(w.name, w.straight) for w in waypoints] == [('pre-grasp', False), ('grasp', True), ('lift', True)]
 
 
 def test_pickup_stores_object_pose_in_tool_frame(actions):
@@ -558,104 +591,104 @@ def test_pickup_stores_object_pose_in_tool_frame(actions):
     assert (held['tool_rotation'] * held['object_rotation']).magnitude() == pytest.approx(0.0, abs=1e-9)
 
 
-def test_pickup_tries_next_candidate_after_no_ik(actions):
-    _mock_pickup(actions, ik=[None, PRE, GRASP, LIFT])
+def test_pickup_tries_the_next_candidate_until_one_plans(actions):
+    rejected = iter([NO_PATH, NO_PATH])
+    _mock_pickup(actions, motion=FakeMotion(reject=lambda w: next(rejected, None) if w.name == 'pre-grasp' else None))
 
     success, _ = actions.handlers['pickup']({"target": "cube"})
 
     assert success is True
-    assert actions.find_ik_solution.call_count == 4
+    assert len(actions.motion.chains) == 3
+    assert actions.motion.ran == ['pre-grasp', 'grasp', 'lift']  # nothing moved for the rejected ones
 
 
-def test_pickup_tries_next_candidate_after_wrist_flip(actions):
-    _mock_pickup(actions, ik=[PRE, [2.0] * 6, PRE, GRASP, LIFT])
+def test_pickup_failure_message_counts_reasons_per_style(actions):
+    long_box = {**CUBE_INFO, "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.2, 0.05, 0.05]}}
+    _mock_pickup(actions, info=long_box, motion=FakeMotion(reject=lambda w: NO_PATH))
 
-    success, _ = actions.handlers['pickup']({"target": "cube"})
+    success, message = actions.handlers['pickup']({"target": "box"})
 
-    assert success is True
-    assert actions.find_ik_solution.call_count == 5
-
-
-def test_pickup_tries_next_candidate_if_planning_fails(actions):
-    _mock_pickup(actions, ik=[PRE, GRASP, LIFT] * 2)
-    actions.call_joint_move_service.side_effect = [NO_PLAN, OK, OK, OK]
-
-    success, _ = actions.handlers['pickup']({"target": "cube"})
-
-    assert success is True
-    assert actions.find_ik_solution.call_count == 6
+    assert success is False
+    assert message == ("No reachable grasp for 'box': "
+                       f"side 16 tried (4 too wide: 0.200 m > max 0.094; 12 {NO_PATH}), "
+                       f"top 4 tried (2 too wide: 0.200 m > max 0.094; 2 {NO_PATH})" + HOMED)
+    assert actions.motion.ran == []
 
 
-def test_pickup_goes_home_if_pre_grasp_move_fails_partway(actions):
-    _mock_pickup(actions, ik=[PRE, GRASP, LIFT] * 2)
-    actions.call_joint_move_service.return_value = ABORTED
+def test_pickup_forced_style_only_tries_and_reports_that_style(actions):
+    _mock_pickup(actions, motion=FakeMotion(reject=lambda w: NO_PATH))
+
+    success, message = actions.handlers['pickup']({"target": "cube", "grasp_style": "top"})
+
+    assert success is False
+    assert message == f"No reachable grasp for 'cube': top 4 tried (4 {NO_PATH})" + HOMED
+
+
+def test_pickup_stops_searching_if_moveit_does_not_answer(actions):
+    motion = FakeMotion()
+    motion.plan_chain = MagicMock(side_effect=MotionUnavailable('no response from /plan_kinematic_path'))
+    _mock_pickup(actions, motion=motion)
 
     success, message = actions.handlers['pickup']({"target": "cube"})
 
     assert success is False
-    assert message == "Failed partway to the pre-grasp for 'cube': aborted" + HOMED
-    assert actions.call_joint_move_service.call_count == 1
-    actions.call_home_service.assert_called_once()
+    assert message == "Can't plan the pickup of 'cube': no response from /plan_kinematic_path" + HOMED
+    motion.plan_chain.assert_called_once()
+
+
+def test_pickup_goes_home_if_the_pre_grasp_move_fails(actions):
+    _mock_pickup(actions, motion=FakeMotion(fail={'pre-grasp': 'control failed'}))
+
+    success, message = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is False
+    assert message == "Failed to reach the pre-grasp for 'cube': control failed" + HOMED
+    assert actions.motion.ran == ['pre-grasp']
     actions.attach_object.assert_not_called()
 
 
-def test_pickup_tries_next_candidate_if_planning_to_the_grasp_fails(actions):
-    _mock_pickup(actions, ik=[PRE, GRASP, LIFT] * 2)
-    actions.call_joint_move_service.side_effect = [OK, NO_PLAN, OK, OK, OK]
-
-    success, _ = actions.handlers['pickup']({"target": "cube"})
-
-    assert success is True
-    assert _joint_goals(actions) == [PRE, GRASP, PRE, GRASP, LIFT]
-    actions.call_home_service.assert_not_called()
-
-
-@pytest.mark.parametrize("step", ["grasp_move", "close", "attach"])
+@pytest.mark.parametrize("step", ["approach", "close", "attach"])
 def test_pickup_backs_off_to_pre_grasp_then_goes_home_if_grasping_fails(actions, step):
-    _mock_pickup(actions)
-    if step == "grasp_move":
-        actions.call_joint_move_service.side_effect = [OK, ABORTED, OK]
-    elif step == "close":
+    _mock_pickup(actions, motion=FakeMotion(fail={'grasp': 'blocked'} if step == "approach" else None))
+    if step == "close":
         actions.call_move_gripper_service.side_effect = [OK, {"success": False, "message": "nope"}, OK]
-    else:
+    elif step == "attach":
         actions.attach_object.return_value = False
 
     success, message = actions.handlers['pickup']({"target": "cube"})
 
     assert success is False
     assert message.endswith(HOMED)
-    assert _joint_goals(actions)[-1] == PRE
-    assert actions.call_move_gripper_service.call_args[0][0] == 0.0
+    assert actions.motion.ran[-1] == 'pre-grasp'
+    assert _gripper_commands(actions)[-1] == 0.0
     actions.call_home_service.assert_called_once()
     assert actions.held_object is None
 
 
 def test_pickup_stays_put_if_backing_off_fails(actions):
-    _mock_pickup(actions)
-    actions.call_joint_move_service.side_effect = [OK, OK, {"success": False, "message": "blocked"}]
-    actions.attach_object.return_value = False
+    motion = FakeMotion(fail={'grasp': 'blocked'})
+    # The first pre-grasp move runs its plan, backing off is the only move() to it
+    motion.move = lambda w, r, c: (False, 'stuck') if w.name == 'pre-grasp' else FakeMotion.move(motion, w, r, c)
+    _mock_pickup(actions, motion=motion)
 
     success, message = actions.handlers['pickup']({"target": "cube"})
 
     assert success is False
-    assert message == "Failed to attach 'cube' after closing; failed to back off to the pre-grasp: blocked"
+    assert message == "Failed to approach 'cube': blocked; failed to back off to the pre-grasp: stuck"
     actions.call_home_service.assert_not_called()
 
 
 def test_pickup_reports_when_going_home_also_fails(actions):
-    _mock_pickup(actions)
-    actions.call_joint_move_service.return_value = ABORTED
+    _mock_pickup(actions, motion=FakeMotion(fail={'pre-grasp': 'control failed'}))
     actions.call_home_service.return_value = {"success": False, "message": "timed out"}
 
     success, message = actions.handlers['pickup']({"target": "cube"})
 
-    assert success is False
-    assert message == "Failed partway to the pre-grasp for 'cube': aborted (returning home also failed: timed out)"
+    assert message == "Failed to reach the pre-grasp for 'cube': control failed (returning home also failed: timed out)"
 
 
 def test_pickup_counts_as_held_if_only_the_lift_fails(actions):
-    _mock_pickup(actions)
-    actions.call_joint_move_service.side_effect = [OK, OK, {"success": False, "message": "start state in collision"}]
+    _mock_pickup(actions, motion=FakeMotion(fail={'lift': 'start state in collision'}))
 
     success, message = actions.handlers['pickup']({"target": "cube"})
 
@@ -664,25 +697,26 @@ def test_pickup_counts_as_held_if_only_the_lift_fails(actions):
     assert actions.held_object == "cube"
 
 
-def test_pickup_failure_message_counts_reasons_per_style(actions):
-    long_box = {**CUBE_INFO, "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.2, 0.05, 0.05]}}
-    _mock_pickup(actions, info=long_box, ik=lambda *a, **k: None)
+def test_pickup_allows_contact_with_what_the_object_stands_on_only_for_the_lift(actions):
+    motion = FakeMotion(supports=['table'])
+    lifting = []
+    motion.move = lambda w, r, c: lifting.append(list(motion.allowed)) or FakeMotion.move(motion, w, r, c)
+    _mock_pickup(actions, motion=motion)
 
-    success, message = actions.handlers['pickup']({"target": "box"})
+    success, _ = actions.handlers['pickup']({"target": "cube"})
+
+    assert success is True
+    assert lifting[-1] == [('cube', ['table'], True)]  # allowed while lifting
+    assert motion.allowed == [('cube', ['table'], True), ('cube', ['table'], False)]
+
+
+def test_pickup_restores_the_contact_check_even_if_the_lift_fails(actions):
+    _mock_pickup(actions, motion=FakeMotion(supports=['table'], fail={'lift': 'blocked'}))
+
+    success, _ = actions.handlers['pickup']({"target": "cube"})
 
     assert success is False
-    assert message == ("No reachable grasp for 'box': side 16 tried (4 too wide: 0.200 m > max 0.094; 12 no IK at pre-grasp), "
-                       "top 4 tried (2 too wide: 0.200 m > max 0.094; 2 no IK at pre-grasp)" + HOMED)
-    actions.call_joint_move_service.assert_not_called()
-
-
-def test_pickup_forced_style_only_tries_and_reports_that_style(actions):
-    _mock_pickup(actions, ik=lambda *a, **k: None)
-
-    success, message = actions.handlers['pickup']({"target": "cube", "grasp_style": "top"})
-
-    assert success is False
-    assert message == "No reachable grasp for 'cube': top 4 tried (4 no IK at pre-grasp)" + HOMED
+    assert actions.motion.allowed[-1] == ('cube', ['table'], False)
 
 
 def test_pickup_rejects_unknown_grasp_style(actions):
@@ -707,11 +741,12 @@ def test_pickup_fails_cleanly_for_unknown_target_or_unsupported_shape(actions):
 
 def _holding(actions, name):
     """Pick up `name` (a CUBE_INFO cube) with everything mocked to succeed."""
-    _mock_pickup(actions, ik=lambda *a, **k: [0.0] * 6)
+    _mock_pickup(actions)
     actions.update_object_pose = MagicMock(return_value=True)
     actions.detach_object = MagicMock(return_value=True)
     assert actions.handlers['pickup']({"target": name})[0]
     actions.attach_object.reset_mock()
+    actions.motion.ran.clear()
 
 
 def test_pickup_releases_previously_held_object_first(actions):
@@ -723,6 +758,7 @@ def test_pickup_releases_previously_held_object_first(actions):
     assert success is True
     actions.detach_object.assert_called_once_with("red_cube")
     assert actions.update_object_pose.call_args[0][3] == pytest.approx(0.025)  # back on the table, not at the release height
+    assert actions.motion.ran == ['hover', 'release', 'back-off', 'pre-grasp', 'grasp', 'lift']
     actions.attach_object.assert_called_once_with("blue_cube")
     assert actions.held_object == "blue_cube"
 
@@ -738,7 +774,7 @@ def test_pickup_does_not_release_when_target_is_already_held(actions):
 
 def test_pickup_fails_cleanly_if_release_of_held_object_fails(actions):
     _holding(actions, "red_cube")
-    actions.find_ik_solution.side_effect = lambda *a, **k: None
+    actions.motion.reject = lambda w: "no path to hover (out of reach)"
 
     success, message = actions.handlers['pickup']({"target": "blue_cube"})
 
@@ -860,12 +896,11 @@ TRAY_INFO = {
 }
 
 
-def _holding_cube_over_tray(actions, ik=None):
+def _holding_cube_over_tray(actions):
     """Holding 'cube' (top grasp), with 'tray' known and everything mocked to succeed."""
     _holding(actions, "cube")
     actions.get_object_info = MagicMock(side_effect=lambda name: {"cube": CUBE_INFO, "tray": TRAY_INFO}.get(name))
-    actions.find_ik_solution = MagicMock(side_effect=ik or (lambda *a, **k: [0.0] * 6))
-    actions.call_joint_move_service = MagicMock(return_value=OK)
+    actions.motion = FakeMotion()
     actions.call_move_gripper_service = MagicMock(return_value=OK)
 
 
@@ -880,48 +915,44 @@ def test_dropoff_places_on_destination_top_centre(actions):
     assert (x, y, z) == pytest.approx((0.5, 0.1, 0.02 + 0.025))
     q = orientation
     assert Rotation.from_quat([q["x"], q["y"], q["z"], q["w"]]).magnitude() == pytest.approx(0.0, abs=1e-9)
-    assert actions.call_joint_move_service.call_count == 4  # hover, release, back, up
+    assert actions.motion.ran == ['hover', 'release', 'back-off']
     assert actions.held_object is None and actions.held_grasp is None
 
 
-def test_dropoff_checks_hover_and_release_with_collisions_and_retreat_for_reach(actions):
+def test_dropoff_plans_hover_free_then_straight_down_and_back(actions):
     _holding_cube_over_tray(actions)
 
     actions.handlers['dropoff']({"destination": "tray"})
 
-    avoid = [c.kwargs['avoid_collisions'] for c in actions.find_ik_solution.call_args_list]
-    assert avoid == [True, True, False, False]
+    (waypoints, _), = actions.motion.chains
+    assert [(w.name, w.straight) for w in waypoints] == [('hover', False), ('release', True), ('back-off', True)]
+    hover, release, back_off = (w.position for w in waypoints)
+    assert hover - release == pytest.approx([0, 0, 0.1])
+    assert back_off - release == pytest.approx([0, 0, actions.grasp_config['standoff']])  # top grasp backs out upwards
 
 
 def test_dropoff_detaches_before_backing_away(actions):
     _holding_cube_over_tray(actions)
     calls = []
-    actions.call_joint_move_service.side_effect = lambda joints: calls.append('move') or OK
+    run = actions.motion._run
+    actions.motion._run = lambda name: calls.append(name) or run(name)
     actions.detach_object = MagicMock(side_effect=lambda name: calls.append('detach') or True)
 
     actions.handlers['dropoff']({"destination": "tray"})
 
-    assert calls == ['move', 'move', 'detach', 'move', 'move']
+    assert calls == ['hover', 'release', 'detach', 'back-off']
 
 
-def test_dropoff_tries_the_next_yaw_if_the_pickup_one_has_no_ik(actions):
-    _holding_cube_over_tray(actions, ik=[None] + [[0.0] * 6] * 4)
-
-    success, _ = actions.handlers['dropoff']({"destination": "tray"})
-
-    assert success is True
-    first, second = (c[0][3] for c in actions.find_ik_solution.call_args_list[:2])
-    assert (second * first.inv()).as_euler('xyz', degrees=True)[2] == pytest.approx(actions.grasp_config['yaw_step_deg'])
-
-
-def test_dropoff_tries_the_next_yaw_if_planning_fails(actions):
+def test_dropoff_tries_the_next_yaw_if_the_pickup_one_cannot_be_planned(actions):
     _holding_cube_over_tray(actions)
-    actions.call_joint_move_service.side_effect = [NO_PLAN, OK, OK, OK, OK]
+    rejected = iter(["no path to hover (out of reach)"])
+    actions.motion.reject = lambda w: next(rejected, None) if w.name == 'hover' else None
 
     success, _ = actions.handlers['dropoff']({"destination": "tray"})
 
     assert success is True
-    assert actions.find_ik_solution.call_count == 8
+    (_, first), (_, second) = actions.motion.chains
+    assert (second * first.inv()).as_euler('xyz', degrees=True)[2] == pytest.approx(actions.grasp_config['yaw_step_deg'])
 
 
 def test_dropoff_moves_by_direction_and_distance_but_stays_on_the_destination(actions):
@@ -935,7 +966,7 @@ def test_dropoff_moves_by_direction_and_distance_but_stays_on_the_destination(ac
     success, message = actions.handlers['dropoff']({"destination": "tray", "direction": "forward", "distance": 0.5})
     assert success is False
     assert message == "Release point is off 'tray', try a smaller distance"
-    actions.call_joint_move_service.assert_not_called()
+    assert actions.motion.ran == []
 
 
 def test_dropoff_direction_needs_a_distance(actions):
@@ -956,18 +987,30 @@ def test_dropoff_fails_if_not_holding_the_target(actions):
 
 
 def test_dropoff_failure_message_when_no_yaw_works(actions):
-    _holding_cube_over_tray(actions, ik=lambda *a, **k: None)
+    _holding_cube_over_tray(actions)
+    actions.motion.reject = lambda w: "no path to hover (out of reach)"
 
     success, message = actions.handlers['dropoff']({"destination": "tray"})
 
     assert success is False
-    assert message == "No reachable place pose for 'cube': 12 tried (12 no IK at hover)" + HOMED
+    assert message == "No reachable place pose for 'cube': 12 tried (12 no path to hover (out of reach))" + HOMED
     assert actions.held_object == "cube"
+    assert actions.motion.ran == []
+
+
+def test_dropoff_stops_searching_if_moveit_does_not_answer(actions):
+    _holding_cube_over_tray(actions)
+    actions.motion.plan_chain = MagicMock(side_effect=MotionUnavailable('no response from /compute_cartesian_path'))
+
+    success, message = actions.handlers['dropoff']({"destination": "tray"})
+
+    assert message == "Can't plan the dropoff of 'cube': no response from /compute_cartesian_path" + HOMED
+    actions.motion.plan_chain.assert_called_once()
 
 
 def test_dropoff_still_counts_as_placed_if_backing_away_fails(actions):
     _holding_cube_over_tray(actions)
-    actions.call_joint_move_service.side_effect = [OK, OK, {"success": False, "message": "blocked"}]
+    actions.motion.fail = {'back-off': 'blocked'}
 
     success, message = actions.handlers['dropoff']({"destination": "tray"})
 
@@ -976,24 +1019,12 @@ def test_dropoff_still_counts_as_placed_if_backing_away_fails(actions):
     assert actions.held_object is None
 
 
-def test_dropoff_tries_the_next_yaw_if_planning_to_the_release_fails(actions):
-    _holding_cube_over_tray(actions)
-    actions.call_joint_move_service.side_effect = [OK, NO_PLAN, OK, OK, OK, OK]
-
-    success, _ = actions.handlers['dropoff']({"destination": "tray"})
-
-    assert success is True
-    actions.call_home_service.assert_not_called()
-
-
-@pytest.mark.parametrize("step", ["release_move", "open", "detach"])
+@pytest.mark.parametrize("step", ["descend", "open", "detach"])
 def test_dropoff_backs_off_to_hover_then_goes_home_if_releasing_fails(actions, step):
     _holding_cube_over_tray(actions)
-    hover = [0.5] * 6
-    actions.find_ik_solution.side_effect = [hover, [0.0] * 6, [0.0] * 6, [0.0] * 6]
     actions.detach_object = MagicMock(return_value=step != "detach")
-    if step == "release_move":
-        actions.call_joint_move_service.side_effect = [OK, ABORTED, OK]
+    if step == "descend":
+        actions.motion.fail = {'release': 'blocked'}
     elif step == "open":
         actions.call_move_gripper_service.return_value = {"success": False, "message": "nope"}
 
@@ -1001,7 +1032,7 @@ def test_dropoff_backs_off_to_hover_then_goes_home_if_releasing_fails(actions, s
 
     assert success is False
     assert message.endswith(HOMED)
-    assert _joint_goals(actions)[-1] == hover
+    assert actions.motion.ran[-1] == 'hover'
     actions.call_home_service.assert_called_once()
     assert actions.held_object == "cube"
 

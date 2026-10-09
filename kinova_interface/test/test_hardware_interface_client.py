@@ -7,7 +7,9 @@ from unittest.mock import MagicMock, patch
 from std_srvs.srv import Trigger
 from example_interfaces.msg import Bool
 from kinova_interfaces.msg import ExtendedStatus
-from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
+from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove, ExecuteTrajectory
+from moveit_msgs.msg import RobotTrajectory
+from trajectory_msgs.msg import JointTrajectoryPoint
 
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import MoveItErrorCodes
@@ -1252,3 +1254,44 @@ def test_await_action_timeout(node):
 
     assert result.success is False
     assert "timed out after 5.0s" in result.message
+
+
+# execute_trajectory
+def _trajectory(seconds):
+    trajectory = RobotTrajectory()
+    point = JointTrajectoryPoint()
+    point.time_from_start.sec = seconds
+    trajectory.joint_trajectory.points = [point]
+    return trajectory
+
+
+def test_handle_execute_trajectory_runs_it_through_moveit_execute_trajectory(node):
+    node._dispatch_arm_goal = _goal_results(node, [(True, "Movement complete", MoveItErrorCodes.SUCCESS)])
+    request = ExecuteTrajectory.Request(trajectory=_trajectory(2))
+
+    result = node.handle_execute_trajectory(request, ExecuteTrajectory.Response())
+
+    assert (result.success, result.message, result.error_code.val) == (True, "Movement complete", MoveItErrorCodes.SUCCESS)
+    goal, client = node._dispatch_arm_goal.call_args[0]
+    assert client is node.execute_client
+    assert goal.trajectory == request.trajectory
+    # Waits for the trajectory itself plus the usual margin
+    assert node.arm_movement_finished.wait.call_args.kwargs["timeout"] == 2 + node.ACTION_TIMEOUT_SEC
+
+
+def test_handle_execute_trajectory_reports_the_moveit_error(node):
+    node._dispatch_arm_goal = _goal_results(node, [(False, "control failed", MoveItErrorCodes.CONTROL_FAILED)])
+
+    result = node.handle_execute_trajectory(ExecuteTrajectory.Request(trajectory=_trajectory(1)), ExecuteTrajectory.Response())
+
+    assert (result.success, result.error_code.val) == (False, MoveItErrorCodes.CONTROL_FAILED)
+    node._dispatch_arm_goal.assert_called_once()  # executing never re-plans
+
+
+def test_handle_execute_trajectory_rejects_an_empty_trajectory(node):
+    node._dispatch_arm_goal = MagicMock()
+
+    result = node.handle_execute_trajectory(ExecuteTrajectory.Request(), ExecuteTrajectory.Response())
+
+    assert (result.success, result.message) == (False, "Trajectory has no points")
+    node._dispatch_arm_goal.assert_not_called()

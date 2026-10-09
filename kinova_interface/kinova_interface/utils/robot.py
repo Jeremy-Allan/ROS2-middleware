@@ -15,6 +15,8 @@ GRIPPER_TOUCH_LINKS = [
     "right_finger_dist_link", "right_finger_prox_link",
 ]
 
+# The gripper's driven joint, the other finger joints mimic it
+GRIPPER_JOINT = 'right_finger_bottom_joint'
 # Gripper commands (rad). Closing stops on the object (allow_stalling), so one closed value fits all.
 GRIPPER_OPEN = 0.0
 GRIPPER_CLOSED = 0.8
@@ -22,9 +24,6 @@ GRIPPER_CLOSED = 0.8
 GRIPPER_MAX_OPENING = 0.109
 # How far the fingertips reach past the tool_frame origin (pad centre), roughly.
 FINGERTIP_LENGTH = 0.03
-
-def max_joint_change(a, b):
-    return max(abs(x - y) for x, y in zip(a, b))
 
 
 # Every MoveIt error code, readable, for logs and failure messages

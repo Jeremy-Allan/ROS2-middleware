@@ -7,18 +7,18 @@ import math
 from collections import Counter
 from collections.abc import Iterator
 from dataclasses import dataclass
-from typing import NamedTuple
+from typing import NamedTuple, Optional
 
 import numpy as np
 from scipy.spatial.transform import Rotation
 from shape_msgs.msg import SolidPrimitive
 
 from kinova_interface.utils.geometry import orientation_from_axes
-from kinova_interface.utils.robot import FINGERTIP_LENGTH, GRIPPER_MAX_OPENING
+from kinova_interface.utils.robot import FINGERTIP_LENGTH, GRIPPER_MAX_OPENING, GRIPPER_OPEN
 
 # Settings under 'grasping' in data/configs/grasping.yaml, all doubles
 CONFIG_KEYS = (
-    'ik_timeout_sec', 'wrist_flip_threshold_rad', 'yaw_step_deg', 'standoff', 'lift_height',
+    'velocity_scale', 'acceleration_scale', 'fallback_planning_time', 'yaw_step_deg', 'standoff', 'lift_height',
     'top_grasp_depth', 'tip_clearance', 'tall_grip_height', 'tall_ratio', 'width_margin',
     'min_width', 'place_clearance',
 )
@@ -45,7 +45,8 @@ ObjectGrasp = tuple[np.ndarray, np.ndarray, float]
 class Waypoint(NamedTuple):
     name: str
     position: np.ndarray            # tool_frame position
-    avoid_collisions: bool = True
+    straight: bool                  # reach it in a straight line, rather than any collision-free path
+    gripper: Optional[float] = None # gripper position when this move starts, if it changes just before it
 
 
 @dataclass
@@ -58,10 +59,9 @@ class GraspCandidate:
 
     @property
     def waypoints(self) -> list[Waypoint]:
-        # The object is still in the scene when these are checked, so the lift only checks reach.
-        # The planner collision-checks the real lift once the object is attached.
-        return [Waypoint('pre-grasp', self.pre_grasp), Waypoint('grasp', self.grasp),
-                Waypoint('lift', self.lift, avoid_collisions=False)]
+        return [Waypoint('pre-grasp', self.pre_grasp, straight=False),
+                Waypoint('grasp', self.grasp, straight=True),
+                Waypoint('lift', self.lift, straight=True)]
 
 
 def object_centre(pose: dict) -> np.ndarray:
@@ -245,17 +245,17 @@ class PlaceCandidate:
     hover: np.ndarray           # tool_frame positions, in order
     release: np.ndarray
     back: np.ndarray
-    up: np.ndarray
     object_centre: np.ndarray   # where the object ends up
     object_rotation: Rotation
 
     @property
     def waypoints(self) -> list[Waypoint]:
-        # The object is still attached when these are checked, so the retreat only checks reach.
-        # The planner collision-checks the real retreat after detaching.
-        return [Waypoint('hover', self.hover), Waypoint('release', self.release),
-                Waypoint('back-off', self.back, avoid_collisions=False),
-                Waypoint('up', self.up, avoid_collisions=False)]
+        # Pickup in reverse: down to the release in a straight line, then back out along the approach.
+        # The gripper opens before backing off, so that's planned with it open (an open finger can hit
+        # something next to the object).
+        return [Waypoint('hover', self.hover, straight=False),
+                Waypoint('release', self.release, straight=True),
+                Waypoint('back-off', self.back, straight=True, gripper=GRIPPER_OPEN)]
 
 
 def place_candidates(held_grasp: dict, shape: dict, point: np.ndarray, grasp_config: dict,
@@ -268,7 +268,7 @@ def place_candidates(held_grasp: dict, shape: dict, point: np.ndarray, grasp_con
         resting = point + [0.0, 0.0, half_extent(shape, obj, Z)]
         centre = resting + [0.0, 0.0, grasp_config['place_clearance']]
         release = centre - tool.apply(held_grasp['object_position'])
-        # Retreat reverses the approach, then goes up
+        # Retreat reverses the approach, like pickup's pre-grasp
         back = release - grasp_config['standoff'] * tool.apply(TOOL_APPROACH)
         yield PlaceCandidate(
             yaw_deg=yaw,
@@ -276,7 +276,6 @@ def place_candidates(held_grasp: dict, shape: dict, point: np.ndarray, grasp_con
             hover=release + [0.0, 0.0, place_offset],
             release=release,
             back=back,
-            up=back + [0.0, 0.0, grasp_config['lift_height']],
             object_centre=resting,
             object_rotation=obj,
         )
