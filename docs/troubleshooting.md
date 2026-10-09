@@ -15,8 +15,8 @@
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `Object <name> NOT Found` | The `target` doesn't match a key in `coordinate_dictionary.json` exactly (case-sensitive) | Check spelling/casing; see the `_pickup` mismatch in [Testing](testing.md) |
-| `Movement <name> NOT Found` | Same issue, for `relative_move` and `relative_movement.json` | See the known gap in [Configuration](configuration.md) |
+| `Object <name> NOT Found` | The `target` doesn't match an object in `workspace_objects.yaml` exactly (case-sensitive) | Check spelling/casing; see the `_pickup` mismatch in [Testing](testing.md) |
+| `Movement <name> NOT Found` | Same issue, for `relative_move` and `movements_and_orientations.yaml` | See the known gap in [Configuration](configuration.md) |
 | `No executable steps found or recipe failed to load` | Recipe JSON is malformed, missing a top-level `steps` key, or `steps` is empty | Validate the JSON; confirm `steps` exists at the top level |
 | Edited a JSON config but nothing changed at runtime | `colcon build` copies configs into `install/`; you edited the `src/` copy after the last build | Rebuild, or use `colcon build --symlink-install` |
 | A step silently fails with no clear message | You used an action name that isn't in the real whitelist | See [Configuration](configuration.md), use `home` and `gripper` |
@@ -25,8 +25,8 @@
 
 | Log message | Meaning | Fix |
 |---|---|---|
-| `Coordinates out of reach!` (`NO_IK_SOLUTION`) | No valid joint configuration reaches that position | Double-check the coordinate against known-reachable ones already in `coordinate_dictionary.json` |
-| `Planning failed!` (`PLANNING_FAILED`) | MoveIt couldn't find a collision-free path | Check `obstacles.json` for a box blocking the route |
+| `Coordinates out of reach!` (`NO_IK_SOLUTION`) | No valid joint configuration reaches that position | Double-check the coordinate against known-reachable ones already in `workspace_objects.yaml` |
+| `Planning failed!` (`PLANNING_FAILED`) | MoveIt couldn't find a collision-free path | Check `workspace_objects.yaml`'s obstacles for a box blocking the route |
 | `Goal is in collision!` (`GOAL_IN_COLLISION`) | The target pose overlaps a known obstacle | Adjust the target coordinate or the obstacle definition |
 | `Movement timed out!` (`TIMED_OUT`) | Planning or execution exceeded the allowed time | Usually transient, retry; if consistent, the target may be near the edge of reachability |
 

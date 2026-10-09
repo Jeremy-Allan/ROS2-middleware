@@ -21,7 +21,8 @@ from kinova_interface.utils.grasping import Waypoint
 from kinova_interface.utils.robot import JOINT_NAMES
 
 CONFIG = {'velocity_scale': 0.5, 'acceleration_scale': 0.2, 'fallback_planning_time': 1.5,
-          'upright_tolerance': 0.2}
+          'upright_tolerance': 0.2, 'position_tolerance': 0.001, 'orientation_tolerance': 0.001,
+          'cartesian_step': 0.0025, 'max_joint_jump': 0.5}
 DOWN = Rotation.from_euler('x', 180, degrees=True)
 FREE = Waypoint('pre-grasp', np.array([0.4, 0.0, 0.2]), straight=False)
 LINE = Waypoint('grasp', np.array([0.4, 0.0, 0.1]), straight=True)
@@ -31,7 +32,7 @@ LINE = Waypoint('grasp', np.array([0.4, 0.0, 0.1]), straight=True)
 def mover(ros_context):
     node = Node('test_motion_host')
     node.cb_group = ReentrantCallbackGroup()
-    yield Motion(node)
+    yield Motion(node, execute_timeout_margin=65.0)
     node.destroy_node()
 
 
@@ -142,8 +143,8 @@ def test_straight_move_falls_back_to_compute_cartesian_path(mover):
     assert isinstance(cartesian_request, GetCartesianPath.Request)
     assert cartesian_request.group_name == 'arm' and cartesian_request.link_name == 'tool_frame'
     assert cartesian_request.header.frame_id == 'base_link'
-    assert cartesian_request.avoid_collisions and cartesian_request.max_step == motion.CARTESIAN_STEP
-    assert cartesian_request.revolute_jump_threshold == motion.MAX_JOINT_JUMP
+    assert cartesian_request.avoid_collisions and cartesian_request.max_step == CONFIG['cartesian_step']
+    assert cartesian_request.revolute_jump_threshold == CONFIG['max_joint_jump']
     assert list(cartesian_request.start_state.joint_state.position) == [0.3] * 6
     # Timed at full speed by MoveIt, slowed to velocity_scale
     assert plan.duration == pytest.approx(2.0 / 0.5)

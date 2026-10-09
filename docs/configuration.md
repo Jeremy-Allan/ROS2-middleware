@@ -2,54 +2,64 @@
 
 # Configuration
 
-All runtime configuration on both sides is plain JSON or Markdown, no rebuilding required for most middleware config changes (rebuild only if you add or remove files that need to be installed, or after code changes). The proxy's config files are read directly at startup, no build step at all.
+All runtime configuration on both sides is plain YAML, JSON or Markdown, no rebuilding required for most middleware config changes (rebuild only if you add or remove files that need to be installed, or after code changes). The proxy's config files are read directly at startup, no build step at all.
 
-> Important: `colcon build` copies the middleware's JSON files into the `install/` folder rather than reading them live from `src/`. If you edit a middleware config or recipe file after building, you generally need to rebuild (`colcon build --packages-select kinova_interface`) or re-source, before the change takes effect on the next launch. If you're actively iterating, consider `colcon build --symlink-install` instead, it links the install folder back to your source files so edits show up immediately.
+> Important: `colcon build` copies the middleware's config files into the `install/` folder rather than reading them live from `src/`. If you edit a middleware config or recipe file after building, you generally need to rebuild (`colcon build --packages-select kinova_interface`) or re-source, before the change takes effect on the next launch. If you're actively iterating, consider `colcon build --symlink-install` instead, it links the install folder back to your source files so edits show up immediately.
 
-## The object dictionary (middleware)
+## Workspace objects: objects and obstacles (middleware)
 
-**File:** `kinova_interface/data/configs/env/object_dictionary.json`
+**File:** `kinova_interface/data/configs/env/workspace_objects.yaml`
 
-This maps a plain-English object name to a full pose and shape, in meters, relative to the robot's `base_link` frame, that `move_arm`, `pickup`, and `dropoff` steps resolve against. `position` is the object's center point. `shape.dimensions` follows the ROS 2 `SolidPrimitive` convention: `[x, y, z]` for a `BOX`, `[height, radius]` for a `CYLINDER` or `CONE`, `[radius]` for a `SPHERE`.
+Everything around the arm, as poses and shapes in metres relative to the robot's `base_link` frame. It has two sections:
 
-```json
-{
-  "red_cube": {
-    "pose": {
-      "position": { "x": -0.3255, "y": -0.1235, "z": 0.01 },
-      "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
-    },
-    "shape": { "type": "BOX", "dimensions": [0.05, 0.05, 0.05] }
-  },
-  "delivery_tray": {
-    "pose": {
-      "position": { "x": -0.235, "y": -0.425, "z": 0.001 },
-      "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 1.57 }
-    },
-    "shape": { "type": "BOX", "dimensions": [0.30, 0.20, 0.03] }
-  }
-}
+- `objects`: things recipes can name. `move_arm`, `pickup`, `dropoff` and the other actions resolve their targets here, and this is the list the proxy hands the LLM as "objects you're allowed to reference".
+- `obstacles`: collision only. MoveIt plans around them, but recipes can't name them. An obstacle called `table` also gives the proxy the table's bounds.
+
+```yaml
+objects:
+  red_cube:
+    pose:
+      position: {x: -0.3255, y: -0.1235, z: 0.01}
+      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+    shape: {type: BOX, dimensions: [0.05, 0.05, 0.05]}
+
+obstacles:
+  table:
+    pose:
+      position: {x: 0.0, y: 0.0, z: -0.075}
+      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+    shape: {type: BOX, dimensions: [1.4, 1.4, 0.05]}
 ```
 
-To add a new named object, add a new top-level key with `pose` and `shape`. Keys are looked up exactly as written (case-sensitive, no fuzzy matching), and this is also the exact list the proxy asks for and hands to the LLM as "objects you're allowed to reference," so anything you add here becomes something you can immediately ask the robot for in plain English. `dropoff`'s stacking-height calculation (see below) depends on `shape` being accurate, not just `position`.
+- `position` is the shape's centre point.
+- `orientation` is required for every entry: either all of `roll`/`pitch`/`yaw` (radians) or all of `x`/`y`/`z`/`w`. If it's missing or incomplete, the environment mapping node logs a fatal error naming the entry and exits at startup, rather than quietly assuming an orientation.
+- `shape.dimensions` follows the ROS 2 `SolidPrimitive` convention: `[x, y, z]` for a `BOX`, `[height, radius]` for a `CYLINDER` or `CONE`, `[radius]` for a `SPHERE`. Pickup and dropoff work from the shape, so keep it accurate, not just the position.
 
-`pose.orientation` is required for every object (and every obstacle): either all of `roll`/`pitch`/`yaw` (radians) or all of `x`/`y`/`z`/`w`. If it's missing or incomplete, the environment mapping node logs a fatal error naming the object and exits at startup, rather than quietly assuming an orientation.
+Names are looked up exactly as written (case-sensitive). With the vision node running, its detections are added to `objects` live; leave anything it detects out of this file, or the configured copy will sit where it was measured.
 
-Right now this file is maintained entirely by hand. Every object pose and shape the arm can reach for has to be measured and typed in here yourself. Automatically populating this file (or feeding coordinates in some equivalent way) using computer vision, so the system can detect where an object actually is instead of relying on a pre-typed coordinate, is the direction planned for later this semester, but it is not implemented anywhere in either repository yet.
+If you get `PLANNING_FAILED` or `GOAL_IN_COLLISION` on a target that should be reachable, check whether an obstacle overlaps it.
 
-## Orientation presets (middleware)
+## Movements and orientations (middleware)
 
-**File:** `kinova_interface/data/configs/env/orientation_presets.json`
+**File:** `kinova_interface/data/configs/env/movements_and_orientations.yaml`
 
-Named gripper orientations that `move_arm` and `pickup` steps can use through their `orientation` parameter, so the LLM picks a name instead of making up angles. Each one is roll/pitch/yaw in radians, for `tool_frame` relative to `base_link`:
+Named moves, so the LLM picks a name instead of making up numbers.
 
-```json
-{
-  "top_down": { "roll": 3.141593, "pitch": 0.0, "yaw": 1.570796 },
-  "top_down_90": { "roll": 3.141593, "pitch": 0.0, "yaw": 0.0 },
-  "side_level": { "roll": 1.570796, "pitch": 0.0, "yaw": 1.570796 }
-}
+```yaml
+relative_movements:
+  move_upwards:   {x: 0.0, y: 0.0, z: 0.1}
+  move_left:      {x: 0.0, y: 0.1, z: 0.0}
+  move_right:     {x: 0.0, y: -0.1, z: 0.0}
+
+orientations:
+  top_down:    {roll: 3.141593, pitch: 0.0, yaw: 1.570796}
+  top_down_90: {roll: 3.141593, pitch: 0.0, yaw: 0.0}
+  side_level:  {roll: 1.570796, pitch: 0.0, yaw: 1.570796}
 ```
+
+`relative_movements` are offsets in metres, in `base_link`, added to the gripper's current position (read live from TF) by `relative_move` steps. Directions are the robot's own: forward is +X, left is +Y, up is +Z. This differs from `dropoff`'s `direction`, which is relative to the spot's bearing from the base.
+
+`orientations` are `tool_frame` roll/pitch/yaw in radians, in `base_link`, used by the `orientation` parameter of `move_arm` and `pickup`:
 
 | Preset | Gripper points | Fingers close along |
 |---|---|---|
@@ -59,59 +69,24 @@ Named gripper orientations that `move_arm` and `pickup` steps can use through th
 
 The gripper convention behind these: the fingers point along `tool_frame` +Z and close along `tool_frame` X. The values are derived from that with `utils/geometry.orientation_from_axes`, and `test_orientation_presets_match_their_axes` fails if the file drifts from what the names say. When adding a preset, add its axes to that test too.
 
-Every arm move is planned with Pilz PTP first, which gives the same motion every time and collision-checks it. If PTP can't plan (e.g. its direct path would collide), the move is re-planned with OMPL RRT*, which routes around obstacles. Pilz needs a full target pose, so a move with no orientation goes straight to RRT*. The hardware interface client logs which planner was used.
+Both files are read at startup (`workspace_objects.yaml` again on `/reset_environment`), so restart after editing them.
+
+## Motion settings: arm, pickup and dropoff (middleware)
+
+**File:** `kinova_interface/data/configs/motion_settings.yaml`
+
+ROS parameters that launch passes to `kinova_hardware_client` and `json_parser_node`. Every value is required; a missing one stops the node at startup. Write decimals (`30.0`, not `30`).
+
+- `hardware.*`: the hardware interface client, used by `home`, `move_arm`, `relative_move`, the gripper and running planned trajectories. Timeouts, RRT\* planning time, goal tolerance and the home joint positions. Read at startup. `json_parser_node` also reads the two timeouts, so its own calls to the client always wait longer than the client does.
+- `grasping.*`: `pickup` and `dropoff`. Speed, planner fallbacks, goal tolerances, the Cartesian-path fallback, grasp geometry, and `dropoff`'s default and maximum `place_offset`. Read at each pickup or dropoff, so `ros2 param set /json_parser_node grasping.<name> <value>` applies from the next one.
+
+Every arm move is planned with Pilz first (PTP for free moves, LIN for straight lines), which gives the same motion every time and collision-checks it. If Pilz can't plan, free moves fall back to OMPL RRT\*, which routes around obstacles, and straight lines fall back to MoveIt's Cartesian path. The logs say which planner was used.
 
 ## MoveIt joint limits (middleware)
 
 **File:** `kinova_interface/data/configs/moveit/joint_limits.yaml`
 
 `launch/robot.launch.py` starts `move_group` the same way `kinova_gen3_lite_moveit_config`'s own `move_group.launch.py` does, except that it loads this file instead of that package's `joint_limits.yaml`. The only difference is that acceleration limits are enabled (1.0 rad/s² per joint, which MoveIt already assumed for joints without a limit), because the Pilz planner refuses to plan without them.
-## Relative movements (middleware)
-
-**File:** `kinova_interface/data/configs/env/relative_movement.json`
-
-Named vectors used by `relative_move` steps, added to the arm's current position (read live via TF, not the coordinate dictionary) at execution time:
-
-```json
-{
-  "move_upwards": { "x": 0.0, "y": 0.0, "z": 0.1 },
-  "thrust_forward": { "x": 0.1, "y": 0.0, "z": 0.0 },
-  "retreat": { "x": -0.1, "y": 0.0, "z": 0.0 }
-}
-```
-
-Add new named vectors the same way: new top-level key, `x`/`y`/`z` in meters. These are offsets, not absolute positions.
-
-## Obstacles (middleware)
-
-**File:** `kinova_interface/data/configs/env/obstacles.json`
-
-Defines static collision boxes that get published into MoveIt's planning scene at startup, so MoveIt refuses to plan a path through them. Same `pose`/`shape` structure as the object dictionary above, keyed by id:
-
-```json
-{
-  "table": {
-    "pose": {
-      "position": {"x": 0.0, "y": 0.0, "z": -0.05},
-      "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
-    },
-    "shape": { "type": "BOX", "dimensions": [1.2, 0.8, 0.05] }
-  },
-  "small_wall": {
-    "pose": {
-      "position": {"x": -0.1665, "y": -0.0855, "z": 0.052},
-      "orientation": { "roll": 0.0, "pitch": 0.0, "yaw": 0.0 }
-    },
-    "shape": { "type": "BOX", "dimensions": [0.03, 0.3, 0.2] }
-  }
-}
-```
-
-- `shape.type` uses the ROS 2 `SolidPrimitive` type names (`BOX` is what this file currently uses; dimensions for a box are `[length_x, width_y, height_z]` in meters).
-- `pose.position` is the box's center point, in the `base_link` frame.
-- Obstacles in this file are currently always axis-aligned (identity orientation).
-
-If you get mysterious `PLANNING_FAILED` or `GOAL_IN_COLLISION` errors on a target that should be reachable, check whether an obstacle box overlaps your target coordinate.
 
 ## Recipes and the action contract (middleware)
 
@@ -141,8 +116,8 @@ Steps execute strictly in array order, one at a time, and execution stops immedi
 | `action` | Required `parameters` | Optional `parameters` | What happens |
 |---|---|---|---|
 | `"home"` | (none) | `speed` | Sends the arm to a fixed joint-space home pose |
-| `"move_arm"` | `"target": "<object_name>"` | `orientation`, `speed` | Looks up `<object_name>` in the object dictionary, moves there |
-| `"relative_move"` | `"vector": "<movement_name>"` | `speed` | Looks up `<movement_name>` in the relative-movements file, moves the arm by that offset from wherever it currently is |
+| `"move_arm"` | `"target": "<object_name>"` | `orientation`, `speed` | Looks up `<object_name>` in the scene's objects, moves there |
+| `"relative_move"` | `"vector": "<movement_name>"` | `speed` | Looks up `<movement_name>` in `movements_and_orientations.yaml`, moves the arm by that offset from wherever it currently is |
 | `"gripper"` | `"position": <number>` | (none) | Sends the gripper to that position |
 | `"pickup"` | `"target": "<object_name>"` | `open_position`, `close_position`, `grasp_style`, `orientation`, `grasp_offset` | Puts back any other held object first, then opens the gripper, moves to the object, closes the gripper, attaches the object in the planning scene. `grasp_style: "side"` computes and IK-verifies a level side grasp (needed by `pour`/`thrust`) |
 | `"dropoff"` | (none) | `target`, `destination`, `direction` + `distance`, `place_offset` | Places the held object with the grasp it was picked up with: hover above the spot, straight down to just above the surface, open, then back away along the approach. The spot is the centre of `destination`'s top, or where the object was picked up if there's no `destination`. See below. |
@@ -153,11 +128,11 @@ Steps execute strictly in array order, one at a time, and execution stops immedi
 
 > This repo's older top-level docs described the whitelist as `move_arm`, `move_gripper`, `relative_move`, `home_arm`, and missed `pickup`/`dropoff` entirely. Those old names do not appear anywhere in the actual parsing code, or in the proxy's schema. Use the ten values above.
 
-**`orientation` (optional, `move_arm` and `pickup`):** a preset name from `orientation_presets.json`, resolved via `/get_orientation_preset`, never raw angles, that's a deliberate anti-hallucination choice so the LLM never has to produce numeric roll/pitch/yaw itself. It's the absolute target orientation. If omitted, the move happens with no orientation constraint and MoveIt picks whatever orientation it wants. `relative_move` is a pure translation and ignores `orientation` (with a warning in the log).
+**`orientation` (optional, `move_arm` and `pickup`):** a preset name from `movements_and_orientations.yaml`'s `orientations`, resolved via `/get_orientation_preset`, never raw angles, that's a deliberate anti-hallucination choice so the LLM never has to produce numeric roll/pitch/yaw itself. It's the absolute target orientation. If omitted, the move happens with no orientation constraint and MoveIt picks whatever orientation it wants. `relative_move` is a pure translation and ignores `orientation` (with a warning in the log).
 
 **`speed` (optional, `home`, `move_arm`, `relative_move`):** a float from `0.0` to `1.0`, used as both MoveIt's velocity and acceleration scaling factor for that move. Omit it, or use `0.0`, for full speed.
 
-**`dropoff`'s spot and hover:** `direction` + `distance` shift the spot relative to its bearing from the arm's base: `forward` is further from the arm, `backward` closer, `left`/`right` sideways. With a `destination`, the shifted spot must still be on top of it. `place_offset` (default `0.05` m, at most `0.1` m) is how high above the release pose the arm hovers before the straight descent; the object is always released `place_clearance` (grasping.yaml) above the surface. If `target` is omitted, it defaults to the held object.
+**`dropoff`'s spot and hover:** `direction` + `distance` shift the spot relative to its bearing from the arm's base: `forward` is further from the arm, `backward` closer, `left`/`right` sideways. With a `destination`, the shifted spot must still be on top of it. `place_offset` (default `grasping.default_place_offset`, at most `grasping.max_place_offset` in `motion_settings.yaml`) is how high above the release pose the arm hovers before the straight descent; the object is always released `grasping.place_clearance` above the surface. If `target` is omitted, it defaults to the held object.
 
 ## Configuring the LLM provider (proxy)
 

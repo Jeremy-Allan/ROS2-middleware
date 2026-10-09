@@ -109,8 +109,14 @@ class ArmActions:
             'throw': partial(throw.run, self),
         }
 
+        # Wait longer than the hardware client does: an arm move can be planned twice, each up to action_timeout.
+        node.declare_parameter('hardware.action_timeout', Parameter.Type.DOUBLE)
+        node.declare_parameter('hardware.gripper_timeout', Parameter.Type.DOUBLE)
+        self.arm_call_timeout = 2 * node.get_parameter('hardware.action_timeout').value + 5.0
+        self.gripper_call_timeout = node.get_parameter('hardware.gripper_timeout').value + 5.0
+
         # Pickup and dropoff plan with MoveIt and run trajectories through the hardware interface
-        self.motion = Motion(node)
+        self.motion = Motion(node, execute_timeout_margin=self.arm_call_timeout)
 
         # Name of the object in the gripper, or None. Set by pickup, cleared by dropoff.
         self.held_object = None
@@ -119,26 +125,11 @@ class ArmActions:
         # The recipe steps after the one running now, as (step number, step), so pickup can see what the grasp is for
         self.upcoming_steps = []
 
-        # Grasp settings from data/configs/grasping.yaml, which launch passes in as parameters.
+        # Grasp settings from data/configs/motion_settings.yaml, which launch passes in as parameters.
         # One at a time: Humble's declare_parameters(namespace, ...) misses the file's values.
         for key in CONFIG_KEYS:
             node.declare_parameter(f'grasping.{key}', Parameter.Type.DOUBLE)
         self.grasp_config  # raises now, not at the first pickup, if a value is missing
-
-    # Client-side wait_for_future timeouts for the real arm-moving calls
-    # below (home/move/relative_move/joint_move) - must exceed
-    # HardwareInterfaceClient.ACTION_TIMEOUT_SEC (30.0s), since that's how
-    # long the server itself can legitimately block before responding
-    # while a real trajectory executes. wait_for_future's own 10.0s
-    # default is far too short for this on real hardware (fine on fake
-    # hardware, where moves complete near-instantly) - using it here
-    # was reporting a false "timed out/no response" failure for any real
-    # move that legitimately took longer than 10s, even ones that would
-    # have gone on to succeed a few seconds later. A move can now be tried twice
-    # if Pilz PTP fails by using RRT* as a backup planner.
-    _ARM_ACTION_TIMEOUT_SEC = 65.0
-    # Same idea, matching HardwareInterfaceClient.GRIPPER_TIMEOUT_SEC (10.0s).
-    _GRIPPER_ACTION_TIMEOUT_SEC = 15.0
 
     @property
     def grasp_config(self):
@@ -502,7 +493,7 @@ class ArmActions:
     def call_home_service(self, motion_params=None):
         req = HomeArm.Request()
         req.motion_params = motion_params if motion_params is not None else MotionParams()
-        response = call_service(self.home_client, req, '/kinova_hardware_client/home_arm', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.home_client, req, '/kinova_hardware_client/home_arm', self.get_logger(), timeout_sec=self.arm_call_timeout)
 
         return self._service_result(response)
 
@@ -517,7 +508,7 @@ class ArmActions:
         req.yaw = yaw
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
-        response = call_service(self.move_arm_client, req, '/kinova_hardware_client/move_arm', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.move_arm_client, req, '/kinova_hardware_client/move_arm', self.get_logger(), timeout_sec=self.arm_call_timeout)
 
         return self._service_result(response)
 
@@ -531,14 +522,14 @@ class ArmActions:
         req.yaw_delta = yaw_delta
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
-        response = call_service(self.relative_move_client, req, '/kinova_hardware_client/relative_move', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.relative_move_client, req, '/kinova_hardware_client/relative_move', self.get_logger(), timeout_sec=self.arm_call_timeout)
 
         return self._service_result(response)
 
     def call_move_gripper_service(self, position):
         req = MoveGripper.Request()
         req.position = position
-        response = call_service(self.move_gripper_client, req, '/kinova_hardware_client/move_gripper', self.get_logger(), timeout_sec=self._GRIPPER_ACTION_TIMEOUT_SEC)
+        response = call_service(self.move_gripper_client, req, '/kinova_hardware_client/move_gripper', self.get_logger(), timeout_sec=self.gripper_call_timeout)
 
         return self._service_result(response)
 
@@ -554,7 +545,7 @@ class ArmActions:
         req.relative = relative
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
-        response = call_service(self.joint_move_client, req, '/kinova_hardware_client/joint_move', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.joint_move_client, req, '/kinova_hardware_client/joint_move', self.get_logger(), timeout_sec=self.arm_call_timeout)
         result = self._service_result(response)
         result['error_code'] = response.error_code.val if response else 0
         return result

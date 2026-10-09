@@ -1,5 +1,6 @@
 import math
-import json
+
+import yaml
 
 import pytest
 
@@ -37,40 +38,30 @@ def node(ros_context, tmp_path):
     ), \
     patch.object(
         EnvironmentMappingNode,
-        "load_object_dictionary",
-        return_value={
-            "cube": {
-                "pose": {
-                    "position": {"x": 1.0, "y": 2.0, "z": 3.0},
-                    "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
-                },
-                "shape": {
-                    "type": "BOX",
-                    "dimensions": [1.0, 2.0, 0.5]
+        "load_scene_section",
+        side_effect=lambda section: {
+            "objects": {
+                "cube": {
+                    "pose": {
+                        "position": {"x": 1.0, "y": 2.0, "z": 3.0},
+                        "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
+                    },
+                    "shape": {
+                        "type": "BOX",
+                        "dimensions": [1.0, 2.0, 0.5]
+                    }
                 }
-            }
-        }
+            },
+            "obstacles": {},
+        }[section]
     ), \
     patch.object(
         EnvironmentMappingNode,
-        "load_relative_movements",
-        return_value={
-            "forward": {
-                "x": 0.1,
-                "y": 0.0,
-                "z": 0.0
-            }
-        }
-    ), \
-    patch.object(
-        EnvironmentMappingNode,
-        "load_obstacles_dictionary",
-        return_value={}
-    ), \
-    patch.object(
-        EnvironmentMappingNode,
-        "load_orientation_presets",
-        return_value={}
+        "load_config_section",
+        side_effect=lambda file_name, section: {
+            "relative_movements": {"forward": {"x": 0.1, "y": 0.0, "z": 0.0}},
+            "orientations": {},
+        }[section]
     ), \
     patch.object(
         EnvironmentMappingNode,
@@ -124,8 +115,8 @@ def test_publish_status(node):
     assert msg.last_command_valid is True
 
 
-# load_object_dictionary()
-def test_load_object_dictionary(node, tmp_path):
+# load_scene_section()
+def test_load_scene_objects(node, tmp_path):
 
     data = {
         "cube": {
@@ -140,27 +131,25 @@ def test_load_object_dictionary(node, tmp_path):
         }
     }
 
-    file_path = tmp_path / "object_dictionary.json"
-    file_path.write_text(json.dumps(data))
+    (tmp_path / "workspace_objects.yaml").write_text(yaml.safe_dump({"objects": data}))
 
     node.config_dir = str(tmp_path)
 
-    result = node.load_object_dictionary()
+    result = node.load_scene_section('objects')
 
     assert "cube" in result
     assert result["cube"]["pose"]["position"] == {"x": 1.0, "y": 2.0, "z": 3.0}
     assert result["cube"]["shape"]["type"] == "BOX"
 
 
-def test_load_object_dictionary_invalid_json(node, tmp_path):
+def test_load_scene_invalid_yaml(node, tmp_path):
 
-    file_path = tmp_path / "object_dictionary.json"
-    file_path.write_text("invalid json")
+    (tmp_path / "workspace_objects.yaml").write_text("objects: [unclosed")
 
     node.config_dir = str(tmp_path)
 
     with pytest.raises(SystemExit):
-        node.load_object_dictionary()
+        node.load_scene_section('objects')
 
 
 # parse_object_data(): orientation is required
@@ -200,7 +189,7 @@ def test_parse_object_data_errors_without_full_orientation(node, orientation):
         node.parse_object_data("cube", _object(orientation))
 
 
-# load_relative_movements()
+# load_config_section()
 def test_load_relative_movements(node, tmp_path):
 
     data = {
@@ -211,29 +200,26 @@ def test_load_relative_movements(node, tmp_path):
         }
     }
 
-    file_path = tmp_path / "relative_movement.json"
-    file_path.write_text(json.dumps(data))
+    (tmp_path / "movements_and_orientations.yaml").write_text(yaml.safe_dump({"relative_movements": data}))
 
     node.config_dir = str(tmp_path)
 
-    result = node.load_relative_movements()
+    result = node.load_config_section('movements_and_orientations.yaml', 'relative_movements')
 
     assert result == data
 
 
-def test_load_relative_movements_invalid_json(node, tmp_path):
+def test_load_relative_movements_not_a_section(node, tmp_path):
 
-    file_path = tmp_path / "relative_movement.json"
-    file_path.write_text("invalid json")
+    (tmp_path / "movements_and_orientations.yaml").write_text("relative_movements: just text")
 
     node.config_dir = str(tmp_path)
 
     with pytest.raises(SystemExit):
-        node.load_relative_movements()
+        node.load_config_section('movements_and_orientations.yaml', 'relative_movements')
 
 
-# load_obstacles_dictionary()
-def test_load_obstacles_dictionary(node, tmp_path):
+def test_load_scene_obstacles(node, tmp_path):
 
     obstacles = {
         "table": {
@@ -249,21 +235,20 @@ def test_load_obstacles_dictionary(node, tmp_path):
     }
 
     node.config_dir = str(tmp_path)
-    (tmp_path / "obstacles.json").write_text(json.dumps(obstacles))
+    (tmp_path / "workspace_objects.yaml").write_text(yaml.safe_dump({"objects": {}, "obstacles": obstacles}))
 
-    result = node.load_obstacles_dictionary()
+    result = node.load_scene_section('obstacles')
 
     assert "table" in result
     assert result["table"]["pose"]["position"] == {"x": 1.0, "y": 2.0, "z": 0.25}
 
 
-def test_load_obstacles_dictionary_invalid_json(node, tmp_path):
+def test_load_scene_missing_file(node, tmp_path):
 
     node.config_dir = str(tmp_path)
-    (tmp_path / "obstacles.json").write_text("invalid json")
 
     with pytest.raises(SystemExit):
-        node.load_obstacles_dictionary()
+        node.load_scene_section('obstacles')
 
 # get_coordinates_callback()
 def test_get_coordinates_callback_found(node):
@@ -561,8 +546,8 @@ def test_reset_environment_callback_success():
     class FakeNode:
         static_objects = {"box": {}}
         obstacles = {"table": {}}
-        load_object_dictionary = MagicMock(return_value={"box": {}, "blue_cube": {}})
-        load_obstacles_dictionary = MagicMock(return_value={"table": {}})
+        load_scene_section = MagicMock(side_effect=lambda section: {
+            "objects": {"box": {}, "blue_cube": {}}, "obstacles": {"table": {}}}[section])
         apply_full_scene = MagicMock(return_value=True)
         command_success = None
         status_text = None
@@ -576,8 +561,7 @@ def test_reset_environment_callback_success():
 
     assert result.success is True
     assert "2 object(s), 1 obstacle(s)" in result.message
-    FakeNode.load_object_dictionary.assert_called_once()
-    FakeNode.load_obstacles_dictionary.assert_called_once()
+    assert [call.args for call in FakeNode.load_scene_section.call_args_list] == [("objects",), ("obstacles",)]
     FakeNode.apply_full_scene.assert_called_once()
     assert FakeNode.command_success is True
 
@@ -588,8 +572,7 @@ def test_reset_environment_callback_scene_apply_failure():
     class FakeNode:
         static_objects = {}
         obstacles = {}
-        load_object_dictionary = MagicMock(return_value={})
-        load_obstacles_dictionary = MagicMock(return_value={})
+        load_scene_section = MagicMock(return_value={})
         apply_full_scene = MagicMock(return_value=False)
         command_success = None
         status_text = None

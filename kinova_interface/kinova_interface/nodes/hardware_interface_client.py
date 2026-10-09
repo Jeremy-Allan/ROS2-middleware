@@ -1,5 +1,6 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
@@ -27,19 +28,8 @@ from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES, BE
 
 
 class HardwareInterfaceClient(Node):
-    ACTION_TIMEOUT_SEC = 30.0
-    GRIPPER_TIMEOUT_SEC = 10.0
-    SERVER_WAIT_TIMEOUT_SEC = 5.0
     PLANNING_GROUP = 'arm'
-    ALLOWED_PLANNING_TIME_SEC = 10.0
-    SPHERE_TOLERANCE_RADIUS = 0.01
-
-    # Home's fixed joint configuration - also the base pose 'throw' starts
-    # its wind-up/fling from, reoriented at joint_1 to face the throw
-    # direction and offset at joint_3 (the elbow) for the swing.
-    HOME_JOINT_POSITIONS = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
-    HOME_JOINT_TOLERANCE = 0.01
-    # TODO: make these ^^ configurable
+    SERVER_WAIT_TIMEOUT_SEC = 5.0
 
     # A rejected/invalid goal (e.g. an unreachable combined joint state)
     # typically fails within milliseconds, well before a real motion could
@@ -52,12 +42,21 @@ class HardwareInterfaceClient(Node):
     # around obstacles), then fall back to OMPL RRT* if it can't plan.
     Planner = namedtuple('Planner', 'pipeline_id planner_id num_attempts label')
     PILZ_PTP = Planner('pilz_industrial_motion_planner', 'PTP', 4, 'Pilz PTP')
-    # 4 attempts = one parallel batch, so about ALLOWED_PLANNING_TIME_SEC total
+    # 4 attempts = one parallel batch, so about planning_time total
     RRT_STAR = Planner('ompl', 'RRTstarkConfigDefault', 4, 'OMPL RRT*')
 
     def __init__(self):
         super().__init__('kinova_hardware_client')
         self.get_logger().info('Kinova Hardware Client Online - Waiting for Service Requests...')
+
+        # Settings under 'hardware' in data/configs/motion_settings.yaml, which launch passes in. Read once at startup.
+        self.action_timeout = self._setting('action_timeout')
+        self.gripper_timeout = self._setting('gripper_timeout')
+        self.planning_time = self._setting('planning_time')
+        self.goal_tolerance = self._setting('goal_tolerance')
+        # Also the pose 'throw' winds up from
+        self.home_joint_positions = list(self._setting('home_joint_positions', Parameter.Type.DOUBLE_ARRAY))
+        self.home_joint_tolerance = self._setting('home_joint_tolerance')
 
         # Use a ReentrantCallbackGroup to allow service handlers and action callbacks to run concurrently
         self.callback_group = ReentrantCallbackGroup()
@@ -262,7 +261,7 @@ class HardwareInterfaceClient(Node):
             if wait:
                 self._await_action(
                     self.arm_movement_finished,
-                    self.ACTION_TIMEOUT_SEC,
+                    self.action_timeout,
                     'arm_action_successful',
                     'arm_action_message',
                     action_desc,
@@ -282,6 +281,11 @@ class HardwareInterfaceClient(Node):
             if self.arm_action_error_code not in BEFORE_MOTION_ERRORS:
                 return False
         return False
+
+    def _setting(self, name, parameter_type=Parameter.Type.DOUBLE):
+        """A value under 'hardware' in motion_settings.yaml. Raises at startup if it's missing."""
+        self.declare_parameter(f'hardware.{name}', parameter_type)
+        return self.get_parameter(f'hardware.{name}').value
 
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
@@ -372,7 +376,7 @@ class HardwareInterfaceClient(Node):
         self._dispatch_arm_goal(goal, self.execute_client)
         self._await_action(
             self.arm_movement_finished,
-            duration + self.ACTION_TIMEOUT_SEC,
+            duration + self.action_timeout,
             'arm_action_successful',
             'arm_action_message',
             "Trajectory execution",
@@ -476,7 +480,7 @@ class HardwareInterfaceClient(Node):
         if self.move_gripper(pos):
             self._await_action(
                 self.gripper_movement_finished,
-                self.GRIPPER_TIMEOUT_SEC,
+                self.gripper_timeout,
                 'gripper_action_successful',
                 'gripper_action_message',
                 f"Gripper movement to {pos}",
@@ -513,7 +517,7 @@ class HardwareInterfaceClient(Node):
         request.pipeline_id = planner.pipeline_id
         request.planner_id = planner.planner_id
         request.num_planning_attempts = planner.num_attempts
-        request.allowed_planning_time = self.ALLOWED_PLANNING_TIME_SEC
+        request.allowed_planning_time = self.planning_time
 
         if motion_params is not None:
             velocity_scale, acceleration_scale = self.clamp_motion_params(motion_params)
@@ -542,7 +546,7 @@ class HardwareInterfaceClient(Node):
 
         sphere = SolidPrimitive()
         sphere.type = SolidPrimitive.SPHERE
-        sphere.dimensions = [self.SPHERE_TOLERANCE_RADIUS]
+        sphere.dimensions = [self.goal_tolerance]
 
         target_pose = Pose()
         target_pose.position.x = float(x)
@@ -575,7 +579,7 @@ class HardwareInterfaceClient(Node):
         return self._dispatch_arm_goal(goal_msg)
 
     def send_home_goal(self, planner, motion_params=None):
-        return self.send_joint_goal(self.HOME_JOINT_POSITIONS, motion_params=motion_params, planner=planner)
+        return self.send_joint_goal(self.home_joint_positions, motion_params=motion_params, planner=planner)
 
     def send_joint_goal(self, joint_positions, planner, motion_params=None):
         """Plan and execute a move to an absolute target for each of
@@ -592,8 +596,8 @@ class HardwareInterfaceClient(Node):
             jc = JointConstraint()
             jc.joint_name = name
             jc.position = pos
-            jc.tolerance_above = self.HOME_JOINT_TOLERANCE
-            jc.tolerance_below = self.HOME_JOINT_TOLERANCE
+            jc.tolerance_above = self.home_joint_tolerance
+            jc.tolerance_below = self.home_joint_tolerance
             jc.weight = 1.0
             constraints.append(jc)
 

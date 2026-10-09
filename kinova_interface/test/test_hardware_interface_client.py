@@ -322,7 +322,7 @@ def test_send_home_goal_matches_send_joint_goal_defaults(node):
     goal = node.arm_client.send_goal_async.call_args[0][0]
     positions = [jc.position for jc in goal.request.goal_constraints[0].joint_constraints]
 
-    assert positions == node.HOME_JOINT_POSITIONS
+    assert positions == node.home_joint_positions
 
 
 def test_handle_joint_move_waits_by_default(node):
@@ -1276,7 +1276,7 @@ def test_handle_execute_trajectory_runs_it_through_moveit_execute_trajectory(nod
     assert client is node.execute_client
     assert goal.trajectory == request.trajectory
     # Waits for the trajectory itself plus the usual margin
-    assert node.arm_movement_finished.wait.call_args.kwargs["timeout"] == 2 + node.ACTION_TIMEOUT_SEC
+    assert node.arm_movement_finished.wait.call_args.kwargs["timeout"] == 2 + node.action_timeout
 
 
 def test_handle_execute_trajectory_reports_the_moveit_error(node):

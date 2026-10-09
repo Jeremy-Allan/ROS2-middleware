@@ -36,16 +36,9 @@ RRT_STAR = 'RRTstarkConfigDefault'
 PILZ_PLANNING_TIME = 1.0        # s, Pilz answers in milliseconds
 FALLBACK_ATTEMPTS = 4           # parallel RRT* runs, kept to one batch so it takes fallback_planning_time
 
-# Goal tolerances for RRT* (pymoveit2's defaults). Pilz always goes to the exact pose.
-POSITION_TOLERANCE = 0.001      # m
-ORIENTATION_TOLERANCE = 0.001   # rad, per axis
-
-CARTESIAN_STEP = 0.0025         # m between /compute_cartesian_path waypoints
-MAX_JOINT_JUMP = 0.5            # rad between those waypoints, more means the wrist would flip
 MIN_CARTESIAN_FRACTION = 0.999  # a straight line only counts if all of it was planned
 
 EXECUTE_SERVICE = '/kinova_hardware_client/execute_trajectory'
-EXECUTE_TIMEOUT_MARGIN = 70.0   # s on top of the trajectory's own length, the hardware client waits up to 30 s past it
 
 
 class MotionUnavailable(Exception):
@@ -94,14 +87,15 @@ def _pose(position, rotation: Rotation) -> Pose:
     return pose
 
 
-def _pose_goal(position, rotation: Rotation) -> Constraints:
-    """tool_frame at the pose, as MoveIt goal constraints (a small sphere plus an orientation)."""
+def _pose_goal(position, rotation: Rotation, config: dict) -> Constraints:
+    """tool_frame at the pose, as MoveIt goal constraints (a small sphere plus an orientation).
+    Only RRT* uses the tolerances, Pilz always goes to the exact pose."""
     pose = _pose(position, rotation)
 
     position_constraint = PositionConstraint()
     position_constraint.header.frame_id = BASE_FRAME
     position_constraint.link_name = TOOL_FRAME
-    sphere = SolidPrimitive(type=SolidPrimitive.SPHERE, dimensions=[POSITION_TOLERANCE])
+    sphere = SolidPrimitive(type=SolidPrimitive.SPHERE, dimensions=[config['position_tolerance']])
     position_constraint.constraint_region.primitives.append(sphere)
     position_constraint.constraint_region.primitive_poses.append(Pose(position=pose.position))
     position_constraint.weight = 1.0
@@ -110,9 +104,9 @@ def _pose_goal(position, rotation: Rotation) -> Constraints:
     orientation_constraint.header.frame_id = BASE_FRAME
     orientation_constraint.link_name = TOOL_FRAME
     orientation_constraint.orientation = pose.orientation
-    orientation_constraint.absolute_x_axis_tolerance = ORIENTATION_TOLERANCE
-    orientation_constraint.absolute_y_axis_tolerance = ORIENTATION_TOLERANCE
-    orientation_constraint.absolute_z_axis_tolerance = ORIENTATION_TOLERANCE
+    orientation_constraint.absolute_x_axis_tolerance = config['orientation_tolerance']
+    orientation_constraint.absolute_y_axis_tolerance = config['orientation_tolerance']
+    orientation_constraint.absolute_z_axis_tolerance = config['orientation_tolerance']
     orientation_constraint.weight = 1.0
 
     return Constraints(position_constraints=[position_constraint], orientation_constraints=[orientation_constraint])
@@ -156,8 +150,10 @@ def slow_down(trajectory: RobotTrajectory, scale: float) -> RobotTrajectory:
 class Motion:
     """Plans and runs tool_frame moves for pickup and dropoff."""
 
-    def __init__(self, node):
+    def __init__(self, node, execute_timeout_margin: float):
         self.logger = node.get_logger()
+        # s past a trajectory's own length to wait for the hardware interface to run it
+        self.execute_timeout_margin = execute_timeout_margin
         self.plan_client = node.create_client(GetMotionPlan, '/plan_kinematic_path', callback_group=node.cb_group)
         self.cartesian_client = node.create_client(GetCartesianPath, '/compute_cartesian_path', callback_group=node.cb_group)
         self.execute_client = node.create_client(ExecuteTrajectory, EXECUTE_SERVICE, callback_group=node.cb_group)
@@ -232,7 +228,7 @@ class Motion:
         workspace.min_corner.x = workspace.min_corner.y = workspace.min_corner.z = -1.0
         workspace.max_corner.x = workspace.max_corner.y = workspace.max_corner.z = 1.0
         motion_request.start_state = start_state
-        motion_request.goal_constraints = [_pose_goal(position, rotation)]
+        motion_request.goal_constraints = [_pose_goal(position, rotation, config)]
         if path_constraints is not None:
             motion_request.path_constraints = path_constraints
 
@@ -254,9 +250,9 @@ class Motion:
         request.group_name = PLANNING_GROUP
         request.link_name = TOOL_FRAME
         request.waypoints = [_pose(position, rotation)]
-        request.max_step = CARTESIAN_STEP
+        request.max_step = config['cartesian_step']
         request.jump_threshold = 0.0  # use the absolute one below
-        request.revolute_jump_threshold = MAX_JOINT_JUMP
+        request.revolute_jump_threshold = config['max_joint_jump']
         request.avoid_collisions = True
 
         response = call_service(self.cartesian_client, request, '/compute_cartesian_path', self.logger)
@@ -347,7 +343,7 @@ class Motion:
         request = ExecuteTrajectory.Request()
         request.trajectory = plan.trajectory
         response = call_service(self.execute_client, request, EXECUTE_SERVICE, self.logger,
-                                timeout_sec=plan.duration + EXECUTE_TIMEOUT_MARGIN)
+                                timeout_sec=plan.duration + self.execute_timeout_margin)
         if response is None:
             return False, 'no response from the hardware interface'
         return response.success, response.message

@@ -41,7 +41,7 @@ Watch for `[Step N] <description>` lines and a final `--- All Tasks Completed --
 
 **What it's for:** When a recipe asks for an orientation like `top_down`, you want to know two things: does the gripper really end up pointing that way, and from which spots on the table can it get there at all? `scripts/check_orientations.py` answers both in one run. Use it when:
 
-- you change `orientation_presets.json`, or the gripper convention behind it (fingers point along `tool_frame` +Z, close along X). If the presets or the convention are wrong, every move shows `BAD`.
+- you change the orientations in `movements_and_orientations.yaml`, or the gripper convention behind it (fingers point along `tool_frame` +Z, close along X). If the presets or the convention are wrong, every move shows `BAD`.
 - you move to a new table or robot setup and want to see which orientations still reach which positions.
 - you're choosing grasp orientations for an object and need to know what's reachable where it sits.
 

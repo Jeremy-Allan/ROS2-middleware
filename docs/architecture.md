@@ -40,9 +40,9 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 - Subscribes to `/fault_controller/is_faulted` to know instantly if the arm enters a hardware fault state.
 
 **`environment_mapping_node.py`, the read-mostly knowledge base:**
-- Loads `object_dictionary.json`, `relative_movement.json`, `orientation_presets.json`, and `obstacles.json` once at startup. No live file-watching; a config change needs a restart.
+- Loads `workspace_objects.yaml` (objects and obstacles) and `movements_and_orientations.yaml` (relative movements and orientations) once at startup. No live file-watching; a config change needs a restart.
 - Exposes `/get_coordinates`, `/get_object_info`, `/get_relative_movement`, `/get_orientation_preset`, `/get_robot_parameters`, all pure lookups against the in-memory data.
-- Separately pushes every entry in `obstacles.json` into MoveIt's planning scene once `/apply_planning_scene` becomes available.
+- Separately pushes every obstacle in `workspace_objects.yaml` into MoveIt's planning scene once `/apply_planning_scene` becomes available.
 
 **`json_parser_node.py`, orchestration:**
 - Loads a recipe two ways: a static file via the `recipe` launch parameter, or a dynamic JSON string via the `/execute_recipe` service, which is exactly what the proxy calls at runtime.
@@ -114,7 +114,7 @@ ROS2-middleware/
   README.md
   docs/                          this documentation
   kinova_interface/
-    data/configs/env/            object_dictionary.json, relative_movement.json, orientation_presets.json, obstacles.json
+    data/configs/env/            workspace_objects.yaml, movements_and_orientations.yaml
     kinova_interface/             the Python package
       nodes/                      the four ROS nodes (entry points)
       actions/                    one module per recipe action (pickup.py, pour.py, ...) + arm_actions.py, their shared service clients/helpers

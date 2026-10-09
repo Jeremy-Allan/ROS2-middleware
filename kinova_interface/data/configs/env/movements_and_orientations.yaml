@@ -1,0 +1,18 @@
+# Named moves recipes can use, so the LLM picks a name instead of making up numbers.
+
+# relative_move 'vector': added to the gripper's current position, in metres, in base_link.
+# Directions are the robot's own: forward is +X (out of its front), left is +Y.
+relative_movements:
+  move_upwards:   {x: 0.0, y: 0.0, z: 0.1}
+  move_downwards: {x: 0.0, y: 0.0, z: -0.1}
+  move_left:      {x: 0.0, y: 0.1, z: 0.0}
+  move_right:     {x: 0.0, y: -0.1, z: 0.0}
+  thrust_forward: {x: 0.1, y: 0.0, z: 0.0}
+  retreat:        {x: -0.1, y: 0.0, z: 0.0}
+
+# move_arm / pickup 'orientation': tool_frame roll/pitch/yaw in radians, in base_link.
+# test_orientation_presets_match_their_axes checks each one matches its name.
+orientations:
+  top_down:    {roll: 3.141593, pitch: 0.0, yaw: 1.570796}   # pointing down, fingers close along base Y
+  top_down_90: {roll: 3.141593, pitch: 0.0, yaw: 0.0}        # pointing down, fingers close along base X
+  side_level:  {roll: 1.570796, pitch: 0.0, yaw: 1.570796}   # pointing along base +X, level

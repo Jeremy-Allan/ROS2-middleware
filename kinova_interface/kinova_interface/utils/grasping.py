@@ -16,11 +16,12 @@ from shape_msgs.msg import SolidPrimitive
 from kinova_interface.utils.geometry import orientation_from_axes
 from kinova_interface.utils.robot import FINGERTIP_LENGTH, GRIPPER_MAX_OPENING, GRIPPER_OPEN
 
-# Settings under 'grasping' in data/configs/grasping.yaml, all doubles
+# Settings under 'grasping' in data/configs/motion_settings.yaml, all doubles
 CONFIG_KEYS = (
-    'velocity_scale', 'acceleration_scale', 'fallback_planning_time', 'upright_tolerance', 'yaw_step_deg', 'standoff', 'lift_height',
-    'top_grasp_depth', 'tip_clearance', 'tall_ratio', 'width_margin',
-    'min_width', 'place_clearance',
+    'velocity_scale', 'acceleration_scale', 'fallback_planning_time', 'upright_tolerance',
+    'position_tolerance', 'orientation_tolerance', 'cartesian_step', 'max_joint_jump',
+    'yaw_step_deg', 'standoff', 'lift_height', 'top_grasp_depth', 'tip_clearance', 'tall_ratio', 'width_margin',
+    'min_width', 'place_clearance', 'default_place_offset', 'max_place_offset',
 )
 
 # How steep an approach (tool_frame +Z) can be for each style, in base_link.

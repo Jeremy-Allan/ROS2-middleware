@@ -12,7 +12,7 @@ from kinova_interface.utils.grasping import (
     Y, Z, contains_xy, grasp_candidates, half_extent, place_candidates, preferred_style, rank, yaw_offsets,
 )
 
-GRASP_CONFIG = yaml.safe_load((Path(__file__).parent.parent / 'data' / 'configs' / 'grasping.yaml').read_text())['/**']['ros__parameters']['grasping']
+GRASP_CONFIG = yaml.safe_load((Path(__file__).parent.parent / 'data' / 'configs' / 'motion_settings.yaml').read_text())['/**']['ros__parameters']['grasping']
 
 BOTTLE = {'type': SolidPrimitive.CYLINDER, 'dimensions': [0.2, 0.03]}
 CUBE = {'type': SolidPrimitive.BOX, 'dimensions': [0.05, 0.05, 0.05]}
@@ -79,8 +79,8 @@ def test_too_wide_closing_is_rejected():
     candidates, rejected = grasp_candidates(_obj(long_box, z=0.025), GRASP_CONFIG)
 
     assert all(abs(_closing(c)[0]) < 1e-9 for c in candidates)  # never across the 0.2 m side
-    assert rejected[('top', 'too wide: 0.200 m > max 0.094')] == 2
-    assert rejected[('side', 'too wide: 0.200 m > max 0.094')] == 4
+    assert rejected[('top', 'too wide: 0.200 m > max 0.130')] == 2
+    assert rejected[('side', 'too wide: 0.200 m > max 0.130')] == 4
 
 
 def test_top_grasp_pads_sit_below_the_top():

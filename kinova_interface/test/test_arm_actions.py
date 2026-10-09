@@ -610,8 +610,8 @@ def test_pickup_failure_message_counts_reasons_per_style(actions):
 
     assert success is False
     assert message == ("No reachable grasp for 'box': "
-                       f"side 16 tried (4 too wide: 0.200 m > max 0.094; 12 {NO_PATH}), "
-                       f"top 4 tried (2 too wide: 0.200 m > max 0.094; 2 {NO_PATH})" + HOMED)
+                       f"side 16 tried (4 too wide: 0.200 m > max 0.130; 12 {NO_PATH}), "
+                       f"top 4 tried (2 too wide: 0.200 m > max 0.130; 2 {NO_PATH})" + HOMED)
     assert actions.motion.ran == []
 
 
