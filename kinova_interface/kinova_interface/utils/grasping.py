@@ -19,7 +19,7 @@ from kinova_interface.utils.robot import FINGERTIP_LENGTH, GRIPPER_MAX_OPENING, 
 # Settings under 'grasping' in data/configs/grasping.yaml, all doubles
 CONFIG_KEYS = (
     'velocity_scale', 'acceleration_scale', 'fallback_planning_time', 'yaw_step_deg', 'standoff', 'lift_height',
-    'top_grasp_depth', 'tip_clearance', 'tall_grip_height', 'tall_ratio', 'width_margin',
+    'top_grasp_depth', 'tip_clearance', 'tall_ratio', 'width_margin',
     'min_width', 'place_clearance',
 )
 
@@ -167,8 +167,7 @@ def grasp_candidates(target_info: dict, grasp_config: dict,
                 continue
             grasp = centre + a * (pad_z - centre[2]) / a[2]  # slide along the approach to that height
         else:
-            grasp = centre.copy()
-            grasp[2] = min(centre[2], floor_z + grasp_config['tall_grip_height'])
+            grasp = centre.copy()  # side: pads at the object's centre
 
         candidates.append(GraspCandidate(
             style=grasp_style,

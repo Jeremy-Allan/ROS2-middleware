@@ -106,13 +106,13 @@ def test_top_grasp_dropped_when_object_too_short():
     assert rejected[('top', 'too short: 0.020 m tall')] == 4
 
 
-def test_side_grasp_height_capped_for_tall_objects():
+def test_side_grasp_holds_the_object_at_its_centre():
     candidates, _ = grasp_candidates(_obj(BOTTLE, z=0.1), GRASP_CONFIG)
     side = [c for c in candidates if c.style == 'side']
 
     assert side
     for c in side:
-        assert c.grasp[2] == pytest.approx(GRASP_CONFIG['tall_grip_height'])
+        assert c.grasp == pytest.approx([0.4, 0.0, 0.1])
         assert abs(_approach(c)[2]) == pytest.approx(0.0, abs=1e-9)
 
 

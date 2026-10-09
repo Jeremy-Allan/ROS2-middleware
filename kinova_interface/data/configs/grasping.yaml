@@ -17,7 +17,6 @@
 
       top_grasp_depth: 0.02           # top grasp: how far below the object's top the fingers grip
       tip_clearance: 0.01             # top grasp: keep the fingertips at least this far above the bottom of the object
-      tall_grip_height: 0.06          # side grasp: grip tall objects no higher than this above their bottom
 
       tall_ratio: 2.0                 # 'auto' grasps from the side when the object is this many times taller than wide
       width_margin: 0.015             # skip grasps where the object is nearly as wide as the open gripper

@@ -20,7 +20,8 @@ from kinova_interface.utils.robot import GRIPPER_OPEN
 if TYPE_CHECKING:
     from kinova_interface.actions.arm_actions import ArmActions
 
-DEFAULT_PLACE_OFFSET = 0.1  # hover height above the release pose (m)
+DEFAULT_PLACE_OFFSET = 0.05  # hover height above the release pose (m)
+MAX_PLACE_OFFSET = 0.12  # higher hovers tend to be out of reach
 
 
 def _fmt(position) -> list[float]:
@@ -80,9 +81,12 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         if destination_name and not contains_xy(destination_info, *shifted_xy):
             return False, f"Release point is off '{destination_name}', try a smaller distance"
 
+    place_offset = float(params.get('place_offset', DEFAULT_PLACE_OFFSET))
+    if not 0.0 <= place_offset <= MAX_PLACE_OFFSET:
+        return False, f"place_offset must be between 0 and {MAX_PLACE_OFFSET} m, got {place_offset}"
+
     where = f"on '{destination_name}'" if destination_name else "back where it was"
     config = ctx.grasp_config
-    place_offset = float(params.get('place_offset', DEFAULT_PLACE_OFFSET))
     candidates = list(place_candidates(ctx.held_grasp, target_info['shape'], release_point, config, place_offset))
     log.info(f"Dropoff '{target_name}' {where}: bottom centre at {_fmt(release_point)}, "
              f"{np.hypot(release_point[0], release_point[1]):.3f} m from the base, {len(candidates)} yaw(s) to try")

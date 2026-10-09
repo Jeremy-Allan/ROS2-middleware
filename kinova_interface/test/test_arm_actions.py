@@ -927,7 +927,7 @@ def test_dropoff_plans_hover_free_then_straight_down_and_back(actions):
     (waypoints, _), = actions.motion.chains
     assert [(w.name, w.straight) for w in waypoints] == [('hover', False), ('release', True), ('back-off', True)]
     hover, release, back_off = (w.position for w in waypoints)
-    assert hover - release == pytest.approx([0, 0, 0.1])
+    assert hover - release == pytest.approx([0, 0, 0.05])  # default hover height
     assert back_off - release == pytest.approx([0, 0, actions.grasp_config['standoff']])  # top grasp backs out upwards
 
 
@@ -967,6 +967,15 @@ def test_dropoff_moves_by_direction_and_distance_but_stays_on_the_destination(ac
     assert success is False
     assert message == "Release point is off 'tray', try a smaller distance"
     assert actions.motion.ran == []
+
+
+def test_dropoff_rejects_a_hover_above_the_cap(actions):
+    _holding_cube_over_tray(actions)
+
+    success, message = actions.handlers['dropoff']({"destination": "tray", "place_offset": 0.2})
+
+    assert (success, message) == (False, "place_offset must be between 0 and 0.12 m, got 0.2")
+    assert actions.motion.chains == []
 
 
 def test_dropoff_direction_needs_a_distance(actions):
