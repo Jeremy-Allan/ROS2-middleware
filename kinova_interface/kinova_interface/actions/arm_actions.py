@@ -116,6 +116,8 @@ class ArmActions:
         self.held_object = None
         # How it's held (set by pickup), so dropoff can place it with the same grasp
         self.held_grasp = None
+        # The recipe steps after the one running now, as (step number, step), so pickup can see what the grasp is for
+        self.upcoming_steps = []
 
         # Grasp settings from data/configs/grasping.yaml, which launch passes in as parameters.
         # One at a time: Humble's declare_parameters(namespace, ...) misses the file's values.

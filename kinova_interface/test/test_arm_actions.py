@@ -531,7 +531,7 @@ class FakeMotion:
             reason = self.reject(waypoint)
             if reason:
                 return None, reason
-        return {w.name: SimpleNamespace(name=w.name, planner='Pilz') for w in waypoints}, None
+        return {waypoint.name: SimpleNamespace(name=waypoint.name, planner='Pilz') for waypoint in waypoints}, None
 
     def _run(self, name):
         self.ran.append(name)
@@ -577,7 +577,7 @@ def test_pickup_plans_the_whole_chain_before_moving(actions):
     actions.handlers['pickup']({"target": "cube"})
 
     (waypoints, _), = actions.motion.chains
-    assert [(w.name, w.straight) for w in waypoints] == [('pre-grasp', False), ('grasp', True), ('lift', True)]
+    assert [(waypoint.name, waypoint.straight) for waypoint in waypoints] == [('pre-grasp', False), ('grasp', True), ('lift', True)]
 
 
 def test_pickup_stores_object_pose_in_tool_frame(actions):
@@ -593,7 +593,7 @@ def test_pickup_stores_object_pose_in_tool_frame(actions):
 
 def test_pickup_tries_the_next_candidate_until_one_plans(actions):
     rejected = iter([NO_PATH, NO_PATH])
-    _mock_pickup(actions, motion=FakeMotion(reject=lambda w: next(rejected, None) if w.name == 'pre-grasp' else None))
+    _mock_pickup(actions, motion=FakeMotion(reject=lambda waypoint: next(rejected, None) if waypoint.name == 'pre-grasp' else None))
 
     success, _ = actions.handlers['pickup']({"target": "cube"})
 
@@ -604,7 +604,7 @@ def test_pickup_tries_the_next_candidate_until_one_plans(actions):
 
 def test_pickup_failure_message_counts_reasons_per_style(actions):
     long_box = {**CUBE_INFO, "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.2, 0.05, 0.05]}}
-    _mock_pickup(actions, info=long_box, motion=FakeMotion(reject=lambda w: NO_PATH))
+    _mock_pickup(actions, info=long_box, motion=FakeMotion(reject=lambda waypoint: NO_PATH))
 
     success, message = actions.handlers['pickup']({"target": "box"})
 
@@ -616,7 +616,7 @@ def test_pickup_failure_message_counts_reasons_per_style(actions):
 
 
 def test_pickup_forced_style_only_tries_and_reports_that_style(actions):
-    _mock_pickup(actions, motion=FakeMotion(reject=lambda w: NO_PATH))
+    _mock_pickup(actions, motion=FakeMotion(reject=lambda waypoint: NO_PATH))
 
     success, message = actions.handlers['pickup']({"target": "cube", "grasp_style": "top"})
 
@@ -668,7 +668,11 @@ def test_pickup_backs_off_to_pre_grasp_then_goes_home_if_grasping_fails(actions,
 def test_pickup_stays_put_if_backing_off_fails(actions):
     motion = FakeMotion(fail={'grasp': 'blocked'})
     # The first pre-grasp move runs its plan, backing off is the only move() to it
-    motion.move = lambda w, r, c: (False, 'stuck') if w.name == 'pre-grasp' else FakeMotion.move(motion, w, r, c)
+    def move(waypoint, rotation, config):
+        if waypoint.name == 'pre-grasp':
+            return False, 'stuck'
+        return FakeMotion.move(motion, waypoint, rotation, config)
+    motion.move = move
     _mock_pickup(actions, motion=motion)
 
     success, message = actions.handlers['pickup']({"target": "cube"})
@@ -700,7 +704,10 @@ def test_pickup_counts_as_held_if_only_the_lift_fails(actions):
 def test_pickup_allows_contact_with_what_the_object_stands_on_only_for_the_lift(actions):
     motion = FakeMotion(supports=['table'])
     lifting = []
-    motion.move = lambda w, r, c: lifting.append(list(motion.allowed)) or FakeMotion.move(motion, w, r, c)
+    def move(waypoint, rotation, config):
+        lifting.append(list(motion.allowed))  # what's allowed at the moment it moves
+        return FakeMotion.move(motion, waypoint, rotation, config)
+    motion.move = move
     _mock_pickup(actions, motion=motion)
 
     success, _ = actions.handlers['pickup']({"target": "cube"})
@@ -717,6 +724,52 @@ def test_pickup_restores_the_contact_check_even_if_the_lift_fails(actions):
 
     assert success is False
     assert actions.motion.allowed[-1] == ('cube', ['table'], False)
+
+
+def _then(*actions_after):
+    """upcoming_steps for a pickup at step 2 followed by these actions."""
+    return [(number, {"action": action, "parameters": {}}) for number, action in enumerate(actions_after, start=3)]
+
+
+def test_pickup_for_a_pour_grasps_from_the_side_and_keeps_it_upright(actions):
+    _mock_pickup(actions)  # a cube on its own would get a top grasp
+    actions.upcoming_steps = _then('pour', 'dropoff')
+
+    success, message = actions.handlers['pickup']({"target": "cube"})
+
+    assert (success, message) == (True, "Picked up 'cube' with a side grasp")
+    assert actions.held_grasp['keep_upright'] is True
+
+
+def test_pickup_for_a_thrust_grasps_from_the_side_without_keeping_upright(actions):
+    _mock_pickup(actions)
+    actions.upcoming_steps = _then('home', 'thrust')
+
+    _, message = actions.handlers['pickup']({"target": "cube"})
+
+    assert message == "Picked up 'cube' with a side grasp"
+    assert actions.held_grasp['keep_upright'] is False
+
+
+def test_pickup_only_looks_ahead_until_the_object_is_let_go(actions):
+    _mock_pickup(actions)
+    actions.upcoming_steps = _then('dropoff', 'pour')
+
+    _, message = actions.handlers['pickup']({"target": "cube"})
+
+    assert message == "Picked up 'cube' with a top grasp"  # the pour is for whatever is picked up next
+    assert actions.held_grasp['keep_upright'] is False
+
+
+def test_pickup_fails_before_moving_if_the_forced_style_cant_do_the_next_action(actions):
+    _mock_pickup(actions)
+    actions.upcoming_steps = _then('pour', 'dropoff')
+
+    success, message = actions.handlers['pickup']({"target": "cube", "grasp_style": "top"})
+
+    assert (success, message) == (False, "Can't pick up 'cube' with a top grasp: 'pour' (step 3) needs a side grasp")
+    assert actions.motion.chains == [] and actions.motion.ran == []
+    actions.call_move_gripper_service.assert_not_called()
 
 
 def test_pickup_rejects_unknown_grasp_style(actions):
@@ -774,7 +827,7 @@ def test_pickup_does_not_release_when_target_is_already_held(actions):
 
 def test_pickup_fails_cleanly_if_release_of_held_object_fails(actions):
     _holding(actions, "red_cube")
-    actions.motion.reject = lambda w: "no path to hover (out of reach)"
+    actions.motion.reject = lambda waypoint: "no path to hover (out of reach)"
 
     success, message = actions.handlers['pickup']({"target": "blue_cube"})
 
@@ -925,10 +978,20 @@ def test_dropoff_plans_hover_free_then_straight_down_and_back(actions):
     actions.handlers['dropoff']({"destination": "tray"})
 
     (waypoints, _), = actions.motion.chains
-    assert [(w.name, w.straight) for w in waypoints] == [('hover', False), ('release', True), ('back-off', True)]
-    hover, release, back_off = (w.position for w in waypoints)
+    assert [(waypoint.name, waypoint.straight) for waypoint in waypoints] == [('hover', False), ('release', True), ('back-off', True)]
+    hover, release, back_off = (waypoint.position for waypoint in waypoints)
     assert hover - release == pytest.approx([0, 0, 0.05])  # default hover height
     assert back_off - release == pytest.approx([0, 0, actions.grasp_config['standoff']])  # top grasp backs out upwards
+
+
+def test_dropoff_carries_upright_only_if_pickup_said_so(actions):
+    _holding_cube_over_tray(actions)
+    actions.held_grasp['keep_upright'] = True
+
+    actions.handlers['dropoff']({"destination": "tray"})
+
+    (waypoints, _), = actions.motion.chains
+    assert [(waypoint.name, waypoint.upright) for waypoint in waypoints] == [('hover', True), ('release', False), ('back-off', False)]
 
 
 def test_dropoff_detaches_before_backing_away(actions):
@@ -946,7 +1009,7 @@ def test_dropoff_detaches_before_backing_away(actions):
 def test_dropoff_tries_the_next_yaw_if_the_pickup_one_cannot_be_planned(actions):
     _holding_cube_over_tray(actions)
     rejected = iter(["no path to hover (out of reach)"])
-    actions.motion.reject = lambda w: next(rejected, None) if w.name == 'hover' else None
+    actions.motion.reject = lambda waypoint: next(rejected, None) if waypoint.name == 'hover' else None
 
     success, _ = actions.handlers['dropoff']({"destination": "tray"})
 
@@ -997,7 +1060,7 @@ def test_dropoff_fails_if_not_holding_the_target(actions):
 
 def test_dropoff_failure_message_when_no_yaw_works(actions):
     _holding_cube_over_tray(actions)
-    actions.motion.reject = lambda w: "no path to hover (out of reach)"
+    actions.motion.reject = lambda waypoint: "no path to hover (out of reach)"
 
     success, message = actions.handlers['dropoff']({"destination": "tray"})
 

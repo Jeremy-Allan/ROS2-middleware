@@ -167,6 +167,23 @@ def test_execute_recipe(node):
     node.arm_actions.handlers['gripper'].assert_called_once_with({"position": 0.5})
 
 
+def test_execute_recipe_shows_each_step_the_rest_of_the_recipe(node):
+    """Pickup looks ahead to see what the grasp is for."""
+    steps = [{"action": "pickup", "parameters": {"target": "mug"}},
+             {"action": "pour", "parameters": {}},
+             {"action": "dropoff", "parameters": {}}]
+    node.parser.recipe = {"steps": steps}
+    seen = []
+    record = lambda params: seen.append(list(node.arm_actions.upcoming_steps)) or (True, "")
+    node.arm_actions.handlers = {'pickup': record, 'pour': record, 'dropoff': record}
+    node.publish_status = MagicMock()
+
+    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
+        assert node.execute_recipe() is True
+
+    assert seen == [[(2, steps[1]), (3, steps[2])], [(3, steps[2])], []]
+
+
 def test_execute_recipe_no_steps(node):
     """Recipe with no steps should fail."""
 

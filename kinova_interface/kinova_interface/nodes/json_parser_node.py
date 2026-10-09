@@ -219,6 +219,7 @@ class JsonParserNode(Node):
             self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
             self._update_node_status(status_text=f"Step {i+1}/{len(steps)}: {step.get('description', '')}")
 
+            self.arm_actions.upcoming_steps = list(enumerate(steps[i + 1:], start=i + 2))
             success, message = self._dispatch_step(i, step)
 
             if not success:

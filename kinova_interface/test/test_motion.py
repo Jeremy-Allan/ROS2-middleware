@@ -7,17 +7,21 @@ from rclpy.node import Node
 from scipy.spatial.transform import Rotation
 
 from moveit_msgs.msg import AllowedCollisionEntry, ContactInformation, MoveItErrorCodes, RobotTrajectory
-from moveit_msgs.srv import ApplyPlanningScene, GetCartesianPath, GetMotionPlan, GetPlanningScene, GetStateValidity
+from moveit_msgs.srv import (
+    ApplyPlanningScene, GetCartesianPath, GetMotionPlan, GetPlanningScene, GetPositionFK, GetStateValidity,
+)
+from geometry_msgs.msg import PoseStamped
 from shape_msgs.msg import SolidPrimitive
 from trajectory_msgs.msg import JointTrajectoryPoint
 
 from kinova_interfaces.srv import ExecuteTrajectory
 from kinova_interface.actions import motion
-from kinova_interface.actions.motion import Motion, MotionUnavailable, Plan, slow_down
+from kinova_interface.actions.motion import Motion, MotionUnavailable, Plan, slow_down, tilt_between
 from kinova_interface.utils.grasping import Waypoint
 from kinova_interface.utils.robot import JOINT_NAMES
 
-CONFIG = {'velocity_scale': 0.5, 'acceleration_scale': 0.2, 'fallback_planning_time': 1.5}
+CONFIG = {'velocity_scale': 0.5, 'acceleration_scale': 0.2, 'fallback_planning_time': 1.5,
+          'upright_tolerance': 0.2}
 DOWN = Rotation.from_euler('x', 180, degrees=True)
 FREE = Waypoint('pre-grasp', np.array([0.4, 0.0, 0.2]), straight=False)
 LINE = Waypoint('grasp', np.array([0.4, 0.0, 0.1]), straight=True)
@@ -78,18 +82,22 @@ def test_free_move_is_a_pilz_ptp_pose_goal_for_tool_frame(mover):
         plan, reason = mover.plan(FREE, DOWN, CONFIG)
 
     assert reason is None and plan.planner == 'Pilz PTP'
-    r = requests[0].motion_plan_request
-    assert (r.pipeline_id, r.planner_id, r.group_name) == ('pilz_industrial_motion_planner', 'PTP', 'arm')
-    assert (r.max_velocity_scaling_factor, r.max_acceleration_scaling_factor) == (0.5, 0.2)
-    assert r.start_state.is_diff and not r.start_state.joint_state.name  # from the current state
-    goal = r.goal_constraints[0]
+    motion_request = requests[0].motion_plan_request
+    assert motion_request.pipeline_id == 'pilz_industrial_motion_planner'
+    assert (motion_request.planner_id, motion_request.group_name) == ('PTP', 'arm')
+    assert motion_request.max_velocity_scaling_factor == 0.5
+    assert motion_request.max_acceleration_scaling_factor == 0.2
+    start_state = motion_request.start_state
+    assert start_state.is_diff and not start_state.joint_state.name  # from the current state
+    goal = motion_request.goal_constraints[0]
     position, orientation = goal.position_constraints[0], goal.orientation_constraints[0]
     assert position.link_name == orientation.link_name == 'tool_frame'
     assert position.constraint_region.primitives[0].type == SolidPrimitive.SPHERE
-    p = position.constraint_region.primitive_poses[0].position
-    assert (p.x, p.y, p.z) == pytest.approx(FREE.position)
-    q = orientation.orientation
-    assert (Rotation.from_quat([q.x, q.y, q.z, q.w]) * DOWN.inv()).magnitude() == pytest.approx(0.0, abs=1e-9)
+    goal_position = position.constraint_region.primitive_poses[0].position
+    assert (goal_position.x, goal_position.y, goal_position.z) == pytest.approx(FREE.position)
+    quaternion = orientation.orientation
+    goal_rotation = Rotation.from_quat([quaternion.x, quaternion.y, quaternion.z, quaternion.w])
+    assert (goal_rotation * DOWN.inv()).magnitude() == pytest.approx(0.0, abs=1e-9)
     assert not goal.joint_constraints  # MoveIt picks the joints
 
 
@@ -99,9 +107,9 @@ def test_free_move_falls_back_to_rrtstar_with_its_own_time(mover):
         plan, _ = mover.plan(FREE, DOWN, CONFIG)
 
     assert plan.planner == 'RRT*'
-    r = requests[1].motion_plan_request
-    assert (r.pipeline_id, r.planner_id) == ('ompl', 'RRTstarkConfigDefault')
-    assert r.allowed_planning_time == CONFIG['fallback_planning_time']
+    motion_request = requests[1].motion_plan_request
+    assert (motion_request.pipeline_id, motion_request.planner_id) == ('ompl', 'RRTstarkConfigDefault')
+    assert motion_request.allowed_planning_time == CONFIG['fallback_planning_time']
 
 
 def test_plan_reports_the_fallback_reason_when_both_fail(mover):
@@ -130,12 +138,13 @@ def test_straight_move_falls_back_to_compute_cartesian_path(mover):
         plan, _ = mover.plan(LINE, DOWN, CONFIG, start=[0.3] * 6)
 
     assert plan.planner == 'Cartesian path'
-    r = requests[1]
-    assert isinstance(r, GetCartesianPath.Request)
-    assert (r.group_name, r.link_name, r.header.frame_id) == ('arm', 'tool_frame', 'base_link')
-    assert r.avoid_collisions and r.max_step == motion.CARTESIAN_STEP
-    assert r.revolute_jump_threshold == motion.MAX_JOINT_JUMP
-    assert list(r.start_state.joint_state.position) == [0.3] * 6
+    cartesian_request = requests[1]
+    assert isinstance(cartesian_request, GetCartesianPath.Request)
+    assert cartesian_request.group_name == 'arm' and cartesian_request.link_name == 'tool_frame'
+    assert cartesian_request.header.frame_id == 'base_link'
+    assert cartesian_request.avoid_collisions and cartesian_request.max_step == motion.CARTESIAN_STEP
+    assert cartesian_request.revolute_jump_threshold == motion.MAX_JOINT_JUMP
+    assert list(cartesian_request.start_state.joint_state.position) == [0.3] * 6
     # Timed at full speed by MoveIt, slowed to velocity_scale
     assert plan.duration == pytest.approx(2.0 / 0.5)
 
@@ -159,6 +168,73 @@ def test_a_waypoint_after_the_gripper_opens_is_planned_with_it_open(mover):
     joints = requests[0].motion_plan_request.start_state.joint_state
     assert list(joints.name) == JOINT_NAMES + ['right_finger_bottom_joint']
     assert list(joints.position) == [0.3] * 6 + [0.0]
+
+
+# Upright carries
+HOVER = Waypoint('hover', np.array([0.4, 0.0, 0.2]), straight=False, upright=True)
+
+
+def _tool_pose(rotation):
+    """/compute_fk answer: where the gripper is pointing right now."""
+    quaternion = rotation.as_quat()
+    pose = PoseStamped()
+    pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z, pose.pose.orientation.w = quaternion
+    response = GetPositionFK.Response(pose_stamped=[pose])
+    response.error_code.val = MoveItErrorCodes.SUCCESS
+    return response
+
+
+def _tolerances(constraint):
+    return (constraint.absolute_x_axis_tolerance, constraint.absolute_y_axis_tolerance,
+            constraint.absolute_z_axis_tolerance)
+
+
+def test_upright_carry_tries_pilz_lin_first(mover):
+    patched, requests = _services(_tool_pose(DOWN), _planned())
+    with patched:
+        plan, _ = mover.plan(HOVER, DOWN, CONFIG)
+
+    assert plan.planner == 'Pilz LIN'
+    assert not requests[1].motion_plan_request.path_constraints.orientation_constraints
+
+
+def test_upright_carry_falls_back_to_rrtstar_held_to_the_tilt(mover):
+    patched, requests = _services(_tool_pose(DOWN), _not_planned(), _planned())
+    with patched:
+        plan, _ = mover.plan(HOVER, DOWN, CONFIG)
+
+    assert plan.planner == 'RRT* (upright)'
+    motion_request = requests[2].motion_plan_request
+    assert motion_request.pipeline_id == 'ompl'
+    assert motion_request.allowed_planning_time == CONFIG['fallback_planning_time']
+    constraint = motion_request.path_constraints.orientation_constraints[0]
+    assert constraint.link_name == 'tool_frame' and constraint.parameterization == constraint.ROTATION_VECTOR
+    # Pointing down, tool Z is vertical: tilt held to the tolerance, turning about vertical free
+    assert _tolerances(constraint) == pytest.approx((0.2, 0.2, np.pi))
+
+
+def test_upright_carry_is_dropped_if_the_object_is_already_tipped(mover):
+    """e.g. a home move while holding it: keeping it upright from there can't work."""
+    sideways = Rotation.from_euler('y', 90, degrees=True)
+    patched, requests = _services(_tool_pose(sideways), _not_planned(), _planned())
+    with patched:
+        plan, _ = mover.plan(HOVER, DOWN, CONFIG)
+
+    assert plan.planner == 'RRT*'  # a normal free-space move: Pilz PTP, then RRT*
+    assert requests[1].motion_plan_request.planner_id == 'PTP'
+    assert not requests[2].motion_plan_request.path_constraints.orientation_constraints
+
+
+def test_tilt_ignores_turning_about_vertical():
+    turned = Rotation.from_euler('z', 70, degrees=True) * DOWN
+    assert tilt_between(DOWN, turned) == pytest.approx(0.0, abs=1e-9)
+    assert tilt_between(DOWN, Rotation.from_euler('y', 90, degrees=True)) == pytest.approx(np.pi / 2)
+
+
+def test_upright_tolerance_frees_whichever_tool_axis_is_vertical():
+    side = Rotation.from_euler('y', 90, degrees=True)  # tool Z horizontal, tool X pointing down
+    constraint = motion._upright(side, 0.2).orientation_constraints[0]
+    assert _tolerances(constraint) == pytest.approx((np.pi, 0.2, 0.2))
 
 
 # Chains

@@ -8,7 +8,8 @@
     grasping:
       velocity_scale: 0.5             # arm speed for pickup and dropoff moves, as a fraction of its max (0-1]
       acceleration_scale: 0.2         # how hard it speeds up and slows down (0-1]; Pilz LIN needs this low to stay within joint limits
-      fallback_planning_time: 1.0     # seconds RRT* gets when Pilz can't plan a move; RRT* always uses all of it
+      fallback_planning_time: 5.0     # seconds RRT* gets when Pilz can't plan a move; RRT* always uses all of it
+      upright_tolerance: 0.2          # rad the held object may tilt while carried upright (e.g. before a pour); turning is free
 
       yaw_step_deg: 30.0              # angle between grasps tried around an object; bigger = fewer tries, faster
 

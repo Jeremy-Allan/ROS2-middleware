@@ -232,6 +232,7 @@ def test_place_candidates_keep_the_tilt_and_retreat_along_the_approach():
         assert c.object_centre[:2] == pytest.approx(point[:2])
         lifted = c.object_centre + [0, 0, GRASP_CONFIG['place_clearance']]
         assert c.release == pytest.approx(lifted - c.rotation.apply(held['object_position']))
-        assert c.back == pytest.approx(c.release - GRASP_CONFIG['standoff'] * approach)
+        assert c.back_off == pytest.approx(c.release - GRASP_CONFIG['standoff'] * approach)
         assert [(w.name, w.straight, w.gripper) for w in c.waypoints] == [
             ('hover', False, None), ('release', True, None), ('back-off', True, 0.0)]  # backs off with the gripper open
+        assert not c.keep_upright  # only if pickup asked for it

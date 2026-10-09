@@ -18,7 +18,7 @@ from kinova_interface.utils.robot import FINGERTIP_LENGTH, GRIPPER_MAX_OPENING, 
 
 # Settings under 'grasping' in data/configs/grasping.yaml, all doubles
 CONFIG_KEYS = (
-    'velocity_scale', 'acceleration_scale', 'fallback_planning_time', 'yaw_step_deg', 'standoff', 'lift_height',
+    'velocity_scale', 'acceleration_scale', 'fallback_planning_time', 'upright_tolerance', 'yaw_step_deg', 'standoff', 'lift_height',
     'top_grasp_depth', 'tip_clearance', 'tall_ratio', 'width_margin',
     'min_width', 'place_clearance',
 )
@@ -47,6 +47,7 @@ class Waypoint(NamedTuple):
     position: np.ndarray            # tool_frame position
     straight: bool                  # reach it in a straight line, rather than any collision-free path
     gripper: Optional[float] = None # gripper position when this move starts, if it changes just before it
+    upright: bool = False           # keep the gripper's tilt the whole way (carrying something that mustn't tip)
 
 
 @dataclass
@@ -65,54 +66,55 @@ class GraspCandidate:
 
 
 def object_centre(pose: dict) -> np.ndarray:
-    p = pose['position']
-    return np.array([p['x'], p['y'], p['z']], dtype=float)
+    position = pose['position']
+    return np.array([position['x'], position['y'], position['z']], dtype=float)
 
 
 def object_rotation(pose: dict) -> Rotation:
-    q = pose['orientation']
-    return Rotation.from_quat([q['x'], q['y'], q['z'], q['w']])
+    orientation = pose['orientation']
+    return Rotation.from_quat([orientation['x'], orientation['y'], orientation['z'], orientation['w']])
 
 
 def half_extent(shape: dict, rotation: Rotation, axis: int = Z) -> float:
     """Half the object's size along base axis X, Y or Z, for any orientation."""
-    R = rotation.as_matrix()
-    d = shape['dimensions']
+    matrix = rotation.as_matrix()
+    dimensions = shape['dimensions']
     if shape['type'] == SolidPrimitive.BOX:
-        return sum(abs(R[axis, i]) * d[i] / 2.0 for i in range(3))
+        return sum(abs(matrix[axis, object_axis]) * dimensions[object_axis] / 2.0 for object_axis in range(3))
     if shape['type'] == SolidPrimitive.CYLINDER:
-        a = abs(R[axis, 2])  # cylinder axis is the object's Z
-        height, radius = d[SolidPrimitive.CYLINDER_HEIGHT], d[SolidPrimitive.CYLINDER_RADIUS]
-        return a * height / 2.0 + radius * math.sqrt(max(0.0, 1.0 - a * a))
+        # How much the cylinder's own axis (its Z) lines up with the base axis
+        axis_alignment = abs(matrix[axis, 2])
+        height, radius = dimensions[SolidPrimitive.CYLINDER_HEIGHT], dimensions[SolidPrimitive.CYLINDER_RADIUS]
+        return axis_alignment * height / 2.0 + radius * math.sqrt(max(0.0, 1.0 - axis_alignment ** 2))
     raise ValueError(f"unsupported shape type {shape['type']}")
 
 
-def _box_grasps(dims: list[float]) -> Iterator[ObjectGrasp]:
+def _box_grasps(dimensions: list[float]) -> Iterator[ObjectGrasp]:
     axes = np.eye(3)  # the box's own X, Y, Z
-    for i in range(3):
+    for approach_axis in range(3):
         for face in BOTH_WAYS:
-            # Come in from the +i or -i face, heading towards the centre
-            approach = -face * axes[i]
-            for j in range(3):
-                if j == i:
+            # Come in from the + or - face on this axis, heading towards the centre
+            approach = -face * axes[approach_axis]
+            for closing_axis in range(3):
+                if closing_axis == approach_axis:
                     continue  # can't close along the approach
                 for flip in BOTH_WAYS:
-                    # Close across axis j, so the fingers span that side
-                    yield approach, flip * axes[j], dims[j]
+                    # Close across this axis, so the fingers span that side
+                    yield approach, flip * axes[closing_axis], dimensions[closing_axis]
 
 
-def _cylinder_grasps(dims: list[float], step_deg: float) -> Iterator[ObjectGrasp]:
-    diameter = 2 * dims[SolidPrimitive.CYLINDER_RADIUS]
+def _cylinder_grasps(dimensions: list[float], step_deg: float) -> Iterator[ObjectGrasp]:
+    diameter = 2 * dimensions[SolidPrimitive.CYLINDER_RADIUS]
     # Sample angles around the cylinder's axis (its own Z)
-    for t in np.radians(np.arange(0.0, 360.0, step_deg)):
-        radial = np.array([math.cos(t), math.sin(t), 0.0])    # out from the axis at angle t
-        tangent = np.array([-math.sin(t), math.cos(t), 0.0])  # along the rim at angle t
+    for angle in np.radians(np.arange(0.0, 360.0, step_deg)):
+        radial = np.array([math.cos(angle), math.sin(angle), 0.0])    # out from the axis at this angle
+        tangent = np.array([-math.sin(angle), math.cos(angle), 0.0])  # along the rim at this angle
         for end in BOTH_WAYS:
             # End-on: down onto the +Z or -Z end, closing across the diameter.
-            # t and t+180 already cover the wrist flip.
+            # The angle 180 degrees on already covers the wrist flip.
             yield np.array([0.0, 0.0, -end]), radial, diameter
         for flip in BOTH_WAYS:
-            # From the curved side at angle t, straddling the axis
+            # From the curved side at this angle, straddling the axis
             yield -radial, flip * tangent, diameter
 
 
@@ -133,17 +135,17 @@ def grasp_candidates(target_info: dict, grasp_config: dict,
     """Usable grasps of `style` ('auto' for both top and side), plus a Counter of (style, reason) for the ones dropped."""
     shape = target_info['shape']
     centre = object_centre(target_info['pose'])
-    rot = object_rotation(target_info['pose'])
-    h = half_extent(shape, rot, Z)
-    top_z, floor_z = centre[2] + h, centre[2] - h
+    rotation = object_rotation(target_info['pose'])
+    half_height = half_extent(shape, rotation, Z)
+    top_z, floor_z = centre[2] + half_height, centre[2] - half_height
 
     max_width = GRIPPER_MAX_OPENING - grasp_config['width_margin']
     candidates, rejected = [], Counter()
     for approach, closing, width in _object_frame_grasps(shape, grasp_config['yaw_step_deg']):
-        a, c = rot.apply(approach), rot.apply(closing)
-        if a[2] <= TOP_MAX_Z:
+        world_approach, world_closing = rotation.apply(approach), rotation.apply(closing)
+        if world_approach[2] <= TOP_MAX_Z:
             grasp_style = 'top'
-        elif a[2] <= SIDE_MAX_Z:
+        elif world_approach[2] <= SIDE_MAX_Z:
             grasp_style = 'side'
         else:
             continue  # from below
@@ -161,19 +163,20 @@ def grasp_candidates(target_info: dict, grasp_config: dict,
         if grasp_style == 'top':
             # Pads just below the top, but keep the fingertips off the floor
             pad_z = max(top_z - grasp_config['top_grasp_depth'],
-                        floor_z + grasp_config['tip_clearance'] - FINGERTIP_LENGTH * a[2])
+                        floor_z + grasp_config['tip_clearance'] - FINGERTIP_LENGTH * world_approach[2])
             if pad_z > top_z:
                 rejected[(grasp_style, f'too short: {top_z - floor_z:.3f} m tall')] += 1
                 continue
-            grasp = centre + a * (pad_z - centre[2]) / a[2]  # slide along the approach to that height
+            # Slide along the approach to that height
+            grasp = centre + world_approach * (pad_z - centre[2]) / world_approach[2]
         else:
             grasp = centre.copy()  # side: pads at the object's centre
 
         candidates.append(GraspCandidate(
             style=grasp_style,
-            rotation=orientation_from_axes(a, c),
+            rotation=orientation_from_axes(world_approach, world_closing),
             grasp=grasp,
-            pre_grasp=grasp - grasp_config['standoff'] * a,
+            pre_grasp=grasp - grasp_config['standoff'] * world_approach,
             lift=grasp + np.array([0.0, 0.0, grasp_config['lift_height']]),
         ))
     return candidates, rejected
@@ -182,9 +185,9 @@ def grasp_candidates(target_info: dict, grasp_config: dict,
 def preferred_style(target_info: dict, grasp_config: dict) -> str:
     """'side' for tall, thin objects, otherwise 'top'."""
     shape = target_info['shape']
-    rot = object_rotation(target_info['pose'])
-    height = 2 * half_extent(shape, rot, Z)
-    width = 2 * min(half_extent(shape, rot, X), half_extent(shape, rot, Y))
+    rotation = object_rotation(target_info['pose'])
+    height = 2 * half_extent(shape, rotation, Z)
+    width = 2 * min(half_extent(shape, rotation, X), half_extent(shape, rotation, Y))
     return 'side' if height > grasp_config['tall_ratio'] * width else 'top'
 
 
@@ -201,39 +204,40 @@ def rank(candidates: list[GraspCandidate], target_info: dict, grasp_config: dict
     Within a style, the closest to the natural wrist pose wins."""
     preferred = preferred_style(target_info, grasp_config) if style == 'auto' else style
 
-    pos = target_info['pose']['position']
-    bearing = np.array([pos['x'], pos['y'], 0.0])
-    norm = np.linalg.norm(bearing)
-    bearing = bearing / norm if norm > 1e-6 else np.array([1.0, 0.0, 0.0])
-    natural = {s: _natural_rotation(s, bearing) for s in ('top', 'side')}
+    position = target_info['pose']['position']
+    bearing = np.array([position['x'], position['y'], 0.0])
+    distance = np.linalg.norm(bearing)
+    bearing = bearing / distance if distance > 1e-6 else np.array([1.0, 0.0, 0.0])
+    natural = {grasp_style: _natural_rotation(grasp_style, bearing) for grasp_style in ('top', 'side')}
 
-    return sorted(candidates, key=lambda c: (
-        c.style != preferred,
-        (c.rotation * natural[c.style].inv()).magnitude(),
+    return sorted(candidates, key=lambda candidate: (
+        candidate.style != preferred,
+        (candidate.rotation * natural[candidate.style].inv()).magnitude(),
     ))
 
 
 def yaw_offsets(step_deg: float) -> list[float]:
     """0, +step, -step, +2 step, -2 step, ... then 180, in degrees."""
     offsets = [0.0]
-    k = 1
-    while k * step_deg < 180.0:
-        offsets += [k * step_deg, -k * step_deg]
-        k += 1
+    steps = 1
+    while steps * step_deg < 180.0:
+        offsets += [steps * step_deg, -steps * step_deg]
+        steps += 1
     return offsets + [180.0]
 
 
 def contains_xy(target_info: dict, x: float, y: float) -> bool:
     """True if (x, y) is inside the object's outline, at its centre height."""
     shape = target_info['shape']
-    pos = target_info['pose']['position']
-    local = object_rotation(target_info['pose']).inv().apply([x - pos['x'], y - pos['y'], 0.0])
-    d = shape['dimensions']
+    position = target_info['pose']['position']
+    # The point in the object's own axes
+    local = object_rotation(target_info['pose']).inv().apply([x - position['x'], y - position['y'], 0.0])
+    dimensions = shape['dimensions']
     if shape['type'] == SolidPrimitive.BOX:
-        return all(abs(local[i]) <= d[i] / 2.0 for i in range(3))
+        return all(abs(local[axis]) <= dimensions[axis] / 2.0 for axis in range(3))
     if shape['type'] == SolidPrimitive.CYLINDER:
-        return (abs(local[2]) <= d[SolidPrimitive.CYLINDER_HEIGHT] / 2.0
-                and math.hypot(local[0], local[1]) <= d[SolidPrimitive.CYLINDER_RADIUS])
+        return (abs(local[2]) <= dimensions[SolidPrimitive.CYLINDER_HEIGHT] / 2.0
+                and math.hypot(local[0], local[1]) <= dimensions[SolidPrimitive.CYLINDER_RADIUS])
     raise ValueError(f"unsupported shape type {shape['type']}")
 
 
@@ -243,18 +247,19 @@ class PlaceCandidate:
     rotation: Rotation          # tool_frame orientation, the pickup one turned about vertical
     hover: np.ndarray           # tool_frame positions, in order
     release: np.ndarray
-    back: np.ndarray
+    back_off: np.ndarray
     object_centre: np.ndarray   # where the object ends up
     object_rotation: Rotation
+    keep_upright: bool = False  # carry it to the hover without tipping it
 
     @property
     def waypoints(self) -> list[Waypoint]:
         # Pickup in reverse: down to the release in a straight line, then back out along the approach.
         # The gripper opens before backing off, so that's planned with it open (an open finger can hit
         # something next to the object).
-        return [Waypoint('hover', self.hover, straight=False),
+        return [Waypoint('hover', self.hover, straight=False, upright=self.keep_upright),
                 Waypoint('release', self.release, straight=True),
-                Waypoint('back-off', self.back, straight=True, gripper=GRIPPER_OPEN)]
+                Waypoint('back-off', self.back_off, straight=True, gripper=GRIPPER_OPEN)]
 
 
 def place_candidates(held_grasp: dict, shape: dict, point: np.ndarray, grasp_config: dict,
@@ -262,19 +267,20 @@ def place_candidates(held_grasp: dict, shape: dict, point: np.ndarray, grasp_con
     """Tool poses that put the held object's bottom centre at `point`, with the pickup tilt.
     One per yaw about vertical, same yaw as the pickup first."""
     for yaw in yaw_offsets(grasp_config['yaw_step_deg']):
-        tool = Rotation.from_euler('z', yaw, degrees=True) * held_grasp['tool_rotation']
-        obj = tool * held_grasp['object_rotation']
-        resting = point + [0.0, 0.0, half_extent(shape, obj, Z)]
-        centre = resting + [0.0, 0.0, grasp_config['place_clearance']]
-        release = centre - tool.apply(held_grasp['object_position'])
+        tool_rotation = Rotation.from_euler('z', yaw, degrees=True) * held_grasp['tool_rotation']
+        placed_object_rotation = tool_rotation * held_grasp['object_rotation']
+        resting_centre = point + [0.0, 0.0, half_extent(shape, placed_object_rotation, Z)]
+        release_centre = resting_centre + [0.0, 0.0, grasp_config['place_clearance']]
+        release = release_centre - tool_rotation.apply(held_grasp['object_position'])
         # Retreat reverses the approach, like pickup's pre-grasp
-        back = release - grasp_config['standoff'] * tool.apply(TOOL_APPROACH)
+        back_off = release - grasp_config['standoff'] * tool_rotation.apply(TOOL_APPROACH)
         yield PlaceCandidate(
             yaw_deg=yaw,
-            rotation=tool,
+            rotation=tool_rotation,
             hover=release + [0.0, 0.0, place_offset],
             release=release,
-            back=back,
-            object_centre=resting,
-            object_rotation=obj,
+            back_off=back_off,
+            object_centre=resting_centre,
+            object_rotation=placed_object_rotation,
+            keep_upright=held_grasp.get('keep_upright', False),
         )
