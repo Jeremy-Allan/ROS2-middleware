@@ -64,7 +64,7 @@ That launches the full stack in simulation and waits for a recipe. See [docs/run
 
 ```
 kinova_interface/
-  data/configs/env/    coordinate_dictionary.json, relative_movement.json, obstacles.json
+  data/configs/env/    workspace_objects.yaml, movements_and_orientations.yaml
   kinova_interface/    the four ROS 2 node source files
   launch/              robot.launch.py
   recipes/             task_recipe.json, test_suite/

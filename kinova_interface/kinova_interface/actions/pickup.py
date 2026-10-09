@@ -1,163 +1,181 @@
-"""'pickup' recipe action, plus its side-grasp candidate generation."""
-import math
+"""'pickup' recipe action: pre-grasp -> straight approach -> close -> attach -> straight lift.
+
+Grasp candidates come from the object's shape and pose. Each one's moves are planned in a chain before
+the arm moves, and the first fully plannable one is used. On failure the arm backs off and goes home."""
+from collections import Counter
 from typing import TYPE_CHECKING
 
-from scipy.spatial.transform import Rotation
-from shape_msgs.msg import SolidPrimitive
+import numpy as np
 
 from kinova_interface.actions import dropoff
-
+from kinova_interface.actions.motion import MotionUnavailable
+from kinova_interface.utils.grasping import GraspCandidate, Waypoint, grasp_candidates, object_centre, object_rotation, rank
+from kinova_interface.utils.robot import GRIPPER_CLOSED, GRIPPER_OPEN
 
 # Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
 # because arm_actions imports this module and that would be circular.
 if TYPE_CHECKING:
     from kinova_interface.actions.arm_actions import ArmActions
 
-
-# A flat, level wrist (not pointing down) - the one part of a side
-# grasp that's genuinely independent of which object it is.
-SIDE_GRASP_ROLL = math.pi / 2.0
-# Candidate yaw rotations relative to the object's own registered yaw -
-# covers approaching aligned with, or perpendicular to, its own frame,
-# from either side. Which of these is actually correct depends on the
-# gripper's own closing-axis convention, which isn't assumed here -
-# every candidate is verified for real (see verify_grasp_pose) rather
-# than trusted from geometry alone.
-SIDE_GRASP_YAW_OFFSETS = [0.0, math.pi / 2.0, -math.pi / 2.0, math.pi]
-# A CYLINDER is radially symmetric - there's no "face" to align with the
-# way BOX's 4 offsets (above) align with its own registered frame, every
-# angle around its circumference is an equally valid grasp. 8 evenly
-# spaced absolute yaws (not relative to the object's own yaw, which has
-# no real meaning for a symmetric shape) gives verify_grasp_pose a much
-# wider net to find one the arm can actually reach - important since
-# cylinders (bottles, cups) need this to work reliably for pouring.
-SIDE_GRASP_CYLINDER_YAWS = [math.radians(a) for a in range(0, 360, 45)]
-# Small position nudges tried only if the object's exact center doesn't
-# verify at any of the yaw offsets above - meters, along each world axis.
-SIDE_GRASP_POSITION_OFFSETS = [0.02, -0.02, 0.04, -0.04]
-
-def compute_side_grasp_candidates(ctx: 'ArmActions', target_info):
-    """Generate candidate flat, side-on grasp poses for a BOX or
-    CYLINDER object from its own registered shape and pose - not a
-    fixed preset calibrated to one specific object/position (see
-    docs/pour-motion-reference.md for why that didn't generalize).
-    Each candidate still needs verifying (verify_grasp_pose) before
-    being trusted - this generates plausible options, it doesn't
-    guarantee any one of them is actually reachable/collision-free.
-    Returns a list of (x, y, z, roll, pitch, yaw) tuples, cheapest/most
-    likely first; [] if the shape isn't supported."""
-    shape = target_info['shape']
-    if shape['type'] not in (SolidPrimitive.BOX, SolidPrimitive.CYLINDER):
-        ctx.fail(f"Side grasp only supports BOX/CYLINDER shapes currently (got shape type {shape['type']})")
-        return []
-
-    pos = target_info['pose']['position']
-
-    if shape['type'] == SolidPrimitive.CYLINDER:
-        yaw_candidates = SIDE_GRASP_CYLINDER_YAWS
-    else:
-        orient = target_info['pose']['orientation']
-        _, _, object_yaw = Rotation.from_quat([orient['x'], orient['y'], orient['z'], orient['w']]).as_euler('xyz')
-        yaw_candidates = [object_yaw + offset for offset in SIDE_GRASP_YAW_OFFSETS]
-
-    candidates = []
-    # Pass 1: the object's exact center, at each candidate yaw - the
-    # cheapest and most likely to work.
-    for yaw in yaw_candidates:
-        candidates.append((pos['x'], pos['y'], pos['z'], SIDE_GRASP_ROLL, 0.0, yaw))
-
-    # Pass 2: only if none of those verify - small offsets along each
-    # world axis, at every candidate yaw again.
-    for offset in SIDE_GRASP_POSITION_OFFSETS:
-        for yaw in yaw_candidates:
-            candidates.append((pos['x'] + offset, pos['y'], pos['z'], SIDE_GRASP_ROLL, 0.0, yaw))
-            candidates.append((pos['x'], pos['y'] + offset, pos['z'], SIDE_GRASP_ROLL, 0.0, yaw))
-
-    return candidates
+GRASP_STYLES = ('auto', 'top', 'side')
+# What later actions need from the grasp: (style, keep the object upright until then)
+GRASP_NEEDS = {'pour': ('side', True), 'thrust': ('side', False)}
+# Steps that let go of the object, so the grasp only has to suit the steps up to them
+RELEASES = ('dropoff', 'throw', 'pickup', 'gripper')
 
 
-def run(ctx: 'ArmActions', params: dict) -> bool:
-    """Default behaviour is unchanged: unconstrained orientation at the
-    object's registered center (forcing one can make an
-    otherwise-reachable approach infeasible for the planner, same
-    caveat as 'push').
+def _later_needs(upcoming: list) -> list[tuple[int, str, str, bool]]:
+    """(step number, action, style, upright) for each later step that needs something from this grasp."""
+    needs = []
+    for step_number, step in upcoming:
+        action = step.get('action')
+        if action in GRASP_NEEDS:
+            needs.append((step_number, action, *GRASP_NEEDS[action]))
+        if action in RELEASES:
+            break
+    return needs
 
-    'grasp_style': 'side' switches to a flat, side-on grasp instead -
-    computed from the object's own shape/pose (BOX or CYLINDER
-    currently), not a fixed preset for one specific object, and each candidate
-    pose is verified reachable/collision-free (via /compute_ik) before
-    being trusted, rather than assumed correct from geometry alone.
-    See compute_side_grasp_candidates/verify_grasp_pose and
-    docs/pour-motion-reference.md for why that verification step
-    matters - a manually-demonstrated pose used earlier turned out to
-    have never actually been validated this way.
 
-    'orientation'/'grasp_offset' remain available for a fully manual
-    override (an explicit preset name, plus an x/y/z shift off the
-    object's center) when 'grasp_style' isn't given."""
+def _rounded(position) -> list[float]:
+    return np.round(position, 3).tolist()
+
+
+def _summary(rejected: Counter) -> str:
+    """e.g. 'side 16 tried (4 too wide: 0.120 m > max 0.094; 12 no path to pre-grasp (...)), top 4 tried (...)'"""
+    parts = []
+    for style in ('side', 'top'):
+        reasons = [(reason, n) for (s, reason), n in rejected.items() if s == style]
+        if reasons:
+            total = sum(n for _, n in reasons)
+            parts.append(f"{style} {total} tried ({'; '.join(f'{n} {r}' for r, n in reasons)})")
+    return ', '.join(parts) or 'no candidates'
+
+
+def _back_off(ctx: 'ArmActions', candidate: GraspCandidate, pre_grasp: Waypoint, message: str) -> tuple[bool, str]:
+    """Open, back out to the pre-grasp in a straight line, then go home and fail.
+    If the arm can't get clear of the object, it stays put rather than dragging it."""
+    ctx.get_logger().warn(f"{message}; opening the gripper and backing off to the pre-grasp")
+    gripper_result = ctx.call_move_gripper_service(GRIPPER_OPEN)
+    if not gripper_result['success']:
+        return False, f"{message}; failed to open the gripper to back off: {gripper_result['message']}"
+    succeeded, reason = ctx.motion.move(pre_grasp, candidate.rotation, ctx.grasp_config)
+    if not succeeded:
+        return False, f"{message}; failed to back off to the pre-grasp: {reason}"
+    return ctx.fail_at_home(message)
+
+
+def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
+    """'grasp_style' can be 'auto' (default, top or side from the object's shape), 'top' or 'side'."""
+    logger = ctx.get_logger()
     target_name = params['target']
-    open_pos = float(params.get('open_position', 0.0))
-    close_pos = float(params.get('close_position', 0.8))
+    style = params.get('grasp_style', 'auto')
+    if style not in GRASP_STYLES:
+        return False, f"Unknown grasp_style '{style}', expected one of {', '.join(GRASP_STYLES)}"
 
-    if params.get('grasp_style') == 'side':
-        target_info = ctx.get_object_info(target_name)
-        if not target_info:
-            return False
-        candidates = compute_side_grasp_candidates(ctx, target_info)
-        if not candidates:
-            return False
-        chosen = next((c for c in candidates if ctx.verify_grasp_pose(*c)), None)
-        if chosen is None:
-            return ctx.fail(f"No valid side-grasp pose found for '{target_name}'")
-        target_x, target_y, target_z, roll, pitch, yaw = chosen
-        has_orientation = True
-    else:
-        coords = ctx.get_static_object_coords(target_name)
-        if not coords:
-            return False
+    # The grasp has to suit everything done with the object before it's let go
+    needs = _later_needs(ctx.upcoming_steps)
+    for step_number, action, needed_style, _ in needs:
+        if style not in ('auto', needed_style):
+            return False, (f"Can't pick up '{target_name}' with a {style} grasp: '{action}' (step {step_number}) "
+                           f"needs a {needed_style} grasp")
+        style = needed_style
+    keep_upright = any(upright for *_, upright in needs)
+    if needs:
+        logger.info(f"Pickup '{target_name}': {style} grasp{', kept upright' if keep_upright else ''} for "
+                    f"{', '.join(f'{action!r} (step {step_number})' for step_number, action, *_ in needs)}")
 
-        orientation = ctx.resolve_orientation(params.get('orientation'))
-        if orientation is None:
-            return ctx.fail(f"Unknown orientation preset '{params.get('orientation')}' for pickup")
-        has_orientation, roll, pitch, yaw = orientation
+    target_info = ctx.get_object_info(target_name)
+    if not target_info:
+        return False, f"Could not resolve pickup target '{target_name}'"
+    logger.debug(f"Pickup target '{target_name}': pose={target_info['pose']}, shape={target_info['shape']}")
 
-        grasp_offset = params.get('grasp_offset') or {}
-        target_x = coords['x'] + float(grasp_offset.get('x', 0.0))
-        target_y = coords['y'] + float(grasp_offset.get('y', 0.0))
-        target_z = coords['z'] + float(grasp_offset.get('z', 0.0))
+    config = ctx.grasp_config
+    try:
+        candidates, rejected = grasp_candidates(target_info, config, style)
+    except ValueError as error:
+        return False, f"Can't grasp '{target_name}': {error}"
+    candidates = rank(candidates, target_info, config, style)
+    logger.info(f"Pickup '{target_name}': {len(candidates)} {style} grasp candidate(s), "
+                f"{sum(rejected.values())} ruled out by size")
+    if rejected:
+        logger.debug(f"Ruled out by size: {_summary(rejected)}")
 
-    # If something else is already held, release it first rather than
-    # silently dragging it along - pickup's own gripper-open step below
-    # would otherwise drop it uncontrolled wherever the arm happens to be,
-    # leaving its tracked position stale and its collision geometry
-    # permanently (and incorrectly) attached to the gripper. No destination
-    # is given, so it's released using its own registered position - which
-    # pickup never updates, so this is genuinely where it was picked up
-    # from, not the arm's current position.
+    # Put back anything already held, otherwise the open below drops it wherever the arm is
     if ctx.held_object and ctx.held_object != target_name:
-        ctx.get_logger().info(f"Releasing '{ctx.held_object}' before picking up '{target_name}'")
-        if not dropoff.run(ctx, {'target': ctx.held_object}):
-            return ctx.fail(f"Failed to release '{ctx.held_object}' before picking up '{target_name}'")
+        held = ctx.held_object
+        logger.info(f"Pickup '{target_name}': putting '{held}' back first")
+        succeeded, message = dropoff.run(ctx, {'target': held})
+        if not succeeded:
+            return False, f"Failed to release '{held}' before picking up '{target_name}': {message}"
 
-    # 1. Open gripper before moving
-    rg = ctx.call_move_gripper_service(open_pos)
-    if not (rg and rg['success']):
-        return ctx.fail('Failed to open gripper for pickup')
+    # Open first so the planned moves see the fingers open
+    gripper_result = ctx.call_move_gripper_service(GRIPPER_OPEN)
+    if not gripper_result['success']:
+        return ctx.fail_at_home(f"Failed to open the gripper for pickup: {gripper_result['message']}")
 
-    # 2. Descend to the chosen approach pose
-    r = ctx.call_move_service(target_x, target_y, target_z, has_orientation, roll, pitch, yaw)
-    if not (r and r['success']):
-        return ctx.fail('Failed to move to object position')
+    # The first candidate whose whole pre-grasp -> grasp -> lift chain can be planned
+    for index, candidate in enumerate(candidates, 1):
+        try:
+            plans, reason = ctx.motion.plan_chain(candidate.waypoints, candidate.rotation, config)
+        except MotionUnavailable as error:
+            return ctx.fail_at_home(f"Can't plan the pickup of '{target_name}': {error}")
+        if plans is not None:
+            break
+        logger.debug(f"Grasp {index}/{len(candidates)} ({candidate.style} at {_rounded(candidate.grasp)}) rejected: {reason}")
+        rejected[(candidate.style, reason)] += 1
+    else:
+        return ctx.fail_at_home(f"No reachable grasp for '{target_name}': {_summary(rejected)}")
 
-    # 3. Close gripper
-    rg = ctx.call_move_gripper_service(close_pos)
-    if not (rg and rg['success']):
-        return False
+    pre_grasp, grasp, lift = candidate.waypoints
+    logger.info(f"Pickup '{target_name}': grasp {index}/{len(candidates)}, {candidate.style} at {_rounded(candidate.grasp)} "
+                f"(planned with {', '.join(f'{name}: {plan.planner}' for name, plan in plans.items())})")
 
-    # 4. Remove object from planning scene (attach)
+    # The pre-grasp plan starts from the current state, so it can run as is.
+    # Later moves are re-planned from where the arm actually is.
+    logger.info(f"Pickup '{target_name}': moving to the pre-grasp")
+    succeeded, message = ctx.motion.execute(plans['pre-grasp'])
+    if not succeeded:
+        return ctx.fail_at_home(f"Failed to reach the pre-grasp for '{target_name}': {message}")
+
+    logger.info(f"Pickup '{target_name}': approaching")
+    succeeded, message = ctx.motion.move(grasp, candidate.rotation, config)
+    if not succeeded:
+        return _back_off(ctx, candidate, pre_grasp, f"Failed to approach '{target_name}': {message}")
+
+    gripper_result = ctx.call_move_gripper_service(GRIPPER_CLOSED)
+    if not gripper_result['success']:
+        return _back_off(ctx, candidate, pre_grasp, f"Failed to close the gripper on '{target_name}': {gripper_result['message']}")
     if not ctx.attach_object(target_name):
-        return ctx.fail("Failed to attach object after pickup")
+        return _back_off(ctx, candidate, pre_grasp, f"Failed to attach '{target_name}' after closing")
 
+    # Held from here on, even if the lift fails, so a dropoff can still put it down
     ctx.held_object = target_name
-    ctx.get_logger().info(f"Picked up '{target_name}'")
-    return True
+    # How the object sits in the gripper, kept relative to the gripper since that doesn't change while held.
+    # Dropoff works backwards from it to find where the gripper goes.
+    ctx.held_grasp = {
+        'tool_rotation': candidate.rotation,
+        'object_position': candidate.rotation.inv().apply(object_centre(target_info['pose']) - candidate.grasp),
+        'object_rotation': candidate.rotation.inv() * object_rotation(target_info['pose']),
+        'keep_upright': keep_upright,
+    }
+
+    # Re-planned now the object is attached, so the lift is checked with it. Whatever the object
+    # stands on would count as a collision at the start, so that one contact is allowed for the lift.
+    try:
+        resting_on = ctx.motion.touching(target_name)
+    except MotionUnavailable as error:
+        return ctx.fail_at_home(f"Grasped '{target_name}' but can't plan the lift: {error}")
+    if resting_on:
+        logger.info(f"Pickup '{target_name}': resting on {', '.join(resting_on)}, allowing that contact for the lift")
+        if not ctx.motion.allow_contact(target_name, resting_on, True):
+            return ctx.fail_at_home(f"Grasped '{target_name}' but couldn't allow its contact with {', '.join(resting_on)}")
+
+    logger.info(f"Pickup '{target_name}': lifting")
+    try:
+        succeeded, message = ctx.motion.move(lift, candidate.rotation, config)
+    finally:
+        if resting_on and not ctx.motion.allow_contact(target_name, resting_on, False):
+            logger.warn(f"Couldn't restore collision checking between '{target_name}' and {', '.join(resting_on)}")
+    if not succeeded:
+        return ctx.fail_at_home(f"Grasped '{target_name}' but failed to lift it: {message}")
+    return True, f"Picked up '{target_name}' with a {candidate.style} grasp"

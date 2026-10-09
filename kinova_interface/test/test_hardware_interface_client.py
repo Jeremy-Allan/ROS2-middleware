@@ -7,7 +7,9 @@ from unittest.mock import MagicMock, patch
 from std_srvs.srv import Trigger
 from example_interfaces.msg import Bool
 from kinova_interfaces.msg import ExtendedStatus
-from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
+from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove, ExecuteTrajectory
+from moveit_msgs.msg import RobotTrajectory
+from trajectory_msgs.msg import JointTrajectoryPoint
 
 from moveit_msgs.action import MoveGroup
 from moveit_msgs.msg import MoveItErrorCodes
@@ -320,7 +322,7 @@ def test_send_home_goal_matches_send_joint_goal_defaults(node):
     goal = node.arm_client.send_goal_async.call_args[0][0]
     positions = [jc.position for jc in goal.request.goal_constraints[0].joint_constraints]
 
-    assert positions == node.HOME_JOINT_POSITIONS
+    assert positions == node.home_joint_positions
 
 
 def test_handle_joint_move_waits_by_default(node):
@@ -408,6 +410,21 @@ def test_handle_joint_move_failure_to_start(node):
 
     assert result.success is False
     assert result.message == "Failed to initiate joint move"
+
+
+def test_handle_joint_move_reports_the_moveit_error_code(node):
+    node.send_joint_goal = _goal_results(node, [
+        (False, "planning failed", MoveItErrorCodes.PLANNING_FAILED),
+        (False, "control failed", MoveItErrorCodes.CONTROL_FAILED),
+    ])
+    request = JointMove.Request()
+    request.joint_positions = [0.0] * 6
+    request.wait_for_completion = True
+
+    result = node.handle_joint_move(request, JointMove.Response())
+
+    assert result.success is False
+    assert result.error_code.val == MoveItErrorCodes.CONTROL_FAILED
 
 
 def test_on_joint_state_caches_latest_positions(node):
@@ -1110,7 +1127,7 @@ def test_result_callback_failure(node):
 
     result = MagicMock()
 
-    result.error_code.val = result.error_code.PLANNING_FAILED
+    result.error_code.val = MoveItErrorCodes.PLANNING_FAILED
 
     future = MagicMock()
     future.result.return_value.result = result
@@ -1120,6 +1137,7 @@ def test_result_callback_failure(node):
     node.result_callback(future)
 
     assert node.arm_action_successful is False
+    assert node.arm_action_message.startswith('planning failed')
     assert node.arm_movement_finished.is_set()
     assert node.current_state == ExtendedStatus.STATE_IDLE
     assert node.status_text == "Movement failed"
@@ -1236,3 +1254,44 @@ def test_await_action_timeout(node):
 
     assert result.success is False
     assert "timed out after 5.0s" in result.message
+
+
+# execute_trajectory
+def _trajectory(seconds):
+    trajectory = RobotTrajectory()
+    point = JointTrajectoryPoint()
+    point.time_from_start.sec = seconds
+    trajectory.joint_trajectory.points = [point]
+    return trajectory
+
+
+def test_handle_execute_trajectory_runs_it_through_moveit_execute_trajectory(node):
+    node._dispatch_arm_goal = _goal_results(node, [(True, "Movement complete", MoveItErrorCodes.SUCCESS)])
+    request = ExecuteTrajectory.Request(trajectory=_trajectory(2))
+
+    result = node.handle_execute_trajectory(request, ExecuteTrajectory.Response())
+
+    assert (result.success, result.message, result.error_code.val) == (True, "Movement complete", MoveItErrorCodes.SUCCESS)
+    goal, client = node._dispatch_arm_goal.call_args[0]
+    assert client is node.execute_client
+    assert goal.trajectory == request.trajectory
+    # Waits for the trajectory itself plus the usual margin
+    assert node.arm_movement_finished.wait.call_args.kwargs["timeout"] == 2 + node.action_timeout
+
+
+def test_handle_execute_trajectory_reports_the_moveit_error(node):
+    node._dispatch_arm_goal = _goal_results(node, [(False, "control failed", MoveItErrorCodes.CONTROL_FAILED)])
+
+    result = node.handle_execute_trajectory(ExecuteTrajectory.Request(trajectory=_trajectory(1)), ExecuteTrajectory.Response())
+
+    assert (result.success, result.error_code.val) == (False, MoveItErrorCodes.CONTROL_FAILED)
+    node._dispatch_arm_goal.assert_called_once()  # executing never re-plans
+
+
+def test_handle_execute_trajectory_rejects_an_empty_trajectory(node):
+    node._dispatch_arm_goal = MagicMock()
+
+    result = node.handle_execute_trajectory(ExecuteTrajectory.Request(), ExecuteTrajectory.Response())
+
+    assert (result.success, result.message) == (False, "Trajectory has no points")
+    node._dispatch_arm_goal.assert_not_called()

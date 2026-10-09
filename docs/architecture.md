@@ -33,22 +33,22 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 ## Middleware node deep dive
 
 **`hardware_interface_client.py`, the only node that touches the robot:**
-- Exposes five services under its private namespace: `/kinova_hardware_client/home_arm`, `move_arm`, `move_gripper`, `relative_move`, `joint_move`.
+- Exposes six services under its private namespace: `/kinova_hardware_client/home_arm`, `move_arm`, `move_gripper`, `relative_move`, `joint_move`, `execute_trajectory`.
 - The only node that *executes* motion. Other code may query MoveIt (IK, FK, state validity, planning scene), but every arm or gripper movement goes through this node.
-- Internally a client of two ROS 2 actions: `move_action` (MoveIt 2's `MoveGroup`, for Cartesian moves and the fixed joint-space `home` pose) and `/gen3_lite_2f_gripper_controller/gripper_cmd` (direct gripper control, bypassing MoveIt entirely).
+- Internally a client of three ROS 2 actions: `move_action` (MoveIt 2's `MoveGroup`, plans and moves in one go, for `move_arm`, `joint_move` and `home`), `execute_trajectory` (MoveIt 2's `ExecuteTrajectory`, runs a trajectory that pickup or dropoff already planned) and `/gen3_lite_2f_gripper_controller/gripper_cmd` (direct gripper control, bypassing MoveIt entirely).
 - Movement calls block synchronously on a `threading.Event()` until the action's result callback fires, which is what makes each recipe step wait for the robot to actually finish.
 - Subscribes to `/fault_controller/is_faulted` to know instantly if the arm enters a hardware fault state.
 
 **`environment_mapping_node.py`, the read-mostly knowledge base:**
-- Loads `object_dictionary.json`, `relative_movement.json`, `orientation_presets.json`, and `obstacles.json` once at startup. No live file-watching; a config change needs a restart.
+- Loads `workspace_objects.yaml` (objects and obstacles) and `movements_and_orientations.yaml` (relative movements and orientations) once at startup. No live file-watching; a config change needs a restart.
 - Exposes `/get_coordinates`, `/get_object_info`, `/get_relative_movement`, `/get_orientation_preset`, `/get_robot_parameters`, all pure lookups against the in-memory data.
-- Separately pushes every entry in `obstacles.json` into MoveIt's planning scene once `/apply_planning_scene` becomes available.
+- Separately pushes every obstacle in `workspace_objects.yaml` into MoveIt's planning scene once `/apply_planning_scene` becomes available.
 
 **`json_parser_node.py`, orchestration:**
 - Loads a recipe two ways: a static file via the `recipe` launch parameter, or a dynamic JSON string via the `/execute_recipe` service, which is exactly what the proxy calls at runtime.
 - Iterates recipe steps in order, stopping at the first failure.
-- Dispatches each step to an action in `kinova_interface/actions/` (see the layout below). Actions call the hardware and environment nodes' services, and query MoveIt services directly (`/compute_ik`, `/compute_fk`, `/check_state_validity`, `/get_planning_scene`, `/apply_planning_scene`), but never execute motion themselves.
-- On failure, `/execute_recipe` returns the failing step and action (for example `Recipe failed at step 2 (pickup)`). For why it failed, check the node's logs.
+- Dispatches each step to an action in `kinova_interface/actions/` (see the layout below). Actions call the hardware and environment nodes' services, and query MoveIt services directly (`/compute_ik`, `/compute_fk`, `/check_state_validity`, `/get_planning_scene`, `/apply_planning_scene`), but never execute motion themselves. Pickup and dropoff plan their moves with `/plan_kinematic_path` (Pilz PTP/LIN, OMPL RRT\* fallback) and `/compute_cartesian_path` (straight-line fallback), checking a whole pick or place before the arm moves, then run each plan through `execute_trajectory`. See `actions/motion.py`.
+- Each action returns `(success, message)`. On failure, `/execute_recipe` returns the failing step, its action and the reason, for example `Recipe failed at step 2 (pickup): Failed to move to object position: <MoveIt error>`.
 
 **`telemetry_node.py`, pure aggregation:**
 - Subscribes to `/status/node_report`, publishes an aggregated `/system/status` every 0.5s using a worst-case-wins rule across all tracked nodes.
@@ -57,7 +57,7 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 
 ## Proxy internals
 
-The proxy's own components (`llm_proxy.py`, the LLM adapters, `ros2_bridge_ws`, the Textual terminal interface) are documented in the embodied-ai-proxy repository itself: [github.com/paul-isit/embodied-ai-proxy](https://github.com/paul-isit/embodied-ai-proxy). This page covers this middleware's own internals in depth; the pipeline diagram above is the shared context between the two.
+The proxy's own components (`llm_proxy.py`, the LLM adapters, the Textual terminal interface) are documented in the embodied-ai-proxy repository itself: [github.com/paul-isit/embodied-ai-proxy](https://github.com/paul-isit/embodied-ai-proxy). This page covers this middleware's own internals in depth; the pipeline diagram above is the shared context between the two.
 
 ## Custom interface types (middleware)
 
@@ -74,8 +74,9 @@ The proxy's own components (`llm_proxy.py`, the LLM adapters, `ros2_bridge_ws`, 
 | `GetRelativeMovement` | `move_id` (string) | `x`, `y`, `z`, `success`, `message` |
 | `GetOrientationPreset` | `preset_name` (string) | `roll`, `pitch`, `yaw`, `success`, `message` |
 | `GetRobotParameters` | (none) | `object_list[]`, `movement_names[]`, `orientation_names[]` |
-| `JointMove` | `joint_positions[]` (float64), `wait_for_completion` (bool), `relative` (bool), `motion_params` (`MotionParams`) | `success`, `message` |
-| `ExecuteRecipe` | `recipe_json` (string) | `success`, `message` (the failing step and action on failure) |
+| `JointMove` | `joint_positions[]` (float64), `wait_for_completion` (bool), `relative` (bool), `motion_params` (`MotionParams`) | `success`, `message`, `error_code` (`moveit_msgs/MoveItErrorCodes`, 0 if MoveIt never answered) |
+| `ExecuteTrajectory` | `trajectory` (`moveit_msgs/RobotTrajectory`, already planned) | `success`, `message`, `error_code` (`moveit_msgs/MoveItErrorCodes`, 0 if MoveIt never answered) |
+| `ExecuteRecipe` | `recipe_json` (string) | `success`, `message` (the failing step, action and reason on failure) |
 
 `MoveArm`'s `has_orientation` defaults to `false`: no orientation constraint, MoveIt picks the orientation, and the move is planned with OMPL RRT* since Pilz needs a full pose. `RelativeMove` always keeps the current orientation (plus any deltas), so it has no such flag.
 
@@ -100,7 +101,6 @@ flowchart TD
     SRC --> RK["ros2_kortex/<br/>Kinova's official driver + MoveIt config"]
     SRC --> MID["ROS2-middleware/<br/>this repo"]
 
-    PROXY --> BRIDGE["ros2_bridge_ws/<br/>src/custom_bridge_pkg/"]
     PROXY --> PSRC["src/, configs/, tests/"]
 ```
 
@@ -113,14 +113,14 @@ ROS2-middleware/
   README.md
   docs/                          this documentation
   kinova_interface/
-    data/configs/env/            object_dictionary.json, relative_movement.json, orientation_presets.json, obstacles.json
+    data/configs/env/            workspace_objects.yaml, movements_and_orientations.yaml
     kinova_interface/             the Python package
       nodes/                      the four ROS nodes (entry points)
       actions/                    one module per recipe action (pickup.py, pour.py, ...) + arm_actions.py, their shared service clients/helpers
       utils/                      shared pure helpers: robot.py (frame, joint and link names), geometry.py (math), ros.py (service-call helpers)
     scripts/run_recipe.py         send a recipe file to /execute_recipe (ros2 run kinova_interface run_recipe.py <file>)
     scripts/check_orientations.py move to a grid of poses per orientation preset and check the reached orientation (see testing.md)
-    launch/robot.launch.py
+    launch/robot.launch.py        the whole stack, including rosbridge_server for the proxy
     recipes/                      task_recipe.json, test_suite/
   kinova_interfaces/
     srv/, msg/                    custom service and message definitions
@@ -132,8 +132,6 @@ embodied-ai-proxy/
     llm_config.json                LLM provider configuration
     system_prompt.md               LLM behavior rules and few-shot examples
     json_schema.json               strict output schema
-  ros2_bridge_ws/
-    src/custom_bridge_pkg/         launches rosbridge_server
   src/
     backend/
       llm_proxy.py                 main orchestrator

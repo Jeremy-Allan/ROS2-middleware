@@ -54,17 +54,12 @@ class JsonParserNode(Node):
     def __init__(self):
         super().__init__('json_parser_node')
 
-        # 1. Callback Groups
         # Reentrant group for general service clients to allow multiple responses
         self.cb_group = ReentrantCallbackGroup()
         # Mutually exclusive group for the execution sequence to ensure one recipe at a time
         self.exec_cb_group = MutuallyExclusiveCallbackGroup()
 
-        # 2. Arm actions: owns the hardware/environment service clients and
-        # the dictionary of named action handlers ('home', 'pickup', etc.)
         self.arm_actions = ArmActions(self)
-
-        # 3. Initialize the Parser
         self.parser = JsonParser(self)
 
         # Telemetry Setup
@@ -74,14 +69,12 @@ class JsonParserNode(Node):
         self.status_text = "JSON Parser Online & Ready"
         self.command_success = True
 
-        # 4. Create Service to execute recipes dynamically
-        # Put this in the exec_cb_group so dynamic recipes don't overlap with static ones
         self.execute_srv = self.create_service(ExecuteRecipe, '/execute_recipe', self.execute_recipe_callback, callback_group=self.exec_cb_group)
         self.reset_srv = self.create_service(Trigger, '/reset_environment', self.reset_environment_callback, callback_group=self.exec_cb_group)
 
         self.get_logger().info("JSON Parser Node Online.")
 
-        # 5. Declare and get the recipe parameter
+        # Declare and get the recipe parameter
         self.declare_parameter('recipe', 'none')
         recipe_file = self.get_parameter('recipe').get_parameter_value().string_value
 
@@ -90,17 +83,9 @@ class JsonParserNode(Node):
             if os.path.isabs(recipe_file):
                 recipe_path = recipe_file
             else:
-                try:
-                    package_share_directory = get_package_share_directory('kinova_interface')
-                    recipe_path = os.path.join(package_share_directory, 'recipes', recipe_file)
-                except Exception as e:
-                    # Fallback for local development
-                    self.get_logger().warning(f"Could not find package share directory, falling back to local path: {e}")
-                    # nodes/ -> kinova_interface/ (python pkg) -> kinova_interface/ (ROS pkg, holds recipes/)
-                    base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-                    recipe_path = os.path.join(base_path, 'recipes', recipe_file)
+                recipe_path = os.path.join(get_package_share_directory('kinova_interface'), 'recipes', recipe_file)
 
-        # 6. If a static recipe was provided, execute it on startup using a one-shot Timer
+        # If a static recipe was provided, execute it on startup using a one-shot Timer
         if recipe_path:
             self.get_logger().info(f"Loading static recipe from {recipe_path}")
             if self.parser.load_recipe_from_file(recipe_path):
@@ -175,8 +160,7 @@ class JsonParserNode(Node):
         return response
 
     def _dispatch_step(self, index, step):
-        """Look up and run the handler for one recipe step, logging enough to
-        reconstruct what was attempted and what happened for the LLM safety research."""
+        """Look up and run the handler for one recipe step, returns (success, message)."""
         action = step.get('action')
         params = step.get('parameters', {})
         timestamp = time.time()
@@ -187,22 +171,17 @@ class JsonParserNode(Node):
                 f"[recipe_log] step={index+1} timestamp={timestamp:.3f} action={action} "
                 f"parameters={params} accepted=False result=unknown_action"
             )
-            return False
+            return False, f"Unknown action '{action}'"
 
         self.get_logger().info(
             f"[recipe_log] step={index+1} timestamp={timestamp:.3f} action={action} "
             f"parameters={params} accepted=True"
         )
-        # Cleared before every dispatch, so a step that fails without going
-        # through ctx.fail() (rather than a genuine bug in the failure
-        # path itself) surfaces as "no further detail", not a stale reason
-        # left over from an earlier, unrelated failure.
-        self.arm_actions.last_error = None
-        success = handler(params)
+        success, message = handler(params)
         self.get_logger().info(
-            f"[recipe_log] step={index+1} action={action} result={'success' if success else 'failure'}"
+            f"[recipe_log] step={index+1} action={action} result={'success' if success else 'failure'} message={message}"
         )
-        return success
+        return success, message
 
     def execute_recipe(self) -> bool:
         """Entry point for recipe execution with guaranteed exception safety
@@ -240,13 +219,12 @@ class JsonParserNode(Node):
             self.get_logger().info(f"[Step {i+1}] {step.get('description', '')}")
             self._update_node_status(status_text=f"Step {i+1}/{len(steps)}: {step.get('description', '')}")
 
-            success = self._dispatch_step(i, step)
+            self.arm_actions.upcoming_steps = list(enumerate(steps[i + 1:], start=i + 2))
+            success, message = self._dispatch_step(i, step)
 
             if not success:
-                self.get_logger().error(f"Failed at step {i+1}: {step.get('action')}")
-                self.status_text = f"Recipe failed at step {i+1} ({step.get('action')})"
-                if self.arm_actions.last_error:
-                    self.status_text += f": {self.arm_actions.last_error}"
+                self.status_text = f"Recipe failed at step {i+1} ({step.get('action')}): {message}"
+                self.get_logger().error(self.status_text)
                 self.command_success = False
                 self.get_logger().info(
                     f"[recipe_log] event=end timestamp={time.time():.3f} recipe={recipe_name} result=failure"

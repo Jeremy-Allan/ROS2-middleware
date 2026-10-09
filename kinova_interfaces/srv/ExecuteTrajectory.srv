@@ -1,0 +1,6 @@
+# Run a trajectory that was already planned with MoveIt (/plan_kinematic_path or /compute_cartesian_path)
+moveit_msgs/RobotTrajectory trajectory
+---
+bool success
+string message
+moveit_msgs/MoveItErrorCodes error_code  # why MoveIt failed, val 0 if it never answered

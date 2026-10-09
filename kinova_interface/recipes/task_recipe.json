@@ -1,63 +1,12 @@
 {
-  "recipe_name": "Object Collection Routine",
+  "recipe_name": "Tidy Up - Cube and Bottle onto the Tray",
+  "description": "Pick up the blue cube and the water bottle and place them side by side on the delivery tray",
   "steps": [
-    {
-      "step_id": 1,
-      "action": "home",
-      "description": "Start at home"
-    },
-    {
-      "step_id": 2,
-      "action": "gripper",
-      "parameters": {
-        "position": 0.0
-      },
-      "description": "Release object"
-    },
-    {
-      "step_id": 3,
-      "action": "move_arm",
-      "parameters": {
-        "target": "water_bottle"
-      },
-      "description": "Navigate to the water bottle"
-    },
-    {
-      "step_id": 4,
-      "action": "gripper",
-      "parameters": {
-        "position": 1.0
-      },
-      "description": "Close fingers"
-    },
-    {
-      "step_id": 5,
-      "action": "relative_move",
-      "parameters": {
-        "vector": "move_upwards"
-      },
-      "description": "Lift the cube slightly"
-    },
-    {
-      "step_id": 6,
-      "action": "relative_move",
-      "parameters": {
-        "vector": "move_upwards"
-      },
-      "description": "Move to the drop-off zone"
-    },
-    {
-      "step_id": 7,
-      "action": "gripper",
-      "parameters": {
-        "position": 0.0
-      },
-      "description": "Release object"
-    },
-    {
-      "step_id": 8,
-      "action": "home",
-      "description": "Return to home"
-    }
+    { "step_id": 1, "action": "home", "description": "Start at home" },
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "blue_cube" }, "description": "Pick up the blue cube (auto picks a top grasp)" },
+    { "step_id": 3, "action": "dropoff", "parameters": { "destination": "delivery_tray", "direction": "backward", "distance": 0.05 }, "description": "Place it on the near half of the tray, a top grasp can't reach as far" },
+    { "step_id": 4, "action": "pickup", "parameters": { "target": "water_bottle" }, "description": "Pick up the water bottle (auto picks a side grasp)" },
+    { "step_id": 5, "action": "dropoff", "parameters": { "destination": "delivery_tray", "direction": "forward", "distance": 0.05 }, "description": "Stand it on the far half of the tray, a side grasp reaches further" },
+    { "step_id": 6, "action": "home", "description": "Return home" }
   ]
 }

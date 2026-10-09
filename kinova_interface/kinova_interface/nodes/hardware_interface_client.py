@@ -1,13 +1,14 @@
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 import threading
 from collections import namedtuple
 
-from moveit_msgs.action import MoveGroup
-from moveit_msgs.msg import Constraints, PositionConstraint, OrientationConstraint, JointConstraint, MoveItErrorCodes
+from moveit_msgs.action import MoveGroup, ExecuteTrajectory as MoveItExecuteTrajectory
+from moveit_msgs.msg import Constraints, PositionConstraint, OrientationConstraint, JointConstraint
 from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose
 from control_msgs.action import GripperCommand
@@ -21,25 +22,14 @@ from tf2_ros import Buffer, TransformListener
 from scipy.spatial.transform import Rotation
 
 from kinova_interfaces.msg import ExtendedStatus
-from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove
+from kinova_interfaces.srv import HomeArm, MoveArm, MoveGripper, RelativeMove, JointMove, ExecuteTrajectory
 
-from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES
+from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES, BEFORE_MOTION_ERRORS, moveit_error
 
 
 class HardwareInterfaceClient(Node):
-    ACTION_TIMEOUT_SEC = 30.0
-    GRIPPER_TIMEOUT_SEC = 10.0
-    SERVER_WAIT_TIMEOUT_SEC = 5.0
     PLANNING_GROUP = 'arm'
-    ALLOWED_PLANNING_TIME_SEC = 10.0
-    SPHERE_TOLERANCE_RADIUS = 0.01
-
-    # Home's fixed joint configuration - also the base pose 'throw' starts
-    # its wind-up/fling from, reoriented at joint_1 to face the throw
-    # direction and offset at joint_3 (the elbow) for the swing.
-    HOME_JOINT_POSITIONS = [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]
-    HOME_JOINT_TOLERANCE = 0.01
-    # TODO: make these ^^ configurable
+    SERVER_WAIT_TIMEOUT_SEC = 5.0
 
     # A rejected/invalid goal (e.g. an unreachable combined joint state)
     # typically fails within milliseconds, well before a real motion could
@@ -52,20 +42,21 @@ class HardwareInterfaceClient(Node):
     # around obstacles), then fall back to OMPL RRT* if it can't plan.
     Planner = namedtuple('Planner', 'pipeline_id planner_id num_attempts label')
     PILZ_PTP = Planner('pilz_industrial_motion_planner', 'PTP', 4, 'Pilz PTP')
-    # 4 attempts = one parallel batch, so about ALLOWED_PLANNING_TIME_SEC total
+    # 4 attempts = one parallel batch, so about planning_time total
     RRT_STAR = Planner('ompl', 'RRTstarkConfigDefault', 4, 'OMPL RRT*')
-    # Failed before anything moved, so it's safe to re-plan
-    REPLANNABLE_ERROR_CODES = {
-        MoveItErrorCodes.FAILURE,
-        MoveItErrorCodes.PLANNING_FAILED,
-        MoveItErrorCodes.INVALID_MOTION_PLAN,
-        MoveItErrorCodes.NO_IK_SOLUTION,
-        MoveItErrorCodes.INVALID_GOAL_CONSTRAINTS,
-    }
 
     def __init__(self):
         super().__init__('kinova_hardware_client')
         self.get_logger().info('Kinova Hardware Client Online - Waiting for Service Requests...')
+
+        # Settings under 'hardware' in data/configs/motion_settings.yaml, which launch passes in. Read once at startup.
+        self.action_timeout = self._setting('action_timeout')
+        self.gripper_timeout = self._setting('gripper_timeout')
+        self.planning_time = self._setting('planning_time')
+        self.goal_tolerance = self._setting('goal_tolerance')
+        # Also the pose 'throw' winds up from
+        self.home_joint_positions = list(self._setting('home_joint_positions', Parameter.Type.DOUBLE_ARRAY))
+        self.home_joint_tolerance = self._setting('home_joint_tolerance')
 
         # Use a ReentrantCallbackGroup to allow service handlers and action callbacks to run concurrently
         self.callback_group = ReentrantCallbackGroup()
@@ -73,6 +64,11 @@ class HardwareInterfaceClient(Node):
         # Action Clients (The "Skills")
         self.arm_client = ActionClient(
             self, MoveGroup, 'move_action',
+            callback_group=self.callback_group
+        )
+        # Runs trajectories planned elsewhere (pickup/dropoff plan them with MoveIt first)
+        self.execute_client = ActionClient(
+            self, MoveItExecuteTrajectory, 'execute_trajectory',
             callback_group=self.callback_group
         )
         self.gripper_client = ActionClient(
@@ -140,6 +136,7 @@ class HardwareInterfaceClient(Node):
         self.move_gripper_srv = self.create_service(MoveGripper, '~/move_gripper', self.handle_move_gripper, callback_group=self.callback_group)
         self.relative_move_srv = self.create_service(RelativeMove, '~/relative_move', self.handle_relative_move, callback_group=self.callback_group)
         self.joint_move_srv = self.create_service(JointMove, '~/joint_move', self.handle_joint_move, callback_group=self.callback_group)
+        self.execute_trajectory_srv = self.create_service(ExecuteTrajectory, '~/execute_trajectory', self.handle_execute_trajectory, callback_group=self.callback_group)
 
     # --- Telemetry Status Publisher ---
     def publish_status(self):
@@ -256,6 +253,7 @@ class HardwareInterfaceClient(Node):
                     f"{planners[i - 1].label} could not plan ({response.message}), re-planning with {planner.label}"
                 )
             if not send_goal(planner):
+                self.arm_action_error_code = None  # nothing reached MoveIt, so no code
                 response.success = False
                 response.message = start_failure_message
                 return False
@@ -263,7 +261,7 @@ class HardwareInterfaceClient(Node):
             if wait:
                 self._await_action(
                     self.arm_movement_finished,
-                    self.ACTION_TIMEOUT_SEC,
+                    self.action_timeout,
                     'arm_action_successful',
                     'arm_action_message',
                     action_desc,
@@ -280,9 +278,14 @@ class HardwareInterfaceClient(Node):
             if response.success:
                 response.message += f" (planned with {planner.label})"
                 return False
-            if self.arm_action_error_code not in self.REPLANNABLE_ERROR_CODES:
+            if self.arm_action_error_code not in BEFORE_MOTION_ERRORS:
                 return False
         return False
+
+    def _setting(self, name, parameter_type=Parameter.Type.DOUBLE):
+        """A value under 'hardware' in motion_settings.yaml. Raises at startup if it's missing."""
+        self.declare_parameter(f'hardware.{name}', parameter_type)
+        return self.get_parameter(f'hardware.{name}').value
 
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
@@ -343,8 +346,43 @@ class HardwareInterfaceClient(Node):
             response,
             wait=request.wait_for_completion,
         )
+        response.error_code.val = self.arm_action_error_code or 0
         if still_running:
             return response
+        return self.finalize_service_status(response)
+
+    def handle_execute_trajectory(self, request, response):
+        """Run an already planned trajectory through MoveIt's /execute_trajectory, no re-planning."""
+        points = request.trajectory.joint_trajectory.points
+        duration = points[-1].time_from_start.sec + points[-1].time_from_start.nanosec * 1e-9 if points else 0.0
+        self.get_logger().info(f"Service Call: Execute Trajectory ({len(points)} points, {duration:.2f} s)")
+        self.current_state = ExtendedStatus.STATE_BUSY
+        self.status_text = f"Executing a {duration:.2f} s trajectory..."
+        self.publish_status()
+
+        if not points:
+            response.success = False
+            response.message = "Trajectory has no points"
+            return self.finalize_service_status(response)
+
+        if not self.execute_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
+            self.get_logger().error('Execute trajectory server not available')
+            response.success = False
+            response.message = "Failed to start execution (execute_trajectory action server unavailable)"
+            return self.finalize_service_status(response)
+
+        goal = MoveItExecuteTrajectory.Goal()
+        goal.trajectory = request.trajectory
+        self._dispatch_arm_goal(goal, self.execute_client)
+        self._await_action(
+            self.arm_movement_finished,
+            duration + self.action_timeout,
+            'arm_action_successful',
+            'arm_action_message',
+            "Trajectory execution",
+            response,
+        )
+        response.error_code.val = self.arm_action_error_code or 0
         return self.finalize_service_status(response)
 
     def handle_move_arm(self, request, response):
@@ -442,7 +480,7 @@ class HardwareInterfaceClient(Node):
         if self.move_gripper(pos):
             self._await_action(
                 self.gripper_movement_finished,
-                self.GRIPPER_TIMEOUT_SEC,
+                self.gripper_timeout,
                 'gripper_action_successful',
                 'gripper_action_message',
                 f"Gripper movement to {pos}",
@@ -479,7 +517,7 @@ class HardwareInterfaceClient(Node):
         request.pipeline_id = planner.pipeline_id
         request.planner_id = planner.planner_id
         request.num_planning_attempts = planner.num_attempts
-        request.allowed_planning_time = self.ALLOWED_PLANNING_TIME_SEC
+        request.allowed_planning_time = self.planning_time
 
         if motion_params is not None:
             velocity_scale, acceleration_scale = self.clamp_motion_params(motion_params)
@@ -508,7 +546,7 @@ class HardwareInterfaceClient(Node):
 
         sphere = SolidPrimitive()
         sphere.type = SolidPrimitive.SPHERE
-        sphere.dimensions = [self.SPHERE_TOLERANCE_RADIUS]
+        sphere.dimensions = [self.goal_tolerance]
 
         target_pose = Pose()
         target_pose.position.x = float(x)
@@ -541,7 +579,7 @@ class HardwareInterfaceClient(Node):
         return self._dispatch_arm_goal(goal_msg)
 
     def send_home_goal(self, planner, motion_params=None):
-        return self.send_joint_goal(self.HOME_JOINT_POSITIONS, motion_params=motion_params, planner=planner)
+        return self.send_joint_goal(self.home_joint_positions, motion_params=motion_params, planner=planner)
 
     def send_joint_goal(self, joint_positions, planner, motion_params=None):
         """Plan and execute a move to an absolute target for each of
@@ -558,8 +596,8 @@ class HardwareInterfaceClient(Node):
             jc = JointConstraint()
             jc.joint_name = name
             jc.position = pos
-            jc.tolerance_above = self.HOME_JOINT_TOLERANCE
-            jc.tolerance_below = self.HOME_JOINT_TOLERANCE
+            jc.tolerance_above = self.home_joint_tolerance
+            jc.tolerance_below = self.home_joint_tolerance
             jc.weight = 1.0
             constraints.append(jc)
 
@@ -568,10 +606,12 @@ class HardwareInterfaceClient(Node):
         goal_msg.request.goal_constraints.append(goal_constraints)
         return self._dispatch_arm_goal(goal_msg)
 
-    def _dispatch_arm_goal(self, goal_msg):
+    def _dispatch_arm_goal(self, goal_msg, client=None):
+        """Send a MoveGroup goal, or an ExecuteTrajectory goal with client=execute_client.
+        Both results carry a MoveIt error_code, so they share the callbacks below."""
         self.arm_movement_finished.clear()
         self.arm_action_error_code = None
-        future = self.arm_client.send_goal_async(
+        future = (client or self.arm_client).send_goal_async(
             goal_msg,
             feedback_callback=self.arm_feedback_callback
         )
@@ -630,25 +670,7 @@ class HardwareInterfaceClient(Node):
                 self.arm_action_message = 'Movement complete'
             else:
                 self.arm_action_successful = False
-
-                match error_code:
-                    case result.error_code.NO_IK_SOLUTION:
-                        msg = "Coordinates out of reach (no inverse kinematics solution)"
-                    case result.error_code.PLANNING_FAILED:
-                        msg = "Planning failed (path blocked by obstacle or self-collision)"
-                    case result.error_code.TIMED_OUT:
-                        msg = "MoveIt planning/movement timed out"
-                    case result.error_code.GOAL_IN_COLLISION:
-                        msg = "Goal is in collision (target position inside an obstacle)"
-                    case result.error_code.START_STATE_IN_COLLISION:
-                        msg = "Start state is in collision (robot currently in collision)"
-                    case result.error_code.CONTROL_FAILED:
-                        msg = "Control failed during execution (hardware error)"
-                    case result.error_code.ABORT:
-                        msg = "Movement was aborted by MoveIt"
-                    case _:
-                        msg = f"MoveIt failed with error code: {error_code}"
-
+                msg = moveit_error(error_code)
                 self.get_logger().error(f"ERROR: {msg}")
                 self.arm_action_message = msg
                 self.handle_moveit_failure()

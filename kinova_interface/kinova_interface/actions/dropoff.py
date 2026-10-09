@@ -1,7 +1,19 @@
-"""'dropoff' recipe action."""
+"""'dropoff' recipe action: pickup in reverse. Hover -> straight descent -> open -> detach -> straight back-off.
+
+The object is placed with the grasp it was picked up with, trying other yaws about vertical if the pickup one
+can't be planned. Each yaw's moves are planned in a chain before the arm moves. On failure the arm backs off
+and goes home."""
+from collections import Counter
 from typing import TYPE_CHECKING
 
-from kinova_interface.utils.geometry import object_half_height
+import numpy as np
+
+from kinova_interface.actions.motion import MotionUnavailable
+from kinova_interface.utils.geometry import resolve_direction_offset
+from kinova_interface.utils.grasping import (
+    PlaceCandidate, Waypoint, contains_xy, half_extent, object_centre, object_rotation, place_candidates,
+)
+from kinova_interface.utils.robot import GRIPPER_OPEN
 
 # Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
 # because arm_actions imports this module and that would be circular.
@@ -9,73 +21,120 @@ if TYPE_CHECKING:
     from kinova_interface.actions.arm_actions import ArmActions
 
 
-def run(ctx: 'ArmActions', params: dict) -> bool:
-    # Fall back to the object we actually know is held if the recipe
-    # step didn't name one - the release-height math below needs the
-    # held object's height to avoid releasing into the destination.
-    target_name = params.get('target') or ctx.held_object
+def _rounded(position) -> list[float]:
+    return np.round(position, 3).tolist()
+
+
+def _back_off(ctx: 'ArmActions', candidate: PlaceCandidate, hover: Waypoint, message: str) -> tuple[bool, str]:
+    """Rise back to the hover in a straight line, then go home and fail. If it can't get clear, it stays put."""
+    ctx.get_logger().warn(f"{message}; backing off to the hover pose")
+    succeeded, reason = ctx.motion.move(hover, candidate.rotation, ctx.grasp_config)
+    if not succeeded:
+        return False, f"{message}; failed to back off to the hover pose: {reason}"
+    return ctx.fail_at_home(message)
+
+
+def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
+    """All parameters optional. 'target' defaults to the held object.
+    The object goes on the centre of 'destination''s top, or back where it was picked up if there's no destination.
+    'direction'/'distance' move that spot, relative to the arm's base."""
+    logger = ctx.get_logger()
+    held = ctx.held_object
+    target_name = params.get('target') or held
+    if not held:
+        return False, "Dropoff needs a held object, but nothing is held"
+    if target_name != held:
+        return False, f"Not holding '{target_name}' (holding '{held}')"
+
+    target_info = ctx.get_object_info(target_name)
+    if not target_info:
+        return False, f"Could not resolve dropoff target '{target_name}'"
+
+    # Where the object's bottom centre should end up
     destination_name = params.get('destination')
-    open_pos = float(params.get('open_position', 0.0))
-    hover_clearance = float(params.get('place_offset', 0.1))
-    release_clearance = 0.02
-
-    target_info = ctx.get_object_info(target_name) if target_name else None
-    target_half_height = object_half_height(target_info['shape']) if target_info else 0.0
-
-    if destination_name:
-        dest_info = ctx.get_object_info(destination_name)
-        if not dest_info:
-            return ctx.fail(f"Could not resolve destination '{destination_name}'")
-
-        dest_pos = dest_info['pose']['position']
-        dest_top_z = dest_pos['z'] + object_half_height(dest_info['shape'])
-
-        # release_z is where the target object's center should end up,
-        # resting on top of the destination rather than at its own center
-        release_z = dest_top_z + target_half_height
-        px, py = dest_pos['x'], dest_pos['y']
-    else:
-        # No destination given - release right where the held object
-        # already is (its own registered position), the same convention
-        # 'pour' uses when neither 'destination' nor 'direction' is given.
-        # 'destination' used to be required, which meant a command like
-        # "drop the cube" (naming no destination at all) forced the LLM to
-        # invent one rather than actually meaning "just let go of it here".
-        if not target_info:
-            return ctx.fail("dropoff with no 'destination' needs a resolvable 'target' to release in place")
-        pos = target_info['pose']['position']
-        px, py = pos['x'], pos['y']
-        release_z = pos['z'] + target_half_height
-
-    # 1. Move to a hover position above the destination, collision-safe approach
-    r = ctx.call_move_service(px, py, release_z + hover_clearance)
-    if not (r and r['success']):
-        return ctx.fail('Failed to move to hover position above destination')
-
-    # 2. Lower to a small clearance above the release height before opening,
-    # so the object isn't dropped from the hover height
-    r = ctx.call_move_service(px, py, release_z + release_clearance)
-    if not (r and r['success']):
-        return ctx.fail('Failed to lower to release position')
-
-    # 3. Open gripper to release
-    rg = ctx.call_move_gripper_service(open_pos)
-    if not (rg and rg['success']):
-        return ctx.fail('Failed to open gripper during place')
-
-    if target_name:
-        orient = target_info['pose']['orientation'] if target_info else None
-        # Update pose to the actual release position, not the hover offset
-        if not ctx.update_object_pose(target_name, px, py, release_z, orient):
-            ctx.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
-
-        # 4. Add object back to planning scene (detach)
-        ctx.detach_object(target_name)
+    try:
         if destination_name:
-            ctx.get_logger().info(f"Placed '{target_name}' at '{destination_name}'")
+            destination_info = ctx.get_object_info(destination_name)
+            if not destination_info:
+                return False, f"Could not resolve destination '{destination_name}'"
+            logger.debug(f"Dropoff destination '{destination_name}': pose={destination_info['pose']}, "
+                         f"shape={destination_info['shape']}")
+            release_point = object_centre(destination_info['pose'])
+            release_point[2] += half_extent(destination_info['shape'], object_rotation(destination_info['pose']))
         else:
-            ctx.get_logger().info(f"Released '{target_name}' in place")
+            release_point = object_centre(target_info['pose'])
+            release_point[2] -= half_extent(target_info['shape'], object_rotation(target_info['pose']))
+    except ValueError as error:
+        return False, f"Can't place '{target_name}': {error}"
 
-    if target_name == ctx.held_object:
-        ctx.held_object = None
-    return True
+    direction = params.get('direction')
+    if direction:
+        if 'distance' not in params:
+            return False, f"Dropoff with direction '{direction}' also needs a 'distance'"
+        shifted_xy = resolve_direction_offset(release_point[0], release_point[1], direction, float(params['distance']))
+        if shifted_xy is None:
+            return False, f"Unknown dropoff direction '{direction}'"
+        release_point[0], release_point[1] = shifted_xy
+        if destination_name and not contains_xy(destination_info, *shifted_xy):
+            return False, f"Release point is off '{destination_name}', try a smaller distance"
+
+    config = ctx.grasp_config
+    place_offset = float(params.get('place_offset', config['default_place_offset']))
+    if not 0.0 <= place_offset <= config['max_place_offset']:
+        return False, f"place_offset must be between 0 and {config['max_place_offset']} m, got {place_offset}"
+
+    where = f"on '{destination_name}'" if destination_name else "back where it was"
+    candidates = list(place_candidates(ctx.held_grasp, target_info['shape'], release_point, config, place_offset))
+    logger.info(f"Dropoff '{target_name}' {where}: bottom centre at {_rounded(release_point)}, "
+                f"{np.hypot(release_point[0], release_point[1]):.3f} m from the base, {len(candidates)} yaw(s) to try")
+
+    # The first yaw whose whole hover -> release -> back-off chain can be planned, the pickup one first
+    rejected = Counter()
+    for index, candidate in enumerate(candidates, 1):
+        try:
+            plans, reason = ctx.motion.plan_chain(candidate.waypoints, candidate.rotation, config)
+        except MotionUnavailable as error:
+            return ctx.fail_at_home(f"Can't plan the dropoff of '{target_name}': {error}")
+        if plans is not None:
+            break
+        logger.debug(f"Yaw {candidate.yaw_deg:+.0f} deg ({index}/{len(candidates)}) rejected: {reason}")
+        rejected[reason] += 1
+    else:
+        reasons = '; '.join(f'{n} {reason}' for reason, n in rejected.items())
+        return ctx.fail_at_home(f"No reachable place pose for '{target_name}': {len(candidates)} tried ({reasons})")
+
+    hover, release, back_off = candidate.waypoints
+    logger.info(f"Dropoff '{target_name}': yaw {candidate.yaw_deg:+.0f} deg, release at {_rounded(candidate.release)} "
+                f"(planned with {', '.join(f'{name}: {plan.planner}' for name, plan in plans.items())})")
+
+    # The hover plan starts from the current state, so it can run as is.
+    # Later moves are re-planned from where the arm actually is.
+    logger.info(f"Dropoff '{target_name}': moving to the hover pose")
+    succeeded, message = ctx.motion.execute(plans['hover'])
+    if not succeeded:
+        return ctx.fail_at_home(f"Failed to reach the hover pose for '{target_name}': {message}")
+
+    logger.info(f"Dropoff '{target_name}': descending")
+    succeeded, message = ctx.motion.move(release, candidate.rotation, config)
+    if not succeeded:
+        return _back_off(ctx, candidate, hover, f"Failed to lower '{target_name}' to the release pose: {message}")
+
+    gripper_result = ctx.call_move_gripper_service(GRIPPER_OPEN)
+    if not gripper_result['success']:
+        return _back_off(ctx, candidate, hover, f"Failed to open the gripper to release '{target_name}': {gripper_result['message']}")
+    if not ctx.detach_object(target_name):
+        return _back_off(ctx, candidate, hover, f"Released '{target_name}' but failed to detach it")
+
+    # A failure here is logged by update_object_pose, the object is still placed
+    quaternion = candidate.object_rotation.as_quat()
+    ctx.update_object_pose(target_name, *map(float, candidate.object_centre),
+                           {'x': quaternion[0], 'y': quaternion[1], 'z': quaternion[2], 'w': quaternion[3]})
+    ctx.held_object = None
+    ctx.held_grasp = None
+
+    # Re-planned now the object is detached
+    logger.info(f"Dropoff '{target_name}': backing off")
+    succeeded, message = ctx.motion.move(back_off, candidate.rotation, config)
+    if not succeeded:
+        return ctx.fail_at_home(f"Placed '{target_name}' {where} but failed to back away: {message}")
+    return True, f"Placed '{target_name}' {where}"

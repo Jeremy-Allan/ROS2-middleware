@@ -24,7 +24,9 @@ Test in simulation first, always.
 
 | File | What it validates |
 |---|---|
-| `recipe_pickup.json`, `recipe_dropoff.json` | Pickup of `water_bottle`, then place it on `delivery_tray` |
+| `recipe_pickup.json` | `auto` grasps (top for `blue_cube`, side for `water_bottle`), and putting a held object back before the next pickup |
+| `recipe_grasp_styles.json` | Forced `top`/`side` grasps, each object put back after |
+| `recipe_dropoff.json` | Pick up `water_bottle` and stand it on the centre of `delivery_tray` |
 | `recipe_pour.json`, `recipe_push.json`, `recipe_thrust.json`, `recipe_throw.json` | One composite action each (see the `*-motion-reference.md` docs) |
 
 Run them like any other recipe (see [Running the System](running.md)):
@@ -39,7 +41,7 @@ Watch for `[Step N] <description>` lines and a final `--- All Tasks Completed --
 
 **What it's for:** When a recipe asks for an orientation like `top_down`, you want to know two things: does the gripper really end up pointing that way, and from which spots on the table can it get there at all? `scripts/check_orientations.py` answers both in one run. Use it when:
 
-- you change `orientation_presets.json`, or the gripper convention behind it (fingers point along `tool_frame` +Z, close along X). If the presets or the convention are wrong, every move shows `BAD`.
+- you change the orientations in `movements_and_orientations.yaml`, or the gripper convention behind it (fingers point along `tool_frame` +Z, close along X). If the presets or the convention are wrong, every move shows `BAD`.
 - you move to a new table or robot setup and want to see which orientations still reach which positions.
 - you're choosing grasp orientations for an object and need to know what's reachable where it sits.
 
@@ -61,7 +63,7 @@ ros2 run kinova_interface check_orientations.py --speed 0.2     # actually moves
 ```
        top_down at (0.35, +0.20, 0.10): ok 0.8 P
     top_down_90 at (0.45, -0.20, 0.10): ok 2.1 R
- side_level@-90 at (0.25, -0.20, 0.10): FAIL
+ side_level@-90 at (0.25, -0.20, 0.10): FAIL (<planner error>)
 ```
 
 | You see | It means |
@@ -69,7 +71,7 @@ ros2 run kinova_interface check_orientations.py --speed 0.2     # actually moves
 | `ok 0.8 P` | Got there. The orientation was 0.8 degrees off what was asked for. Pilz PTP planned it. |
 | `ok 2.1 R` | Got there, but Pilz couldn't plan it, so the RRT* fallback did. Common near obstacles or awkward poses. |
 | `BAD 14.3 P` | The move "succeeded" but the gripper ended up 14.3 degrees off, or more than 2 cm from the point. Something is wrong with the preset or the convention. |
-| `FAIL` | Neither planner could get there. Usually just out of reach for that orientation. |
+| `FAIL (...)` | Neither planner could get there, with the reason in brackets. Usually just out of reach for that orientation. |
 | `ik ok` / `no IK` | (`--ik-only`) The pose is reachable / not reachable. Nothing moved. |
 
 `FAIL` or `no IK` is normal for some spots: pointing straight down far from the base, for example, may simply be out of reach. That's the map you're after. `BAD` is never normal. The script exits with 0 only if every move was `ok`.

@@ -150,9 +150,9 @@ def test_execute_recipe(node):
     }
 
     node.arm_actions.handlers = {
-        'home': MagicMock(return_value=True),
-        'move_arm': MagicMock(return_value=True),
-        'gripper': MagicMock(return_value=True),
+        'home': MagicMock(return_value=(True, "")),
+        'move_arm': MagicMock(return_value=(True, "")),
+        'gripper': MagicMock(return_value=(True, "")),
     }
 
     node.publish_status = MagicMock()
@@ -165,6 +165,23 @@ def test_execute_recipe(node):
     node.arm_actions.handlers['home'].assert_called_once_with({})
     node.arm_actions.handlers['move_arm'].assert_called_once_with({"target": "cube"})
     node.arm_actions.handlers['gripper'].assert_called_once_with({"position": 0.5})
+
+
+def test_execute_recipe_shows_each_step_the_rest_of_the_recipe(node):
+    """Pickup looks ahead to see what the grasp is for."""
+    steps = [{"action": "pickup", "parameters": {"target": "mug"}},
+             {"action": "pour", "parameters": {}},
+             {"action": "dropoff", "parameters": {}}]
+    node.parser.recipe = {"steps": steps}
+    seen = []
+    record = lambda params: seen.append(list(node.arm_actions.upcoming_steps)) or (True, "")
+    node.arm_actions.handlers = {'pickup': record, 'pour': record, 'dropoff': record}
+    node.publish_status = MagicMock()
+
+    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
+        assert node.execute_recipe() is True
+
+    assert seen == [[(2, steps[1]), (3, steps[2])], [(3, steps[2])], []]
 
 
 def test_execute_recipe_no_steps(node):
@@ -251,7 +268,7 @@ def test_execute_recipe_step_failure_sets_all_success_false(node):
     }
 
     node.arm_actions.handlers = {
-        'pickup': MagicMock(return_value=False),
+        'pickup': MagicMock(return_value=(False, "")),
     }
     node.publish_status = MagicMock()
 
@@ -277,6 +294,7 @@ def test_execute_recipe_unknown_action_fails(node):
         result = node.execute_recipe()
 
     assert result is False
+    assert node.status_text == "Recipe failed at step 1 (not_a_real_action): Unknown action 'not_a_real_action'"
 
 
 def test_execute_recipe_stops_at_first_failure(node):
@@ -291,8 +309,8 @@ def test_execute_recipe_stops_at_first_failure(node):
     }
 
     node.arm_actions.handlers = {
-        'home': MagicMock(return_value=False),
-        'move_arm': MagicMock(return_value=True),
+        'home': MagicMock(return_value=(False, "")),
+        'move_arm': MagicMock(return_value=(True, "")),
     }
     node.publish_status = MagicMock()
 
@@ -341,10 +359,9 @@ def test_reset_environment_callback_failure(node):
 
 # failure messages
 def test_execute_recipe_callback_names_failing_step(node):
-    """The /execute_recipe response should name the failing step and action,
-    not a generic 'check logs' message."""
+    """The /execute_recipe response should name the failing step, its action and why it failed."""
 
-    node.arm_actions.handlers = {'pickup': MagicMock(return_value=False)}
+    node.arm_actions.handlers = {'pickup': MagicMock(return_value=(False, "Failed to close gripper on 'red_cube'"))}
     node.publish_status = MagicMock()
 
     request = MagicMock()
@@ -358,72 +375,4 @@ def test_execute_recipe_callback_names_failing_step(node):
         node.execute_recipe_callback(request, response)
 
     assert response.success is False
-    assert response.message == "Recipe failed at step 1 (pickup)"
-
-
-def test_execute_recipe_callback_includes_last_error_detail(node):
-    """When a handler fails via ctx.fail() (recording a specific reason),
-    the response should include that reason, not just the generic
-    'failed at step N (action)' - this is what makes a failure
-    diagnosable from the client/TUI without needing to grep ROS logs."""
-
-    def failing_handler(params):
-        return node.arm_actions.fail("Failed to move to hover position above destination")
-
-    node.arm_actions.handlers = {'dropoff': failing_handler}
-    node.publish_status = MagicMock()
-
-    request = MagicMock()
-    request.recipe_json = json.dumps({
-        "recipe_name": "Test",
-        "steps": [{"action": "dropoff", "parameters": {"target": "blue_cube"}}]
-    })
-    response = MagicMock()
-
-    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
-        node.execute_recipe_callback(request, response)
-
-    assert response.success is False
-    assert response.message == (
-        "Recipe failed at step 1 (dropoff): "
-        "Failed to move to hover position above destination"
-    )
-
-
-def test_execute_recipe_callback_clears_last_error_between_steps(node):
-    """A step that fails without calling ctx.fail() (no specific reason
-    recorded) must not surface a *previous* step's error - stale detail
-    would be actively misleading, not just unhelpful."""
-
-    def failing_first_step(params):
-        return node.arm_actions.fail("Failed to open gripper for pickup")
-
-    def failing_second_step(params):
-        return False  # no ctx.fail() call - no specific reason this time
-
-    node.arm_actions.handlers = {
-        'pickup': failing_first_step,
-        'home': failing_second_step,
-    }
-    node.publish_status = MagicMock()
-
-    request = MagicMock()
-    request.recipe_json = json.dumps({
-        "recipe_name": "Test",
-        "steps": [
-            {"action": "pickup", "parameters": {"target": "red_cube"}},
-            {"action": "home", "parameters": {}},
-        ]
-    })
-    response = MagicMock()
-
-    # Force the first step to "succeed" so the recipe reaches step 2 -
-    # only the second step's (lack of) detail is under test here.
-    node.arm_actions.handlers['pickup'] = lambda params: True
-    node.arm_actions.last_error = "stale error from an unrelated earlier run"
-
-    with patch("kinova_interface.nodes.json_parser_node.time.sleep"):
-        node.execute_recipe_callback(request, response)
-
-    assert response.success is False
-    assert response.message == "Recipe failed at step 2 (home)"
+    assert response.message == "Recipe failed at step 1 (pickup): Failed to close gripper on 'red_cube'"
