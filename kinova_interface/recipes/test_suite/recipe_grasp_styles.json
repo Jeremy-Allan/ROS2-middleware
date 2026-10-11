@@ -1,0 +1,12 @@
+{
+  "recipe_name": "Pickup - Forced Grasp Styles",
+  "description": "Pick each object with the style auto wouldn't choose, putting each one back after",
+  "steps": [
+    { "step_id": 1, "action": "home", "description": "Reset arm to home position" },
+    { "step_id": 2, "action": "pickup", "parameters": { "target": "water_bottle", "grasp_style": "top" }, "description": "Pick up the bottle from above" },
+    { "step_id": 3, "action": "dropoff", "description": "Put the bottle back" },
+    { "step_id": 4, "action": "pickup", "parameters": { "target": "push_block", "grasp_style": "side" }, "description": "Pick up the push block from the side" },
+    { "step_id": 5, "action": "dropoff", "description": "Put the block back" },
+    { "step_id": 6, "action": "home", "description": "Return home" }
+  ]
+}

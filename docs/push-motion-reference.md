@@ -6,7 +6,7 @@ one joint-space snapshot per stage, via RViz's MotionPlanning interactive
 marker/Joints tab and `Plan and Execute`, on fake hardware.
 
 Captured with a new dedicated test object, `push_block`
-(`kinova_interface/data/configs/env/object_dictionary.json`), added
+(`kinova_interface/data/configs/env/workspace_objects.yaml`), added
 specifically so push testing didn't keep disturbing `box`'s state. Resting
 at `x=0.25, y=-0.05, z=0.01`.
 

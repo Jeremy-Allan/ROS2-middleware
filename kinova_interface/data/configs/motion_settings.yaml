@@ -1,0 +1,46 @@
+# How the arm moves, picks up and puts down. Distances in metres, angles in radians, times in seconds.
+# Launch passes this file to kinova_hardware_client and json_parser_node.
+# Always write decimals (0.1, 30.0), whole numbers like 30 are rejected.
+
+/**:
+  ros__parameters:
+    # kinova_hardware_client: home, move_arm, relative_move, joint_move, gripper and running planned trajectories.
+    # Read at startup, so restart after changing these.
+    hardware:
+      action_timeout: 30.0            # how long one arm move may take before it counts as failed
+      gripper_timeout: 10.0           # same for a gripper move
+      planning_time: 10.0             # RRT* planning time when Pilz PTP can't plan a move
+      goal_tolerance: 0.01            # how close move_arm / relative_move must get to the target position
+      home_joint_positions: [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]   # joint_1..joint_6; also where 'throw' winds up from
+      home_joint_tolerance: 0.01      # rad per joint
+
+    # pickup and dropoff (json_parser_node).
+    # Change one while running with `ros2 param set /json_parser_node grasping.<name> <value>`,
+    # it applies from the next pickup or dropoff.
+    grasping:
+      # Planning
+      velocity_scale: 0.5             # arm speed for pickup and dropoff moves, as a fraction of its max (0-1]
+      acceleration_scale: 0.2         # how hard it speeds up and slows down (0-1]; Pilz LIN needs this low to stay within joint limits
+      fallback_planning_time: 5.0     # RRT* planning time when Pilz can't plan a move; RRT* always uses all of it
+      upright_tolerance: 0.2          # how far the held object may tilt while carried upright (e.g. before a pour); turning is free
+      position_tolerance: 0.001       # how close RRT* must get to each pose (Pilz is always exact)
+      orientation_tolerance: 0.001    # same for orientation, per axis
+
+      # Straight-line fallback (MoveIt's Cartesian path) when Pilz LIN can't plan
+      cartesian_step: 0.0025          # spacing of the points along the line
+      max_joint_jump: 0.5             # largest joint change between two points; more means the wrist would flip
+
+      # Grasps
+      yaw_step_deg: 30.0              # angle between grasps tried around an object; bigger = fewer tries, faster
+      standoff: 0.08                  # how far back from the object to line up before going in, and to back away after letting go
+      lift_height: 0.10               # how far to lift after grabbing
+      top_grasp_depth: 0.02           # top grasp: how far below the object's top the fingers grip
+      tip_clearance: 0.01             # top grasp: keep the fingertips at least this far above the bottom of the object
+      tall_ratio: 2.0                 # 'auto' grasps from the side when the object is this many times taller than wide
+      width_margin: 0.015             # skip grasps where the object is nearly as wide as the open gripper
+      min_width: 0.01                 # skip grasps where the object is too thin to hold
+
+      # Placing
+      place_clearance: 0.02           # let go with the object this far above the surface
+      default_place_offset: 0.05      # dropoff's hover height above the release pose when the recipe doesn't give one
+      max_place_offset: 0.12          # largest place_offset a recipe may ask for; higher hovers tend to be out of reach

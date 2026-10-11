@@ -6,7 +6,7 @@ Joints tab, `Plan and Execute`), one joint-space snapshot per stage. It
 exists so the eventual `pour` implementation (now `actions/pour.py`) is built
 against a concrete, physically-verified sequence rather than guessed at.
 
-Captured with the `box` object (`kinova_interface/data/configs/env/object_dictionary.json`,
+Captured with the `box` object (`kinova_interface/data/configs/env/workspace_objects.yaml`,
 resting at `x=-0.3255, y=-0.1235, z=0.01`), poured toward `delivery_tray`
 (`x=-0.235, y=-0.425, z=0.001`). Raw CSV: `~/demo_logs/pour_demo_snapshots.csv`
 on the dev VM.

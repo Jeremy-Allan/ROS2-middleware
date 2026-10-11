@@ -43,14 +43,14 @@ This repository is built from four independent ROS 2 programs called nodes, each
 
 See [Architecture](architecture.md) for the internals of each node.
 
-## The proxy's two domains
+## The proxy and the bridge
 
-The embodied-ai-proxy repository is split into two halves that are deliberately kept separate, so a bug in the LLM logic can never directly touch the robot:
+The proxy and the middleware are deliberately kept separate, so a bug in the LLM logic can never directly touch the robot:
 
-| Domain | What it is | Job |
+| Side | What it is | Job |
 |---|---|---|
-| Inference domain (`src/`) | A pure Python process, no ROS 2 involved | Talks to the LLM provider, builds the prompt, validates the JSON response against the schema, runs the terminal interface, and connects to the bridge as a websocket client. |
-| ROS 2 bridge domain (`ros2_bridge_ws/`) | Its own small ROS 2 workspace, owned by the proxy | Runs `rosbridge_suite`'s websocket server on port 9090 and translates incoming JSON requests into real ROS 2 service calls against this middleware. This is the only part of the proxy allowed to touch ROS 2 at all. |
+| The proxy (embodied-ai-proxy) | No ROS 2 installed or launched | Talks to the LLM provider, builds the prompt, validates the JSON response against the schema, runs the terminal interface, and connects to the middleware's websocket as a client. |
+| The websocket bridge (this repo's launch) | `rosbridge_suite`'s websocket server, started by `robot.launch.py` | Listens on port 9090 and translates incoming JSON requests into real ROS 2 service calls against this middleware. The only way in from the proxy. |
 
 If you only remember one sentence about this whole project: **your words go to an LLM, the LLM's structured answer goes through a validator and a websocket bridge, and only then does the middleware's Brain drive the Muscle one step at a time while the Monitor watches everyone's pulse.**
 

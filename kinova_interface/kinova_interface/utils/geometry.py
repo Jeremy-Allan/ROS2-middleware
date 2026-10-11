@@ -2,7 +2,6 @@ import math
 
 import numpy as np
 from scipy.spatial.transform import Rotation
-from shape_msgs.msg import SolidPrimitive
 
 
 def orientation_from_axes(approach, closing):
@@ -39,28 +38,8 @@ def pose_in_new_frame(pose_dict, transform):
     }
 
 
-def object_half_height(shape):
-    """Half the object's extent along Z, from its shape type/dimensions,
-    used to place one object on top of another from their center poses."""
-    stype = shape['type']
-    dims = shape['dimensions']
-    if stype == SolidPrimitive.BOX:
-        return dims[2] / 2.0
-    if stype in (SolidPrimitive.CYLINDER, SolidPrimitive.CONE):
-        return dims[0] / 2.0
-    if stype == SolidPrimitive.SPHERE:
-        return dims[0]
-    return 0.0
-
-
-# Direction keywords for 'push'/'throw' as an alternative to a named
-# destination, as an angle to rotate the reference bearing by. The
-# workspace frame's origin is the arm's own base, so a held/pushed
-# object's own (x, y) position doubles as the bearing vector from the
-# arm out to it. 'left' is a +90 degree (counter-clockwise, viewed from
-# above) rotation of that bearing, 'right' is -90 degrees - this matches
-# the object's original position, not the arm's own facing, and should
-# be validated against the real arm before relying on it.
+# Directions are relative to the line from the arm's base out to the point, as seen
+# from the base: left is anticlockwise from above. Not yet checked on the real arm.
 DIRECTION_ROTATIONS = {
     'forward': 0.0,
     'left': math.pi / 2.0,
@@ -70,18 +49,14 @@ DIRECTION_ROTATIONS = {
 
 
 def resolve_direction_offset(reference_x, reference_y, direction, distance):
-    """Given the point a held/pushed object originally rested at
-    (reference_x, reference_y), return an (x, y) point further out
-    along that same bearing from the arm's base, rotated by the named
-    direction and displaced by 'distance'. Returns None for an
-    unrecognised direction."""
+    """The (x, y) point `distance` m from the reference point in `direction`, or None for an unknown direction.
+    Moves in a straight line, so left/right end up slightly further from the base."""
     if direction not in DIRECTION_ROTATIONS:
         return None
 
     bearing_len = math.hypot(reference_x, reference_y)
     if bearing_len < 1e-6:
-        # No meaningful bearing to rotate (object rests essentially at
-        # the arm's base) - fall back to a fixed +X bearing.
+        # Point is on the base, so there's no line to follow; use +X
         bx, by = 1.0, 0.0
     else:
         bx, by = reference_x / bearing_len, reference_y / bearing_len

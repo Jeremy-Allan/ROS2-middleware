@@ -1,11 +1,10 @@
 import json
-import os
 import time
 import threading
 import rclpy
 from pathlib import Path
+import yaml
 from rclpy.node import Node
-from ament_index_python.packages import get_package_share_directory
 from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose,GetSceneObjects, UpdateSceneObjects
 from std_srvs.srv import Trigger
 from moveit_msgs.msg import PlanningScene, CollisionObject, AttachedCollisionObject
@@ -46,11 +45,11 @@ class EnvironmentMappingNode(Node):
         self.status_text = "Environment Mapper Active"
         self.command_success = True
         
-        self.static_objects = self.load_object_dictionary()
+        self.static_objects = self.load_scene_section('objects')
         self.config_object_ids = set(self.static_objects.keys())
-        self.relative_movements = self.load_relative_movements()
-        self.orientation_presets = self.load_orientation_presets()
-        self.obstacles = self.load_obstacles_dictionary()
+        self.relative_movements = self.load_config_section('movements_and_orientations.yaml', 'relative_movements')
+        self.orientation_presets = self.load_config_section('movements_and_orientations.yaml', 'orientations')
+        self.obstacles = self.load_scene_section('obstacles')
          
 
         self.srv_coords = self.create_service(GetObjectCoordinates, '/get_coordinates', self.get_coordinates_callback)
@@ -85,47 +84,29 @@ class EnvironmentMappingNode(Node):
         msg.last_command_valid = self.command_success
         self.status_pub.publish(msg)
 
-    def load_object_dictionary(self):
-        json_path = Path(self.config_dir) / 'object_dictionary.json'
+    def load_config_section(self, file_name, section):
+        """One top-level section of a YAML file in config_dir, e.g. 'objects' from workspace_objects.yaml."""
+        path = Path(self.config_dir) / file_name
         try:
-            with open(json_path, 'r') as file:
-                objects = json.load(file)
-            self.get_logger().info('Loaded object dictionary JSON file')
+            config = yaml.safe_load(path.read_text())
         except FileNotFoundError:
-            self.get_logger().fatal(f'Object Dictionary file not found at: {json_path}')
+            self.get_logger().fatal(f'Config file not found at: {path}')
             raise SystemExit(1)
-        except json.JSONDecodeError:
-            self.get_logger().fatal('Failed to decode JSON from the object dictionary file')
+        except yaml.YAMLError as error:
+            self.get_logger().fatal(f'Failed to parse {path}: {error}')
             raise SystemExit(1)
-        
-        # Process each object using the helper
-        for obj_id, obj_data in objects.items():
-            objects[obj_id] = self.parse_object_data(obj_id, obj_data)
-        
-        self.get_logger().info(f'Processed {len(objects)} objects')
-        return objects
-    
-    def load_obstacles_dictionary(self):
-        pkg_share = get_package_share_directory('kinova_interface')
-        json_path = os.path.join(pkg_share, 'data', 'configs', 'env', 'obstacles.json')
-        try:
-            with open(json_path, 'r') as file:
-                obstacles = json.load(file)
-            self.get_logger().info('Loaded obstacles JSON file')
-        except FileNotFoundError:
-            self.get_logger().fatal(f'Obstacles file not found at: {json_path}')
+        entries = (config.get(section) or {}) if isinstance(config, dict) else None
+        if not isinstance(entries, dict):
+            self.get_logger().fatal(f"{path}: expected a '{section}' section of named entries")
             raise SystemExit(1)
-        except json.JSONDecodeError:
-            self.get_logger().fatal('Failed to decode JSON from obstacles file')
-            raise SystemExit(1)
-        
-        # Process each obstacle using the helper function
-        for obs_id, obs_data in obstacles.items():
-            obstacles[obs_id] = self.parse_object_data(obs_id, obs_data)
-        
-        self.get_logger().info(f'Processed {len(obstacles)} obstacles')
-        return obstacles
-    
+        self.get_logger().info(f"Loaded {len(entries)} {section.replace('_', ' ')} from {file_name}")
+        return entries
+
+    def load_scene_section(self, section):
+        """'objects' or 'obstacles' from workspace_objects.yaml, with each pose and shape parsed."""
+        entries = self.load_config_section('workspace_objects.yaml', section)
+        return {entry_id: self.parse_object_data(entry_id, entry) for entry_id, entry in entries.items()}
+
     def normalize_shape(self, obj, obj_id="unknown"):
         shape = obj.get("shape", {})
         stype = shape.get("type", "BOX").upper()
@@ -184,35 +165,6 @@ class EnvironmentMappingNode(Node):
         
         return obj_data
 
-
-    def load_relative_movements(self):
-        json_path = Path(self.config_dir) / 'relative_movement.json'
-        try:
-            with open(json_path, 'r') as file:
-                movements = json.load(file)
-                self.get_logger().info('Loaded Relative Movement File')
-            return movements
-        except FileNotFoundError:
-            self.get_logger().fatal(f'Relative Movement file not found at: {json_path}')
-            raise SystemExit(1)
-        except json.JSONDecodeError:
-            self.get_logger().fatal('Failed to decode JSON from Relative Movement File')
-            raise SystemExit(1)
-
-
-    def load_orientation_presets(self):
-        json_path = Path(self.config_dir) / 'orientation_presets.json'
-        try:
-            with open(json_path, 'r') as file:
-                presets = json.load(file)
-                self.get_logger().info('Loaded Orientation Presets File')
-            return presets
-        except FileNotFoundError:
-            self.get_logger().fatal(f'Orientation Presets file not found at: {json_path}')
-            raise SystemExit(1)
-        except json.JSONDecodeError:
-            self.get_logger().fatal('Failed to decode JSON from Orientation Presets File')
-            raise SystemExit(1)
 
     def get_coordinates_callback(self, request, response):
         #request is the obj_id, the response will be coordinates of obj
@@ -398,8 +350,8 @@ class EnvironmentMappingNode(Node):
         '/reset_environment' service calls this and also clears its own
         held-object tracking to match."""
         self.get_logger().info("Resetting environment to configured defaults...")
-        self.static_objects = self.load_object_dictionary()
-        self.obstacles = self.load_obstacles_dictionary()
+        self.static_objects = self.load_scene_section('objects')
+        self.obstacles = self.load_scene_section('obstacles')
 
         if self.apply_full_scene():
             response.success = True

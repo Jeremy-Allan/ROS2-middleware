@@ -1,0 +1,45 @@
+# What's around the arm, in metres and radians, in base_link.
+# objects:   things recipes can name (pickup, dropoff, move_arm targets...). The proxy offers these to the LLM.
+# obstacles: collision only, the arm plans around them but recipes can't name them.
+#
+# position is the centre of the shape. orientation is roll/pitch/yaw or a quaternion x/y/z/w.
+# shape follows SolidPrimitive: BOX [x, y, z], CYLINDER/CONE [height, radius], SPHERE [radius].
+# When the vision node is running, leave the objects it detects out of here.
+
+objects:
+  water_bottle:
+    pose:
+      position: {x: -0.3255, y: -0.1235, z: 0.065}
+      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+    shape: {type: CYLINDER, dimensions: [0.22, 0.035]}
+
+  push_block:
+    pose:
+      position: {x: 0.25, y: -0.05, z: 0.01}
+      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+    shape: {type: BOX, dimensions: [0.06, 0.06, 0.03]}
+
+  blue_cube:
+    pose:
+      position: {x: 0.45, y: 0.2, z: 0.01}
+      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+    shape: {type: BOX, dimensions: [0.05, 0.05, 0.05]}
+
+  delivery_tray:
+    pose:
+      position: {x: -0.235, y: -0.425, z: -0.028}
+      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+    shape: {type: BOX, dimensions: [0.30, 0.20, 0.045]}
+
+obstacles:
+  small_wall:
+    pose:
+      position: {x: -100.1665, y: -0.0855, z: 0.052}
+      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+    shape: {type: BOX, dimensions: [0.03, 0.3, 0.2]}
+
+  table:  # also gives the proxy the table's bounds
+    pose:
+      position: {x: 0.0, y: 0.0, z: -0.075}
+      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+    shape: {type: BOX, dimensions: [1.4, 1.4, 0.05]}

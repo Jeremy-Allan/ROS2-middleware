@@ -2,7 +2,8 @@ import sys
 import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, SetEnvironmentVariable
+from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, SetEnvironmentVariable
+from launch.event_handlers import OnProcessStart
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
@@ -45,6 +46,7 @@ def launch_setup(context, *args, **kwargs):
         return args
 
     recipe = LaunchConfiguration('recipe')
+    motion_settings = PathJoinSubstitution([FindPackageShare('kinova_interface'), 'data', 'configs', 'motion_settings.yaml'])
     env_dir = PathJoinSubstitution([FindPackageShare('kinova_interface'), 'data', 'configs', 'env'])
 
     environment_mapping_node = Node(
@@ -61,6 +63,7 @@ def launch_setup(context, *args, **kwargs):
         executable='hardware_interface_client',
         name='kinova_hardware_client',
         output='log',
+        parameters=[motion_settings],
         ros_arguments=get_ros_args('kinova_hardware_client')
     )
 
@@ -69,7 +72,7 @@ def launch_setup(context, *args, **kwargs):
         executable='json_parser_node',
         name='json_parser_node',
         output='log',
-        parameters=[{'recipe': recipe}],
+        parameters=[{'recipe': recipe}, motion_settings],
         ros_arguments=get_ros_args('json_parser_node')
     )
 
@@ -81,7 +84,17 @@ def launch_setup(context, *args, **kwargs):
         ros_arguments=get_ros_args('telemetry_node')
     )
 
-    return [environment_mapping_node, hardware_interface_client, json_parser_node, telemetry_node]
+    # The websocket the proxy talks to, started once the recipe service's node is up
+    rosbridge = Node(
+        package='rosbridge_server',
+        executable='rosbridge_websocket',
+        name='rosbridge_websocket',
+        output='log',
+        parameters=[{'port': int(LaunchConfiguration('bridge_port').perform(context))}],
+    )
+    start_rosbridge = RegisterEventHandler(OnProcessStart(target_action=json_parser_node, on_start=[rosbridge]))
+
+    return [environment_mapping_node, hardware_interface_client, json_parser_node, telemetry_node, start_rosbridge]
 
 def generate_launch_description():
     debug_mode_arg = DeclareLaunchArgument(
@@ -118,6 +131,12 @@ def generate_launch_description():
         'use_fake_hardware',
         default_value='true',
         description='Whether to use fake hardware (simulation) or physical hardware. Default value is true'
+    )
+
+    bridge_port_arg = DeclareLaunchArgument(
+        'bridge_port',
+        default_value='9090',
+        description='Port of the rosbridge websocket the proxy connects to. Default value is 9090'
     )
 
     robot_ip = LaunchConfiguration('robot_ip')
@@ -163,6 +182,7 @@ def generate_launch_description():
         recipe_arg,
         robot_ip_arg,
         use_fake_hardware_arg,
+        bridge_port_arg,
         OpaqueFunction(function=check_hardware_args),
         kortex_control_launch,
         move_group_launch,

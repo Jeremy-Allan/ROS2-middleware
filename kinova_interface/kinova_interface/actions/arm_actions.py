@@ -2,7 +2,7 @@ import math
 import time
 from functools import partial
 
-from scipy.spatial.transform import Rotation
+from rclpy.parameter import Parameter
 
 from geometry_msgs.msg import Quaternion, Pose, PoseStamped
 from sensor_msgs.msg import JointState
@@ -27,8 +27,10 @@ from kinova_interfaces.msg import MotionParams
 from std_srvs.srv import Trigger
 
 from kinova_interface.actions import basic, pickup, dropoff, pour, thrust, push, throw
+from kinova_interface.actions.motion import Motion
 from kinova_interface.utils.geometry import resolve_direction_offset
-from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES
+from kinova_interface.utils.grasping import CONFIG_KEYS
+from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES, moveit_error
 from kinova_interface.utils.ros import call_service, wait_for_future
 
 
@@ -39,7 +41,7 @@ class ArmActions:
     state. The actions themselves live one per module in this package
     (basic.py, pickup.py, ...), each as a function taking this object as
     `ctx`. Exposes `handlers`, a dict of action name -> callable(params) ->
-    bool, for JsonParserNode to dispatch recipe steps against."""
+    (success, message), for JsonParserNode to dispatch recipe steps against."""
 
     def __init__(self, node):
         self.node = node
@@ -66,10 +68,8 @@ class ArmActions:
         self.update_pose_client = node.create_client(UpdateObjectPose, '/update_object_pose', callback_group=cb_group)
         self.reset_scene_client = node.create_client(Trigger, '/reset_environment_scene', callback_group=cb_group)
 
-        # For verifying a computed grasp candidate is actually reachable and
-        # collision-free before trusting it (see compute_side_grasp_candidates/
-        # verify_grasp_pose) - not exposed to MoveIt's own move_group action,
-        # a plain service so it can be checked cheaply before ever moving.
+        # For checking a grasp candidate is reachable and collision-free
+        # before moving (see find_ik_solution)
         self.compute_ik_client = node.create_client(GetPositionIK, '/compute_ik', callback_group=cb_group)
 
         # For temporarily permitting deliberate gripper/object contact
@@ -109,47 +109,36 @@ class ArmActions:
             'throw': partial(throw.run, self),
         }
 
-        # Name of the object currently grasped by the gripper, or None.
-        # Set by a successful pickup, cleared by a successful dropoff; used
-        # to verify 'pour'/'thrust' aren't invoked on nothing, and as a
-        # fallback for dropoff's own release-height calculation.
+        # Wait longer than the hardware client does: an arm move can be planned twice, each up to action_timeout.
+        node.declare_parameter('hardware.action_timeout', Parameter.Type.DOUBLE)
+        node.declare_parameter('hardware.gripper_timeout', Parameter.Type.DOUBLE)
+        self.arm_call_timeout = 2 * node.get_parameter('hardware.action_timeout').value + 5.0
+        self.gripper_call_timeout = node.get_parameter('hardware.gripper_timeout').value + 5.0
+
+        # Pickup and dropoff plan with MoveIt and run trajectories through the hardware interface
+        self.motion = Motion(node, execute_timeout_margin=self.arm_call_timeout)
+
+        # Name of the object in the gripper, or None. Set by pickup, cleared by dropoff.
         self.held_object = None
+        # How it's held (set by pickup), so dropoff can place it with the same grasp
+        self.held_grasp = None
+        # The recipe steps after the one running now, as (step number, step), so pickup can see what the grasp is for
+        self.upcoming_steps = []
 
-        # The specific reason the current step failed, or None - set via
-        # fail() below, read (then reset) by json_parser_node after a step
-        # returns False, so the client sees why a step failed ("Failed to
-        # move to hover position above destination") rather than just
-        # which step and action failed.
-        self.last_error = None
+        # Grasp settings from data/configs/motion_settings.yaml, which launch passes in as parameters.
+        # One at a time: Humble's declare_parameters(namespace, ...) misses the file's values.
+        for key in CONFIG_KEYS:
+            node.declare_parameter(f'grasping.{key}', Parameter.Type.DOUBLE)
+        self.grasp_config  # raises now, not at the first pickup, if a value is missing
 
-    # Client-side wait_for_future timeouts for the real arm-moving calls
-    # below (home/move/relative_move/joint_move) - must exceed
-    # HardwareInterfaceClient.ACTION_TIMEOUT_SEC (30.0s), since that's how
-    # long the server itself can legitimately block before responding
-    # while a real trajectory executes. wait_for_future's own 10.0s
-    # default is far too short for this on real hardware (fine on fake
-    # hardware, where moves complete near-instantly) - using it here
-    # was reporting a false "timed out/no response" failure for any real
-    # move that legitimately took longer than 10s, even ones that would
-    # have gone on to succeed a few seconds later. A move can now be tried twice
-    # if Pilz PTP fails by using RRT* as a backup planner.
-    _ARM_ACTION_TIMEOUT_SEC = 65.0
-    # Same idea, matching HardwareInterfaceClient.GRIPPER_TIMEOUT_SEC (10.0s).
-    _GRIPPER_ACTION_TIMEOUT_SEC = 15.0
+    @property
+    def grasp_config(self):
+        """Current grasp settings, read fresh so `ros2 param set` applies to the next pickup."""
+        return {key: self.node.get_parameter(f'grasping.{key}').value for key in CONFIG_KEYS}
 
     def wait_for_future(self, future, service_name, timeout_sec=10.0):
         """Safely wait for an async service call future to complete without deadlocking the executor."""
         return wait_for_future(future, service_name, self.get_logger(), timeout_sec)
-
-    def fail(self, message):
-        """Log an action failure and record it as last_error for
-        json_parser_node to surface back to the client, then return False -
-        so a handler can just 'return ctx.fail("...")' at its failure
-        points instead of logging and returning separately (and risking
-        the client-facing message drifting out of sync with the log)."""
-        self.get_logger().error(message)
-        self.last_error = message
-        return False
 
     def _on_joint_state(self, msg):
         self.latest_joint_positions = dict(zip(msg.name, msg.position))
@@ -264,36 +253,25 @@ class ArmActions:
             params.acceleration_scale = float(speed)
         return params
 
-    def find_ik_solution(self, x, y, z, roll, pitch, yaw, seed_joint_positions=None):
-        """Check whether a Cartesian pose is actually reachable and
-        collision-free via IK (with collision-avoidance on), rather than
-        trusting a computed/geometric candidate blindly - this is exactly
-        what caught a plausible-looking but actually-in-collision pose
-        during testing (see docs/pour-motion-reference.md), a manually
-        demonstrated pose that turned out to have never really been
-        validated at all. Returns the solved [joint_1..joint_6] positions,
-        or None if unreachable/in collision.
+    def find_ik_solution(self, x, y, z, rotation, seed_joint_positions=None,
+                         avoid_collisions=True, timeout_sec=1.0):
+        """IK for tool_frame at (x, y, z) with 'rotation' in base_link.
+        Returns [joint_1..joint_6], or None if unreachable or in collision.
 
-        'seed_joint_positions', if given, is used as the IK search's
-        starting point instead of the current robot state - KDL (the
-        default IK plugin here) is a local numerical solver, so seeding it
-        near an already-known-good configuration (e.g. 'push's contact
-        pose, when solving for the pose it extends to) reliably converges
-        to a nearby solution differing only in the joints that actually
-        need to move, rather than jumping to an unrelated configuration
-        branch. Seeding from a very different configuration (e.g. home)
-        is what caused a real, physically-reachable pose to report
-        NO_IK_SOLUTION during testing - see docs/pour-motion-reference.md."""
+        'seed_joint_positions' starts the search there instead of the current state. KDL is a
+        local solver, so a nearby seed keeps it on the same arm configuration.
+        'avoid_collisions' False only checks the pose is reachable."""
         req = GetPositionIK.Request()
         req.ik_request.group_name = 'arm'
-        req.ik_request.avoid_collisions = True
-        req.ik_request.timeout.sec = 1
+        req.ik_request.avoid_collisions = avoid_collisions
+        req.ik_request.timeout.sec = int(timeout_sec)
+        req.ik_request.timeout.nanosec = int((timeout_sec % 1) * 1e9)
 
         pose_stamped = PoseStamped()
         pose_stamped.header.frame_id = BASE_FRAME
         pose = Pose()
         pose.position.x, pose.position.y, pose.position.z = float(x), float(y), float(z)
-        qx, qy, qz, qw = Rotation.from_euler('xyz', [roll, pitch, yaw]).as_quat()
+        qx, qy, qz, qw = rotation.as_quat()
         pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = qx, qy, qz, qw
         pose_stamped.pose = pose
         req.ik_request.pose_stamped = pose_stamped
@@ -301,26 +279,29 @@ class ArmActions:
         # Use the current state (stops MoveIt's "empty JointState" error)
         req.ik_request.robot_state.is_diff = True
         if seed_joint_positions is not None:
+            # is_diff keeps the rest of the current state, including an attached object.
+            # Without it MoveIt drops attached objects and won't check them for collisions.
             seed_state = RobotState()
+            seed_state.is_diff = True
             seed_js = JointState()
             seed_js.name = list(JOINT_NAMES)
             seed_js.position = [float(p) for p in seed_joint_positions]
             seed_state.joint_state = seed_js
             req.ik_request.robot_state = seed_state
 
+        start = time.monotonic()
         response = call_service(self.compute_ik_client, req, '/compute_ik', self.get_logger())
-        if response is None or response.error_code.val != response.error_code.SUCCESS:
+        if response is None:
+            return None
+        if response.error_code.val != response.error_code.SUCCESS:
+            self.get_logger().debug(
+                f"/compute_ik failed ({moveit_error(response.error_code.val)}) at ({x:.3f}, {y:.3f}, {z:.3f}), "
+                f"avoid_collisions={avoid_collisions}, took {time.monotonic() - start:.3f}s of {timeout_sec}s")
             return None
 
         names = list(response.solution.joint_state.name)
         positions = list(response.solution.joint_state.position)
         return [positions[names.index(name)] for name in JOINT_NAMES]
-
-    def verify_grasp_pose(self, x, y, z, roll, pitch, yaw):
-        """True/False convenience wrapper around find_ik_solution, for
-        callers that only need to know whether a candidate is valid, not
-        its actual joint solution (e.g. pickup's grasp_style='side')."""
-        return self.find_ik_solution(x, y, z, roll, pitch, yaw) is not None
 
     def set_collision_allowed(self, object_id, allowed):
         """Temporarily allow (or restore disallowing) collision between
@@ -403,7 +384,10 @@ class ArmActions:
         req.robot_state = state
 
         response = call_service(self.compute_fk_client, req, '/compute_fk', self.get_logger())
-        if response is None or response.error_code.val != response.error_code.SUCCESS:
+        if response is None:
+            return None
+        if response.error_code.val != response.error_code.SUCCESS:
+            self.get_logger().debug(f"/compute_fk failed: {moveit_error(response.error_code.val)}")
             return None
         p = response.pose_stamped[0].pose.position
         return (p.x, p.y, p.z)
@@ -499,16 +483,19 @@ class ArmActions:
         error = math.hypot(rz_final[0] - target_radius, rz_final[1] - target_z)
         return shoulder, elbow, achieved, error
 
+    @staticmethod
+    def _service_result(response):
+        """{'success', 'message'} for a hardware service call. On failure the message says why."""
+        if response is None:
+            return {'success': False, 'message': 'no response'}
+        return {'success': response.success, 'message': response.message}
+
     def call_home_service(self, motion_params=None):
         req = HomeArm.Request()
         req.motion_params = motion_params if motion_params is not None else MotionParams()
-        response = call_service(self.home_client, req, '/kinova_hardware_client/home_arm', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.home_client, req, '/kinova_hardware_client/home_arm', self.get_logger(), timeout_sec=self.arm_call_timeout)
 
-        if response and response.success:
-            return {'success': response.success, 'message': response.message}
-        else:
-            self.get_logger().error(f"Failed to move Home: {response.message if response else 'no response'}")
-            return None
+        return self._service_result(response)
 
     def call_move_service(self, x, y, z, has_orientation=False, roll=0.0, pitch=0.0, yaw=0.0, motion_params=None):
         req = MoveArm.Request()
@@ -521,13 +508,9 @@ class ArmActions:
         req.yaw = yaw
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
-        response = call_service(self.move_arm_client, req, '/kinova_hardware_client/move_arm', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.move_arm_client, req, '/kinova_hardware_client/move_arm', self.get_logger(), timeout_sec=self.arm_call_timeout)
 
-        if response and response.success:
-            return {'success': response.success, 'message': response.message}
-        else:
-            self.get_logger().error(f"Failed to perform Move to:{x},{y},{z}: {response.message if response else 'no response'}")
-            return None
+        return self._service_result(response)
 
     def call_relative_move_service(self, vx, vy, vz, roll_delta=0.0, pitch_delta=0.0, yaw_delta=0.0, motion_params=None):
         req = RelativeMove.Request()
@@ -539,54 +522,40 @@ class ArmActions:
         req.yaw_delta = yaw_delta
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
-        response = call_service(self.relative_move_client, req, '/kinova_hardware_client/relative_move', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.relative_move_client, req, '/kinova_hardware_client/relative_move', self.get_logger(), timeout_sec=self.arm_call_timeout)
 
-        if response and response.success:
-            return {'success': response.success, 'message': response.message}
-        else:
-            self.get_logger().error(f"Failed to perform relative move:{vx},{vy},{vz}: {response.message if response else 'no response'}")
-            return None
+        return self._service_result(response)
 
     def call_move_gripper_service(self, position):
         req = MoveGripper.Request()
         req.position = position
-        response = call_service(self.move_gripper_client, req, '/kinova_hardware_client/move_gripper', self.get_logger(), timeout_sec=self._GRIPPER_ACTION_TIMEOUT_SEC)
+        response = call_service(self.move_gripper_client, req, '/kinova_hardware_client/move_gripper', self.get_logger(), timeout_sec=self.gripper_call_timeout)
 
-        if response and response.success:
-            return {'success': response.success, 'message': response.message}
-        else:
-            self.get_logger().error(f"Failed to Move Gripper to: {position}: {response.message if response else 'no response'}")
-            return None
+        return self._service_result(response)
 
     def call_joint_move_service(self, joint_positions, motion_params=None, wait_for_completion=True, relative=False):
-        """Move to a joint-space target - absolute by default, or a delta
-        from whatever the current joint state actually is if relative=True
-        (e.g. 'pour's tilt: a delta on joint_6 alone, without needing to
-        know or recompute the other five joints' current values).
+        """Move to [joint_1..joint_6], or by that much from the current joints if relative=True.
+        Returns {'success', 'message', 'error_code'}, error_code being MoveIt's (0 if it never answered).
 
-        With wait_for_completion False, this still blocks the caller for
-        up to HardwareInterfaceClient.FIRE_AND_FORGET_REJECTION_WINDOW_SEC
-        (the server's own bounded wait to catch a fast rejection) before
-        returning - fine for a caller that only cares the motion started
-        without also needing precise timing of what happens next. A
-        caller that needs to react to the motion in real time as it
-        happens (e.g. throw's release trigger) should use
-        call_joint_move_service_async instead, which doesn't wait for
-        anything at all - see that method's docstring for why this
-        distinction turned out to matter in practice."""
+        wait_for_completion=False still blocks for up to FIRE_AND_FORGET_REJECTION_WINDOW_SEC
+        to catch a fast rejection. Use call_joint_move_service_async to not wait at all."""
         req = JointMove.Request()
         req.joint_positions = [float(p) for p in joint_positions]
         req.wait_for_completion = wait_for_completion
         req.relative = relative
         req.motion_params = motion_params if motion_params is not None else MotionParams()
 
-        response = call_service(self.joint_move_client, req, '/kinova_hardware_client/joint_move', self.get_logger(), timeout_sec=self._ARM_ACTION_TIMEOUT_SEC)
+        response = call_service(self.joint_move_client, req, '/kinova_hardware_client/joint_move', self.get_logger(), timeout_sec=self.arm_call_timeout)
+        result = self._service_result(response)
+        result['error_code'] = response.error_code.val if response else 0
+        return result
 
-        if response and response.success:
-            return {'success': response.success, 'message': response.message}
-        else:
-            self.get_logger().error(f"Failed to move to joint positions {joint_positions}: {response.message if response else 'no response'}")
-            return None
+    def fail_at_home(self, message):
+        """Send the arm home so a failed action doesn't leave it mid-motion, then fail with `message`."""
+        home_result = self.call_home_service()
+        if not home_result['success']:
+            return False, f"{message} (returning home also failed: {home_result['message']})"
+        return False, f"{message} (arm returned home)"
 
     def call_joint_move_service_async(self, joint_positions, motion_params=None):
         """Fire a joint-space move without waiting for any response at
@@ -618,27 +587,29 @@ class ArmActions:
         return self.joint_move_client.call_async(req)
 
     def attach_object(self, obj_id):
-        """Remove object from planning scene (allow collision) via the environment mapping node."""
+        """Attach the object to the gripper in the planning scene, via the environment mapping node."""
         req = AttachObject.Request()
         req.object_id = obj_id
         response = call_service(self.attach_client, req, '/attach_object', self.get_logger())
         if response and response.success:
-            self.get_logger().info(f"Attached object '{obj_id}' (removed from scene)")
+            self.get_logger().info(f"Attached '{obj_id}' to the gripper")
             return True
         else:
-            self.get_logger().error(f"Failed to attach '{obj_id}'")
+            detail = f": {response.message}" if response and getattr(response, 'message', None) else ""
+            self.get_logger().error(f"Failed to attach '{obj_id}'{detail}")
             return False
 
     def detach_object(self, obj_id):
-        """Add object back to planning scene via the environment mapping node."""
+        """Detach the object from the gripper, leaving it in the planning scene where it is."""
         req = DetachObject.Request()
         req.object_id = obj_id
         response = call_service(self.detach_client, req, '/detach_object', self.get_logger())
         if response and response.success:
-            self.get_logger().info(f"Detached object '{obj_id}' (added back to scene)")
+            self.get_logger().info(f"Detached '{obj_id}' from the gripper")
             return True
         else:
-            self.get_logger().error(f"Failed to detach '{obj_id}'")
+            detail = f": {response.message}" if response and getattr(response, 'message', None) else ""
+            self.get_logger().error(f"Failed to detach '{obj_id}'{detail}")
             return False
 
     def update_object_pose(self, obj_id, x, y, z, orientation=None):
@@ -682,6 +653,7 @@ class ArmActions:
         response = self.wait_for_future(future, '/reset_environment_scene')
 
         self.held_object = None
+        self.held_grasp = None
 
         if response and response.success:
             return True, response.message
