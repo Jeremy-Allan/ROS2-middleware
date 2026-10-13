@@ -1,0 +1,14 @@
+{
+  "recipe_name": "QA - Invalid, Unknown Object",
+  "description": "Reference an object that isn't registered in workspace_objects.yaml",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "pickup",
+      "description": "Attempt to pick up an object that doesn't exist",
+      "parameters": {
+        "target": "nonexistent_object"
+      }
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "recipe_name": "QA - Throw, Target Omitted",
+  "description": "Pick up the water bottle, then throw it forward without naming 'target' - throw falls back to whatever is currently held, the same convention as dropoff",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    },
+    {
+      "step_id": 2,
+      "action": "pickup",
+      "description": "Pick up the water bottle",
+      "parameters": {
+        "target": "water_bottle"
+      }
+    },
+    {
+      "step_id": 3,
+      "action": "throw",
+      "description": "Throw forward - 'target' omitted, resolves to the held water bottle",
+      "parameters": {
+        "direction": "forward"
+      }
+    }
+  ]
+}

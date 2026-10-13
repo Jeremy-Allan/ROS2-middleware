@@ -1,0 +1,11 @@
+{
+  "recipe_name": "QA - Invalid, Unsupported Action",
+  "description": "Reference an action string the parser doesn't recognise",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "fly",
+      "description": "Attempt an action the parser doesn't recognise"
+    }
+  ]
+}

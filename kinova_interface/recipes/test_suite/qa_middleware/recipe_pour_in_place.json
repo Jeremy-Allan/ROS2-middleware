@@ -1,0 +1,30 @@
+{
+  "recipe_name": "QA - Pour In Place",
+  "description": "Pick up the water bottle and pour it with neither 'destination' nor 'direction' given - tilts right where it already is, rather than guessing somewhere to carry it",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    },
+    {
+      "step_id": 2,
+      "action": "pickup",
+      "description": "Pick up the water bottle with a side grasp",
+      "parameters": {
+        "target": "water_bottle",
+        "grasp_style": "side"
+      }
+    },
+    {
+      "step_id": 3,
+      "action": "pour",
+      "description": "Tilt to pour right where the bottle already is - no destination/direction given"
+    },
+    {
+      "step_id": 4,
+      "action": "home",
+      "description": "Return home"
+    }
+  ]
+}

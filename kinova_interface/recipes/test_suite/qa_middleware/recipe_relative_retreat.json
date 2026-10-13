@@ -1,0 +1,19 @@
+{
+  "recipe_name": "QA - Relative Move Retreat",
+  "description": "Move the arm -0.1m in x using the retreat vector",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    },
+    {
+      "step_id": 2,
+      "action": "relative_move",
+      "description": "Move backward 0.1m",
+      "parameters": {
+        "vector": "retreat"
+      }
+    }
+  ]
+}
