@@ -13,27 +13,27 @@ objects:
       orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
     shape: {type: CYLINDER, dimensions: [0.22, 0.035]}
 
-  push_block:
+  tea_pot:
     pose:
-      position: {x: 0.25, y: -0.05, z: 0.01}
+      position: {x: 0.25, y: -0.30, z: -0.0275}
       orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
-    shape: {type: BOX, dimensions: [0.06, 0.06, 0.03]}
+    shape: {type: BOX, dimensions: [0.06, 0.06, 0.075]}
 
   blue_cube: 
     pose:
-      position: {x: 0.45, y: 0.2, z: 0.01}
-      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
-    shape: {type: BOX, dimensions: [0.107, 0.043, 0.075]}
+      position: {x: 0.45, y: 0.2, z: -0.0275}
+      orientation: {roll: 0.0, pitch: 1.57, yaw: 0.0}
+    shape: {type: BOX, dimensions: [0.107, 0.043, 0.073]}
   
   delivery_tray:
     pose:
       position: {x: -0.235, y: -0.425, z: -0.028}
       orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
-    shape: {type: BOX, dimensions: [0.235, 0.168, 0.02]}
+    shape: {type: BOX, dimensions: [0.235, 0.168, 0.025]}
 
 obstacles:
   small_wall:
-    pose:
+    pose:pick
       position: {x: -100.1665, y: -0.0855, z: 0.052}
       orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
     shape: {type: BOX, dimensions: [0.03, 0.3, 0.2]}
