@@ -30,6 +30,14 @@ ros2 launch kinova_interface robot.launch.py use_fake_hardware:=false robot_ip:=
 
 Replace `192.168.1.10` with your arm's actual IP. You must provide `robot_ip` explicitly whenever `use_fake_hardware:=false`; the launch file has a built-in safety check that refuses to launch anything if you forget it, specifically to stop you from accidentally connecting to hardware with a default or wrong IP.
 
+To also start the computer vision stack (Kinect driver, vision node and camera calibration transform), add `enable_CV:=true` (default `false`):
+
+```bash
+ros2 launch kinova_interface robot.launch.py enable_CV:=true
+```
+
+This includes `computer_vision.launch.py` with its default settings; see [computer_vision.launch.py](../computer_vision/launch/computer_vision.launch.py) for what it starts.
+
 Leave this terminal running.
 
 ## Terminal 2: start the proxy and give it a command
