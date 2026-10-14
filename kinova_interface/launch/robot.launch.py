@@ -5,6 +5,7 @@ from launch import LaunchDescription
 from launch.actions import IncludeLaunchDescription, DeclareLaunchArgument, OpaqueFunction, RegisterEventHandler, SetEnvironmentVariable
 from launch.event_handlers import OnProcessStart
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.conditions import IfCondition
 from launch_ros.actions import Node
 from launch.substitutions import PathJoinSubstitution, LaunchConfiguration
 from launch_ros.substitutions import FindPackageShare
@@ -139,6 +140,12 @@ def generate_launch_description():
         description='Port of the rosbridge websocket the proxy connects to. Default value is 9090'
     )
 
+    enable_cv_arg = DeclareLaunchArgument(
+        'enable_CV',
+        default_value='false',
+        description='Also launch the computer vision stack (Kinect + vision node). Default value is false'
+    )
+
     robot_ip = LaunchConfiguration('robot_ip')
     use_fake_hardware = LaunchConfiguration('use_fake_hardware')
 
@@ -174,6 +181,14 @@ def generate_launch_description():
     )
     move_group_launch = generate_move_group_launch(moveit_config)
 
+    # 3. Optionally start the computer vision stack
+    computer_vision_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource([
+            PathJoinSubstitution([FindPackageShare('computer_vision'), 'launch', 'computer_vision.launch.py'])
+        ]),
+        condition=IfCondition(LaunchConfiguration('enable_CV'))
+    )
+
     return LaunchDescription([
         SetEnvironmentVariable('ROS_LOG_DIR', launch.logging.launch_config.log_dir),
         debug_mode_arg,
@@ -183,8 +198,10 @@ def generate_launch_description():
         robot_ip_arg,
         use_fake_hardware_arg,
         bridge_port_arg,
+        enable_cv_arg,
         OpaqueFunction(function=check_hardware_args),
         kortex_control_launch,
         move_group_launch,
+        computer_vision_launch,
         OpaqueFunction(function=launch_setup)
     ])
