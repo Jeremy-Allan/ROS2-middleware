@@ -10,7 +10,7 @@ relative_movements:
   thrust_forward: {x: 0.1, y: 0.0, z: 0.0}
   retreat:        {x: -0.1, y: 0.0, z: 0.0}
 
-# move_arm / pickup 'orientation': tool_frame roll/pitch/yaw in radians, in base_link.
+# move_arm 'orientation': tool_frame roll/pitch/yaw in radians, in base_link.
 # test_orientation_presets_match_their_axes checks each one matches its name.
 orientations:
   top_down:    {roll: 3.141593, pitch: 0.0, yaw: 1.570796}   # pointing down, fingers close along base Y

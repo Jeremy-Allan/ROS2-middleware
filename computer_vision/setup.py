@@ -24,7 +24,7 @@ setup(
     maintainer='Enoch',
     maintainer_email='enoch@example.com',
     description='YOLO + depth perception 3D bounding boxes for depth sensing cam',
-    license='MIT',
+    license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [

@@ -11,7 +11,7 @@
       gripper_timeout: 10.0           # same for a gripper move
       planning_time: 10.0             # RRT* planning time when Pilz PTP can't plan a move
       goal_tolerance: 0.01            # how close move_arm / relative_move must get to the target position
-      home_joint_positions: [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]   # joint_1..joint_6; also where 'throw' winds up from
+      home_joint_positions: [0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]   # joint_1..joint_6
       home_joint_tolerance: 0.01      # rad per joint
 
     # pickup and dropoff (json_parser_node).

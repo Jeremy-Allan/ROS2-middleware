@@ -7,7 +7,7 @@
       "action": "gripper",
       "description": "Open the gripper fully",
       "parameters": {
-        "position": 1.0
+        "position": 0.0
       }
     }
   ]
