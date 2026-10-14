@@ -28,10 +28,10 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     demonstration (see docs/throw-motion-reference.md): rotate to
     face the throw direction (joint_1 only, current shoulder/elbow/
     wrist held exactly where pickup left them), move straight to a
-    captured wind-up shape (_THROW_WINDUP_POSE), then one continuous
-    fling straight to a captured end pose (_THROW_FLING_POSE) -
+    captured wind-up shape (THROW_WINDUP_POSE), then one continuous
+    fling straight to a captured end pose (THROW_FLING_POSE) -
     releasing the gripper the instant joint_5 crosses
-    _THROW_RELEASE_JOINT5, not after a fixed delay or once the arm
+    THROW_RELEASE_JOINT5, not after a fixed delay or once the arm
     has stopped.
 
     Assumes 'target' is already grasped - fails cleanly rather than

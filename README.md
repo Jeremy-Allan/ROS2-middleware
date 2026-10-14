@@ -22,6 +22,8 @@ Four ROS 2 nodes do the work here:
 - **`json_parser_node.py`**, the Brain: reads a recipe and drives the other nodes step by step.
 - **`telemetry_node.py`**, the Monitor: aggregates health from all nodes, handles fault recovery.
 
+An optional vision node (`computer_vision` package, `enable_CV:=true`) adds objects seen by a Kinect camera.
+
 Full explanation, with the request path spelled out end to end: [docs/overview.md](docs/overview.md).
 
 
@@ -51,31 +53,31 @@ That launches the full stack in simulation and waits for a recipe. See [docs/run
 **Start here:** the [Documentation Home](docs/README.md) maps everything.
 
 - [Overview](docs/overview.md): what this system is, the request path end to end
+- [Environment Setup](docs/environment-setup.md): Ubuntu 22.04 on Windows, macOS or other Linux
 - [Installation](docs/installation.md): ROS 2, the driver stack, the middleware, the proxy, an LLM provider
-- [Running the System](docs/running.md): the three-terminal startup, running the middleware alone
-- [Configuration](docs/configuration.md): coordinate dictionary, recipes, LLM provider and prompt setup
-- [Testing](docs/testing.md): the recipe test suite and the proxy's LLM-output tests
+- [Running the System](docs/running.md): starting the middleware and the proxy, running the middleware alone
+- [Configuration](docs/configuration.md): coordinate dictionary, motion settings, recipes
+- [Testing](docs/testing.md): unit tests, test recipes and the proxy's LLM evaluation
 - [Troubleshooting](docs/troubleshooting.md): symptom-first fixes
 - [Architecture](docs/architecture.md): full pipeline diagram, per-node internals, interface types
 - [Safety and Contracts](docs/safety-and-contracts.md): execution contract, safety layers, failure modes
 - [Video Demos](docs/demos.md): short recordings per feature
+- Motion references: [pour](docs/pour-motion-reference.md), [push](docs/push-motion-reference.md), [throw](docs/throw-motion-reference.md)
 
 ## Repository layout
 
 ```
 kinova_interface/
-  data/configs/env/    workspace_objects.yaml, movements_and_orientations.yaml
-  kinova_interface/    the four ROS 2 node source files
+  data/configs/        env/ (objects, movements, orientations), motion_settings.yaml, moveit/joint_limits.yaml
+  kinova_interface/    nodes/, actions/, utils/
   launch/              robot.launch.py
   recipes/             task_recipe.json, test_suite/
-  resource/            PROJECT-OVERVIEW.md
+  scripts/             run_recipe.py, check_orientations.py
+  test/                unit tests
 kinova_interfaces/
   srv/, msg/           custom ROS 2 service and message definitions
-docs/
-  README.md            documentation home, start here
-  overview.md, installation.md, running.md, configuration.md
-  testing.md, troubleshooting.md, architecture.md
-  safety-and-contracts.md, demos.md
+computer_vision/       optional Kinect vision node
+docs/                  documentation, start at docs/README.md
 ```
 
 ## Contributing

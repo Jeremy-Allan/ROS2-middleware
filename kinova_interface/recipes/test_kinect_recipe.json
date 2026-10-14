@@ -1,5 +1,5 @@
 {
-  "recipe_name": "Pick and Place on Yellow Objects",
+  "recipe_name": "Pick Up Red Object",
   "steps": [
     {
       "step_id": 1,
@@ -10,8 +10,7 @@
       "step_id": 2,
       "action": "pickup",
       "parameters": {
-        "target": "red_object",
-        "pre_offset": 0.1
+        "target": "red_object"
       },
       "description": "Pick up the red object"
     },

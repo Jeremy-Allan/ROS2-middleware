@@ -69,7 +69,7 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     # Contact with the target object itself is the entire point of a
     # push, not a collision to avoid - permitted up front, before the
     # validity checks below, not just before the real motion. A
-    # bigger object (e.g. 'box', ~107x75mm, vs. push_block's small
+    # bigger object (e.g. blue_cube, ~107x43mm, vs. push_block's small
     # ~60x60mm) genuinely needs the gripper to overlap it to reach its
     # exact registered center, which the pre-check would otherwise
     # (correctly) reject - verified directly that the only contact at

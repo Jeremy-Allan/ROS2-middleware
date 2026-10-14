@@ -245,8 +245,8 @@ class ArmActions:
     def build_motion_params(self, speed):
         """speed is an optional 0.0-1.0 float from a recipe step, used for
         both velocity and acceleration scale. None or not given means
-        MotionParams() with its 0.0 defaults, which hardware_interface_client
-        treats as 'use the arm's configured default'."""
+        MotionParams() with its 0.0 defaults, which leave the speed unset
+        (see MotionParams.msg)."""
         params = MotionParams()
         if speed is not None:
             params.velocity_scale = float(speed)
