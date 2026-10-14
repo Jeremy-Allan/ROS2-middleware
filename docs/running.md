@@ -2,7 +2,7 @@
 
 # Running the System
 
-Running the full pipeline needs two terminals running at once: the middleware, then the proxy.
+Running the full pipeline needs two terminals: the middleware, then the proxy. If you use a local LLM, `ollama serve` runs in a third (see [Installation](installation.md)).
 
 ## Terminal 1: start the middleware
 
@@ -20,7 +20,7 @@ source ~/workspace/ros2_kortex_ws/install/setup.bash
 ros2 launch kinova_interface robot.launch.py
 ```
 
-This single command starts all four middleware nodes plus the Kinova driver stack plus MoveIt 2 plus RViz (the 3D visualizer), all wired together. Once `json_parser_node` is up it also starts `rosbridge_server`, the websocket the proxy connects to, on `ws://localhost:9090` (change it with `bridge_port:=<port>`). By default it boots in simulation (`use_fake_hardware:=true`), no physical robot required.
+This single command starts all four middleware nodes plus the Kinova driver stack plus MoveIt 2 plus RViz (the 3D visualizer), all wired together. Once the `json_parser_node` process starts, the launch also starts `rosbridge_server`, the websocket the proxy connects to, on `ws://localhost:9090` (change it with `bridge_port:=<port>`). By default it boots in simulation (`use_fake_hardware:=true`), no physical robot required.
 
 To run against the real arm instead, once you've verified everything in simulation first:
 
@@ -36,7 +36,7 @@ To also start the computer vision stack (Kinect driver, vision node and camera c
 ros2 launch kinova_interface robot.launch.py enable_CV:=true
 ```
 
-This includes `computer_vision.launch.py` with its default settings; see [computer_vision.launch.py](../computer_vision/launch/computer_vision.launch.py) for what it starts.
+This starts the vision node, which serves `/vision/snapshot`. Each call to it adds the detected objects to the scene. See the [computer_vision README](../computer_vision/README.md).
 
 Leave this terminal running.
 
@@ -44,14 +44,12 @@ Leave this terminal running.
 
 ```bash
 cd ~/workspace/embodied-ai-proxy
-python3 main.py
+./run.sh
 ```
 
-This opens a terminal interface with a status bar, a log panel, an input bar at the bottom, and a sidebar showing live middleware telemetry once it connects. Type a command like `pick up the red cube and place it on the delivery tray` and press enter.
+This starts the LLM proxy and backend in the background and opens the terminal UI. Type a command like `pick up the blue cube and place it on the delivery tray` and press enter. Type `/help` for the UI's commands.
 
-What happens next: the proxy asks the middleware for the current list of known objects, builds a prompt around your command, sends it to whichever LLM provider is configured, validates the JSON that comes back, shows you the resulting recipe in the log panel, and forwards it to the middleware for execution. The log panel will show whether execution succeeded.
-
-Toolbar buttons across the top let you cycle how much detail is shown (recipe only, recipe plus the full prompt, recipe plus prompt plus latency/CPU metadata), check system status, check the current LLM configuration, and copy the active system prompt to your clipboard. Up and down arrows in the input bar cycle through your command history.
+The proxy fetches the known objects from the middleware, builds a prompt, sends it to the configured LLM, validates the JSON, and forwards the recipe to the middleware. The UI shows the recipe and whether it succeeded once execution finishes.
 
 ## Running the middleware alone, without the proxy
 
@@ -61,7 +59,7 @@ Useful for testing or debugging just the robot side, without involving an LLM at
 ros2 launch kinova_interface robot.launch.py recipe:=task_recipe.json
 ```
 
-The `recipe:=` argument is a filename resolved against the middleware's `recipes/` folder. Two seconds after `json_parser_node` starts, it loads that file and runs it automatically.
+The `recipe:=` argument is a path relative to the installed `recipes/` folder, or an absolute path. Two seconds after `json_parser_node` starts, it loads that file and runs it automatically.
 
 Or, with the stack already running and no `recipe:=` given, trigger a recipe from a second terminal without restarting anything, using the same `/execute_recipe` service the proxy itself calls:
 
@@ -112,6 +110,6 @@ ros2 service list
 
 ## Shutting down
 
-`Ctrl+C` each terminal. Order doesn't matter much, but shutting the proxy down first avoids a few seconds of "reconnecting" noise in its log panel. If anything hangs, `Ctrl+C` a second time will force-kill it.
+`Ctrl+C` each terminal. Stopping the proxy first avoids reconnect messages in its UI.
 
 Next: [Configuration](configuration.md)

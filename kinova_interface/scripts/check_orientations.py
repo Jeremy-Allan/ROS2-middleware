@@ -79,7 +79,7 @@ def main():
     parser.add_argument('--ik-only', action='store_true', help='only check IK reachability, never move the arm')
     parser.add_argument('--speed', type=float, default=0.2, help='velocity/acceleration scale, 0.0-1.0')
     parser.add_argument('--tolerance-deg', type=float, default=6.0, help='max angular error to count as reached')
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()  # leaves --ros-args for rclpy
 
     rclpy.init()
     node = Node('check_orientations')

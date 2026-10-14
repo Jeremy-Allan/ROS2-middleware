@@ -8,16 +8,17 @@
 |---|---|---|
 | Operating System | Ubuntu 22.04 LTS | ROS 2 Humble targets this release |
 | ROS 2 distribution | Humble Hawksbill | This is the ROS 2 version both repositories are written against |
-| Python | 3.10+ | Ships with Ubuntu 22.04; used natively by ROS 2 Humble and by the proxy |
+| Python | 3.10+ | Ships with Ubuntu 22.04; used by ROS 2 Humble and the middleware |
+| Go | 1.26.5+ | Builds the proxy |
 | colcon | (installed with ROS 2 dev tools) | The build tool used to compile/install ROS 2 packages |
-| RAM | 8GB minimum, 32GB recommended | Higher end needed if you're running a larger local LLM through Ollama |
+| RAM | 8GB minimum, 16GB+ recommended | More if you run a larger local LLM through Ollama |
 | Ollama | Latest, only if running a local LLM | Not needed if you're only using a cloud provider (OpenAI, Anthropic, Gemini) |
 
 If you're on Windows or macOS, you'll need a Ubuntu 22.04 VM or WSL2 with Ubuntu 22.04. ROS 2 Humble is not natively supported elsewhere. Instructions to configure workspace with alternative OS is found in [Environment Setup](./environment-setup.md)
 
 ## 1. Install ROS 2 Humble
 
-If you don't already have ROS 2 Humble installed, follow the official installation guide for your [Ubuntu Setup](https://docs.ros.org/en/humble/Installation/Alternatives/Ubuntu-Development-Setup.html)
+If you don't already have ROS 2 Humble installed, follow the official installation guide for your [Ubuntu Setup](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html)
 
 After installing, every new terminal you use for this project needs the ROS 2 environment loaded:
 
@@ -57,14 +58,14 @@ You can access the official [ROS 2 Kortex Repository](https://github.com/Kinovar
 
 ```bash
 ├── /workspace
-    ├── /ros2_kortex_ws
+    ├── /embodied-ai-proxy        (cloned in step 6)
+    └── /ros2_kortex_ws
         └── /src
-           ├── /ROS2-Middleware
-           ├── /embodied-ai-proxy
+           ├── /ROS2-middleware
            └── /ros2_kortex
 ```
 
-Your `src/` folder should now contain (at least) the `ros2_kortex` packages alongside this repo's two packages: `kinova_interface` (the Python nodes, launch file, recipes, config) and `kinova_interfaces` (the custom service/message type definitions).
+This repo has three packages: `kinova_interface` (the Python nodes, launch file, recipes, config), `kinova_interfaces` (the custom service/message type definitions) and `computer_vision` (the optional Kinect vision node).
 
 > Note the naming: `kinova_interface` (singular, the nodes) and `kinova_interfaces` (plural, the custom `.srv`/`.msg` type definitions) are two separate ROS 2 packages that live side by side in this one Git repository. Don't confuse them: the launch file, entry points, and every `import` in the Python code depend on getting the singular/plural right.
 
@@ -85,11 +86,9 @@ rosdep install --from-paths src --ignore-src -r -y
 cd ~/workspace/ros2_kortex_ws
 # if this is the very first build of the whole workspace run just colcon build
 colcon build
-# otherwise to save build time, only build the packages which has code changes by using the `packages-select` flag
+# after that, only rebuild the packages you changed
 colcon build --packages-select kinova_interface kinova_interfaces
 ```
-
-If this is the very first build of the whole workspace, drop `--packages-select ...` and just run `colcon build` once to compile everything, including the Kinova driver packages, which will take longer.
 
 `kinova_interfaces` must build successfully before `kinova_interface`, because the Python nodes import the custom service/message types it generates (`HomeArm`, `MoveArm`, `ExtendedStatus`, etc.). Colcon handles this ordering automatically as long as both packages are in `src/`.
 
@@ -106,7 +105,7 @@ source ~/workspace/ros2_kortex_ws/install/setup.bash
 
 ## 6. Clone and set up the proxy
 
-The proxy is a separate project with its own small internal ROS 2 workspace for the bridge. It does not live inside `ros2_kortex_ws`, clone it wherever you keep your projects:
+The proxy is a separate Go project with no ROS 2 dependency. It does not live inside `ros2_kortex_ws`:
 
 ```bash
 cd ~/workspace
@@ -114,31 +113,17 @@ git clone https://github.com/paul-isit/embodied-ai-proxy.git
 cd embodied-ai-proxy
 ```
 
-Install `rosbridge_suite`, which the middleware launch starts so the proxy can reach it over a websocket:
+Build it (needs Go 1.26.5+):
 
 ```bash
-sudo apt-get update
-sudo apt-get install ros-humble-rosbridge-suite
+./run.sh --build-only
 ```
 
-Install the proxy's own Python dependencies:
-
-```bash
-pip install -r src/requirements.txt
-```
-
-Set `PYTHONPATH` so the proxy's own internal imports resolve correctly:
-
-```bash
-echo 'export PYTHONPATH=.' >> ~/.bashrc
-source ~/.bashrc
-```
-
-> Important: that `PYTHONPATH=.` only works correctly if you run the proxy's Python commands (`main.py`, `evaluate_proxy.py`) from the repository root. Running them from any other directory will cause import errors.
+`rosbridge_server`, which the proxy connects to, is installed by the rosdep step above and started by the middleware launch.
 
 ## 7. Set up an LLM provider
 
-The proxy needs a large language model to talk to. The default configuration expects a local Ollama model, which is free and needs no API key, but you can point it at OpenAI, Anthropic, or Gemini instead. Full provider configuration is covered in [Configuration](configuration.md); the short version for the free local path:
+The proxy needs a large language model to talk to. The default configuration expects a local Ollama model, which is free and needs no API key, but you can point it at OpenAI, Anthropic, or Gemini instead. Provider configuration is covered in the [proxy README](https://github.com/paul-isit/embodied-ai-proxy#configuring-the-llm). The short version for the free local path:
 
 ```bash
 ollama run gemma3:1b
@@ -158,6 +143,8 @@ curl http://localhost:11434
 
 It should respond `Ollama is running`.
 
+## Optional: computer vision
 
+`enable_CV:=true` needs a Kinect v2 and these packages, which rosdep does not install: `kinect2_bridge`, `aruco_opencv` and `easy_handeye2`. The vision node also needs `pip install ultralytics` for YOLO. Build it with `colcon build --packages-select computer_vision`.
 
 Next: [Running the System](running.md)

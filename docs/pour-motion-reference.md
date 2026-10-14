@@ -1,4 +1,8 @@
+[Docs Home](README.md)
+
 # Pour Motion Reference
+
+> Design record. Object names and poses are from when it was captured; the `box` object has since been removed. Current behaviour is in `actions/pour.py` and `actions/pickup.py`.
 
 This records a manually-driven demonstration of the intended `pour` motion,
 captured on real-time fake hardware in RViz (MoveIt's interactive marker/
@@ -11,7 +15,7 @@ resting at `x=-0.3255, y=-0.1235, z=0.01`), poured toward `delivery_tray`
 (`x=-0.235, y=-0.425, z=0.001`). Raw CSV: `~/demo_logs/pour_demo_snapshots.csv`
 on the dev VM.
 
-## Why the current `pour` fails
+## Why the original `pour` failed
 
 `pickup` leaves grasp orientation completely unconstrained (deliberately -
 constraining it breaks reachability at some approach points). `pour` then
@@ -70,7 +74,7 @@ unknown starting pose. Concretely:
    treat orientation as locked/carried forward, only ever an explicit,
    deliberate absolute target.
 3. **Tilt** via a pure joint-space delta on the final wrist joint alone
-   (mirroring `_handle_throw`'s wind-up/fling pattern exactly), not an
+   (mirroring `throw`'s wind-up/fling pattern), not an
    IK-solved Cartesian orientation change.
 4. **Return** by reversing that same joint delta, then move down to the
    destination's resting height (reusing `dropoff`'s height math), then
@@ -104,27 +108,14 @@ case.
 
 Implemented in `actions/pour.py`, `actions/pickup.py` and `nodes/hardware_interface_client.py`:
 
-- `pickup` gained optional `orientation`/`grasp_offset` params for a fully
-  manual override (unconstrained/zero by default, unchanged for every
-  existing recipe), plus a `grasp_style: 'side'` mode for a general,
-  computed side grasp - not a fixed preset baked from this one demo. The
-  demo's exact captured pose (stage 1) was tried first as a literal
-  preset+offset and failed: `/check_state_validity` showed it genuinely in
-  collision with the box (gripper_base_link, both finger links, and
-  upper_wrist_link all in contact) - because that pose was only ever
-  reached *after* the box had already been attached by a prior plain
-  `pickup`, so it was never actually collision-checked against the box as
-  a real obstacle. The lesson generalizes past this one bug: a captured
-  demo pose shows the *shape* of a motion, not a literal, pre-validated
-  target - it still needs checking for real. `grasp_style: 'side'` acts on
-  that: `compute_side_grasp_candidates` derives a flat roll (the one
-  object-independent invariant) and a small set of candidate yaws/offsets
-  from the target's own registered shape and pose (BOX only so far), and
-  `verify_grasp_pose` checks each candidate via `/compute_ik` with
-  collision-avoidance on before any of them are trusted - the first one
-  that actually verifies is used, and pickup fails cleanly if none do.
-  This is what actually generalizes to a newly-added object: nothing
-  needs re-demonstrating by hand, and nothing gets executed unverified.
+- `pickup` gained `grasp_style: 'side'`, a computed level side grasp. The
+  demo's captured pose was tried first as a literal target and was in
+  collision with the box, because it was only reached after the box was
+  attached. A captured pose shows the shape of a motion and still needs
+  checking. Side grasp candidates now come from the object's shape (BOX
+  and CYLINDER) in `utils/grasping.py`, and pickup plans the whole
+  approach, grasp and lift before moving. A recipe with a later `pour`
+  forces a side grasp automatically.
 - `pour` gained `destination`/`direction`, `lift_height` (default `0.14`,
   matching the ~0.137m measured here) and `tilt_angle` (default `radians(135)`,
   matching the captured joint_6 delta). Lift/transit are zero-delta

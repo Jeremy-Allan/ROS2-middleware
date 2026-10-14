@@ -54,7 +54,6 @@ class HardwareInterfaceClient(Node):
         self.gripper_timeout = self._setting('gripper_timeout')
         self.planning_time = self._setting('planning_time')
         self.goal_tolerance = self._setting('goal_tolerance')
-        # Also the pose 'throw' winds up from
         self.home_joint_positions = list(self._setting('home_joint_positions', Parameter.Type.DOUBLE_ARRAY))
         self.home_joint_tolerance = self._setting('home_joint_tolerance')
 
