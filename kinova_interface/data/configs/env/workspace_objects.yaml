@@ -19,17 +19,17 @@ objects:
       orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
     shape: {type: BOX, dimensions: [0.06, 0.06, 0.03]}
 
-  blue_cube:
+  blue_cube: 
     pose:
       position: {x: 0.45, y: 0.2, z: 0.01}
       orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
-    shape: {type: BOX, dimensions: [0.05, 0.05, 0.05]}
-
+    shape: {type: BOX, dimensions: [0.107, 0.043, 0.075]}
+  
   delivery_tray:
     pose:
       position: {x: -0.235, y: -0.425, z: -0.028}
       orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
-    shape: {type: BOX, dimensions: [0.30, 0.20, 0.045]}
+    shape: {type: BOX, dimensions: [0.235, 0.168, 0.02]}
 
 obstacles:
   small_wall:
