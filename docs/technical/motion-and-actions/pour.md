@@ -1,4 +1,4 @@
-[Docs Home](README.md)
+[Docs Home](../../README.md)
 
 # Pour Motion Reference
 

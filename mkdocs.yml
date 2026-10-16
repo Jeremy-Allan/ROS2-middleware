@@ -6,32 +6,47 @@ edit_uri: edit/main/docs/
 docs_dir: docs
 
 nav:
-  - Home: README.md
-  - Overview: overview.md
-  - Environment Setup: environment-setup.md
-  - Installation: installation.md
-  - Running the System: running.md
-  - Configuration: configuration.md
-  - Testing: testing.md
-  - Troubleshooting: troubleshooting.md
-  - Architecture: architecture.md
-  - Safety and Contracts: safety-and-contracts.md
-  - Motion References:
-      - Pour: pour-motion-reference.md
-      - Push: push-motion-reference.md
-      - Throw: throw-motion-reference.md
-  - Video Demos: demos.md
-  - Middleware API Reference:
-      - Nodes: api/nodes.md
-      - Actions: api/actions.md
-      - Utils: api/utils.md
-  - Proxy:
-      - Overview: proxy/overview.md
-      - API Reference:
-          - Backend: proxy/api/backend.md
-          - LLM Proxy: proxy/api/llm-proxy.md
-          - TUI: proxy/api/tui.md
-          - Shared: proxy/api/shared.md
+  - Home:
+      - Documentation map: README.md
+      - Overview: overview.md
+  - User Guide:
+      - Quickstart: user-guide/quickstart.md
+      - Using the TUI: user-guide/tui.md
+      - Command reference: user-guide/command-reference.md
+      - Troubleshooting: user-guide/troubleshooting.md
+      - Demos: user-guide/demos.md
+  - Installation:
+      - Requirements: installation/requirements.md
+      - Non-native Ubuntu: installation/non-native-ubuntu.md
+      - Kinova drivers: installation/kinova-drivers.md
+      - Middleware and proxy: installation/middleware-and-proxy.md
+      - Camera and calibration: installation/camera-and-calibration.md
+      - Simulation vs real arm: installation/simulation-vs-real.md
+      - Configuration: installation/configuration.md
+  - Technical:
+      - Architecture: technical/architecture.md
+      - Middleware nodes: technical/middleware-nodes.md
+      - Motion and actions:
+          - Overview: technical/motion-and-actions/index.md
+          - Pour: technical/motion-and-actions/pour.md
+          - Push: technical/motion-and-actions/push.md
+          - Throw: technical/motion-and-actions/throw.md
+      - Proxy internals:
+          - Overview: technical/proxy-internals.md
+          - Proxy README: technical/proxy/readme.md
+      - Computer vision: technical/computer-vision.md
+      - Safety and contracts: technical/safety-and-contracts.md
+      - Kinova drivers and APIs: technical/kinova-drivers-and-apis.md
+      - Testing: technical/testing.md
+      - Contributing: technical/contributing.md
+      - API reference:
+          - Middleware nodes: technical/api/nodes.md
+          - Middleware actions: technical/api/actions.md
+          - Middleware utils: technical/api/utils.md
+          - Proxy backend: technical/proxy/api/backend.md
+          - Proxy LLM proxy: technical/proxy/api/llm-proxy.md
+          - Proxy TUI: technical/proxy/api/tui.md
+          - Proxy shared: technical/proxy/api/shared.md
 
 theme:
   name: material
@@ -47,6 +62,7 @@ theme:
         icon: material/brightness-4
         name: Switch to light mode
   features:
+    - navigation.tabs
     - navigation.sections
     - navigation.top
     - search.suggest
@@ -55,7 +71,11 @@ theme:
 markdown_extensions:
   - admonition
   - pymdownx.highlight
-  - pymdownx.superfences
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
   - tables
   - toc:
       permalink: true
@@ -71,7 +91,7 @@ plugins:
           # what makes "kinova_interface.nodes.xyz" resolvable, putting the
           # inner one on the path instead resolves "nodes.xyz" with no
           # top-level package name, which mkdocstrings can't match against
-          # "kinova_interface.nodes.xyz" in the docs/api/*.md pages.
+          # "kinova_interface.nodes.xyz" in the docs/technical/api/*.md pages.
           # griffe reads this via static analysis, it does not import or
           # execute the code, so this works in CI without ROS 2 or any of
           # kinova_interface's own runtime dependencies (rclpy, MoveIt

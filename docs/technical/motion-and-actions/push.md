@@ -1,11 +1,11 @@
-[Docs Home](README.md)
+[Docs Home](../../README.md)
 
 # Push Motion Reference
 
 > Design record. Object names and some function names are from when it was captured; the `box` object has since been removed. Current behaviour is in `actions/push.py` and `actions/thrust.py`.
 
 This records a manually-driven demonstration of the intended `push`
-motion, captured the same way as `pour` (see `pour-motion-reference.md`):
+motion, captured the same way as `pour` (see [Pour](./pour.md)):
 one joint-space snapshot per stage, via RViz's MotionPlanning interactive
 marker/Joints tab and `Plan and Execute`, on fake hardware.
 

@@ -15,5 +15,5 @@ _site/
 
 # Proxy repo content pulled in at docs-build time (see .github/workflows/docs.yml),
 # never checked into this repo
-docs/proxy/
+docs/technical/proxy/
 .proxy-src/

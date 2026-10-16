@@ -180,7 +180,7 @@ class ArmActions:
         HardwareInterfaceClient.FIRE_AND_FORGET_REJECTION_WINDOW_SEC
         before this code could even start timing, which for a short,
         fast fling could consume the whole motion before any release
-        logic ran at all (see docs/throw-motion-reference.md). Polling
+        logic ran at all (see docs/technical/motion-and-actions/throw.md). Polling
         the genuinely-async fling's real position sidesteps that
         entirely - it doesn't matter how long the fling call took to
         return (see call_joint_move_service_async), because this checks
@@ -361,7 +361,7 @@ class ArmActions:
         precedence over a blanket default, so setting only the default
         (an earlier version of this method) silently had no effect and
         let a real push fail with INVALID_MOTION_PLAN (see
-        docs/push-motion-reference.md).
+        docs/technical/motion-and-actions/push.md).
 
         Scoped to just this one object, not the whole matrix, so the
         table and every other object are still checked normally in the
@@ -452,7 +452,7 @@ class ArmActions:
 
     # Wrist held level/neutral for a single-plane reach (push, and
     # designed to be reused for thrust) - matches what was actually
-    # demonstrated (see docs/push-motion-reference.md). Combined with a
+    # demonstrated (see docs/technical/motion-and-actions/push.md). Combined with a
     # fixed joint_1 (facing the target), the whole reach stays within one
     # vertical plane - only the shoulder/elbow move.
     _PLANAR_REACH_WRIST = (0.0, 0.0, 0.0)
@@ -468,7 +468,7 @@ class ArmActions:
         target_z), with joint_1 fixed at base_yaw and the wrist fixed
         level (_PLANAR_REACH_WRIST) - the whole reach stays in a single
         vertical plane containing that bearing, matching a manually
-        demonstrated push (see docs/push-motion-reference.md) and
+        demonstrated push (see docs/technical/motion-and-actions/push.md) and
         designed to generalize to 'thrust' too.
 
         Uses Newton-Raphson on (radial distance from the base, height)
@@ -476,7 +476,7 @@ class ArmActions:
         unknowns and a smooth forward-kinematics function, this converges
         to near-exact precision from a reasonable seed - a general IK
         search was tried first and found unreliable for exactly this kind
-        of small planar reach (see docs/push-motion-reference.md for the
+        of small planar reach (see docs/technical/motion-and-actions/push.md for the
         verified failures that ruled it out).
 
         Returns (joint_2, joint_3, achieved_xyz, position_error), or None
@@ -657,7 +657,7 @@ class ArmActions:
         returns at all, so for a short, fast fling, the entire motion
         could finish before any release-timing code even started
         running - the object would still be gripped when the arm had
-        already stopped (see docs/throw-motion-reference.md). Not
+        already stopped (see docs/technical/motion-and-actions/throw.md). Not
         waiting for any response at all means the caller can start
         reacting to the arm's real, live position (see
         wait_for_joint_crossing) immediately after sending the goal,

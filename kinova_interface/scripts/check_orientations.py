@@ -8,7 +8,7 @@ Moves to a grid of points with every orientation and prints one line per move:
   'BAD 14.3 P' moved, but ended up in the wrong orientation or position
   'FAIL (..)' couldn't get there, with the reason (often just out of reach)
 --ik-only only checks reachability ('ik ok' / 'no IK') and never moves.
-See docs/testing.md for how to read the results.
+See docs/technical/testing.md for how to read the results.
 
 Usage (the middleware must already be running):
     ros2 run kinova_interface check_orientations.py [--ik-only] [--speed 0.2] [--tolerance-deg 6]

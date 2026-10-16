@@ -16,7 +16,7 @@ Found something in the docs that's wrong, stale, or confusing? Flag it or fix it
 ## Code
 
 - Match the existing style in the file you're editing.
-- If you're adding a new node, service, or message type, it needs to show up in [`docs/architecture.md`](docs/architecture.md)'s interface tables.
+- If you're adding a new node, service, or message type, it needs to show up in [`docs/architecture.md`](docs/technical/architecture.md)'s interface tables.
 - Don't hand-edit generated or install-time files (`install/`, `build/`, `log/`), those aren't tracked.
 
 ## Docstrings

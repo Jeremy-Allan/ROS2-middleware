@@ -1,4 +1,4 @@
-"""'throw' recipe action (see docs/throw-motion-reference.md)."""
+"""'throw' recipe action (see docs/technical/motion-and-actions/throw.md)."""
 import math
 from typing import TYPE_CHECKING
 
@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from kinova_interface.actions.arm_actions import ArmActions
 
 
-# A captured, fixed joint_2..6 shape (see docs/throw-motion-reference.md)
+# A captured, fixed joint_2..6 shape (see docs/technical/motion-and-actions/throw.md)
 # for a real, manually-demonstrated wind-up - not derived from home by
 # a wind-up angle like an earlier version of this; joint_1 (base
 # facing) is the only thing that varies per throw.
@@ -25,7 +25,7 @@ THROW_RELEASE_JOINT5 = math.radians(-42.7)
 
 def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     """A genuine joint-space throw, captured from a manual RViz
-    demonstration (see docs/throw-motion-reference.md): rotate to
+    demonstration (see docs/technical/motion-and-actions/throw.md): rotate to
     face the throw direction (joint_1 only, current shoulder/elbow/
     wrist held exactly where pickup left them), move straight to a
     captured wind-up shape (THROW_WINDUP_POSE), then one continuous
@@ -48,7 +48,7 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     the object would still be gripped once the arm had already
     stopped. call_joint_move_service_async (no wait at all, not even
     that bounded one) plus polling the real joint state fixes this by
-    not depending on timing at all - see docs/throw-motion-reference.md
+    not depending on timing at all - see docs/technical/motion-and-actions/throw.md
     for the full diagnosis.
 
     Because release timing is now driven by the arm's real position

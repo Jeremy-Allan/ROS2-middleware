@@ -36,7 +36,7 @@ Full explanation, with the request path spelled out end to end: [docs/overview.m
   
 ## Quick start
 
-Requires Ubuntu 22.04 LTS, ROS 2 Humble, Python 3.10+. Full setup, including the Kinova driver stack this repo depends on: [docs/installation.md](docs/installation.md).
+Requires Ubuntu 22.04 LTS, ROS 2 Humble, Python 3.10+. Full setup, including the Kinova driver stack this repo depends on: [docs/installation.md](docs/installation/middleware-and-proxy.md).
 
 ```bash
 cd ~/workspace/ros2_kortex_ws
@@ -46,24 +46,16 @@ source install/setup.bash
 ros2 launch kinova_interface robot.launch.py
 ```
 
-That launches the full stack in simulation and waits for a recipe. See [docs/running.md](docs/running.md) for running against physical hardware, running a recipe automatically, and running the full pipeline together with the proxy.
+That launches the full stack in simulation and waits for a recipe. See [the Quickstart](docs/user-guide/quickstart.md) for running against physical hardware, running a recipe automatically, and running the full pipeline together with the proxy.
 
 ## Docs
 
 **Start here:** the [Documentation Home](docs/README.md) maps everything.
 
 - [Overview](docs/overview.md): what this system is, the request path end to end
-- [Environment Setup](docs/environment-setup.md): Ubuntu 22.04 on Windows, macOS or other Linux
-- [Installation](docs/installation.md): ROS 2, the driver stack, the middleware, the proxy, an LLM provider
-- [Running the System](docs/running.md): starting the middleware and the proxy, running the middleware alone
-- [Configuration](docs/configuration.md): coordinate dictionary, motion settings, recipes
-- [Testing](docs/testing.md): unit tests, test recipes and the proxy's LLM evaluation
-- [Troubleshooting](docs/troubleshooting.md): symptom-first fixes
-- [Architecture](docs/architecture.md): full pipeline diagram, per-node internals, interface types
-- [Safety and Contracts](docs/safety-and-contracts.md): execution contract, safety layers, failure modes
-- [Video Demos](docs/demos.md): short recordings per feature
-- Motion references: [pour](docs/pour-motion-reference.md), [push](docs/push-motion-reference.md), [throw](docs/throw-motion-reference.md)
-- [API Reference](docs/api/nodes.md): function-level reference generated from the code's own docstrings
+- User guide: [Quickstart](docs/user-guide/quickstart.md), [Troubleshooting](docs/user-guide/troubleshooting.md), [Demos](docs/user-guide/demos.md)
+- Installation: [Middleware and proxy](docs/installation/middleware-and-proxy.md), [Non-native Ubuntu](docs/installation/non-native-ubuntu.md), [Configuration](docs/installation/configuration.md)
+- Technical: [Architecture](docs/technical/architecture.md), [Safety and contracts](docs/technical/safety-and-contracts.md), [Testing](docs/technical/testing.md), [API reference](docs/technical/api/nodes.md)
 
 ## Repository layout
 
@@ -78,7 +70,7 @@ kinova_interface/
 kinova_interfaces/
   srv/, msg/           custom ROS 2 service and message definitions
 computer_vision/       optional Kinect vision node
-docs/                  documentation, start at docs/README.md; api/ holds the generated API reference
+docs/                  documentation, start at docs/README.md; technical/api/ holds the generated API reference
 mkdocs.yml             web manual build config (MkDocs + Material)
 ```
 
