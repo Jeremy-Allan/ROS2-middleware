@@ -15,7 +15,10 @@ objects:
 
   tea_pot:
     pose:
-      position: {x: 0.25, y: -0.30, z: -0.0275}
+      # z=-0.0275 left it ~1.5cm into the table - same class of bug as
+      # blue_cube below: half the 0.075 z-dimension is 0.0375, so resting
+      # flush on the table (top at z=-0.05) needs z=-0.0125, not -0.0275.
+      position: {x: 0.25, y: -0.30, z: -0.0125}
       orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
     shape: {type: BOX, dimensions: [0.06, 0.06, 0.075]}
 
