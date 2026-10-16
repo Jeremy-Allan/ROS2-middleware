@@ -21,9 +21,15 @@ THROW_WINDUP_POSE = [math.radians(v) for v in [-22.84, 56.01, 80.71, 50.6, 0.0]]
 # the wind-up to here, joint_1 fixed the whole way.
 THROW_FLING_POSE = [math.radians(v) for v in [32.63, -34.26, 80.71, -63.25, 0.0]]
 # joint_5 barely moves during the early part of the fling, then swings
-# hard right at the release moment - captured directly from the demo,
-# this is where the gripper should open.
-THROW_RELEASE_JOINT5 = math.radians(-42.7)
+# hard right at the release moment - this is where the gripper should
+# open. -42.7 deg was the value directly captured from the original
+# manual demo (see docs/throw-motion-reference.md), but in-person
+# testing on the real arm found that released too late - visibly near
+# the very end of the fling rather than clearly mid-swing - so this has
+# been nudged earlier to -35.0 deg (~75% through the joint_5 sweep from
+# wind-up to fling-end, vs. ~82% before). Still empirical, not computed -
+# further tuning may still be needed on real hardware.
+THROW_RELEASE_JOINT5 = math.radians(-35.0)
 # Extra time allowed on top of the fling's own planned duration, for
 # controller dispatch/startup jitter between firing execution and the
 # arm actually beginning to move.
