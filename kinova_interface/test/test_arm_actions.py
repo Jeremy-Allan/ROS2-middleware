@@ -2443,13 +2443,24 @@ def _mock_future(result=None):
     return future
 
 
+def _fake_fling_plan(duration=1.0, crosses=True):
+    """Stands in for Motion.plan_joints's returned Plan, without needing a
+    real MoveIt RobotTrajectory - only .duration and .time_at_joint_crossing
+    are ever read by throw.py."""
+    plan = MagicMock()
+    plan.duration = duration
+    plan.time_at_joint_crossing = MagicMock(return_value=duration * 0.8 if crosses else None)
+    return plan
+
+
 def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
     """throw should rotate to face the throw direction (joint_1 only,
     current shoulder/elbow/wrist held exactly as read from
     latest_joint_positions), move straight to the captured wind-up shape,
-    fire the fling asynchronously (not waiting for any response), then
-    release the instant joint_5 crosses the captured release point -
-    not after a fixed delay."""
+    plan the fling before ever executing it, fire that plan asynchronously
+    (not waiting for any response), then release the instant joint_5
+    crosses the captured release point - not after a fixed delay - with
+    the wait itself bounded by the planned fling's own real duration."""
 
     actions.held_object = "red_cube"
     actions.get_object_info = MagicMock(return_value={
@@ -2460,8 +2471,11 @@ def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
         'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
     }
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
-    actions.call_joint_move_service_async = MagicMock(return_value=_mock_future())
+    fake_plan = _fake_fling_plan(duration=1.5)
+    actions.motion.plan_joints = MagicMock(return_value=(fake_plan, None))
+    actions.motion.execute_async = MagicMock(return_value=_mock_future())
     actions.wait_for_joint_crossing = MagicMock(return_value=True)
+    actions.compute_fk = MagicMock(return_value=(0.5, 0.1, 0.0))
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
@@ -2476,7 +2490,7 @@ def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
 
     rotate_args = actions.call_joint_move_service.call_args_list[0][0]
     windup_args = actions.call_joint_move_service.call_args_list[1][0]
-    fling_args = actions.call_joint_move_service_async.call_args_list[0][0]
+    fling_args = actions.motion.plan_joints.call_args_list[0][0]
 
     rotate_joints, windup_joints, fling_joints = rotate_args[0], windup_args[0], fling_args[0]
 
@@ -2490,12 +2504,16 @@ def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
     assert fling_joints[0] == pytest.approx(expected_yaw)
     assert fling_joints[1:] == pytest.approx(throw.THROW_FLING_POSE)
 
+    actions.motion.execute_async.assert_called_once_with(fake_plan)
+
     # release trigger: joint_5, moving from the wind-up's own joint_5
-    # toward the captured release threshold - not a timed sleep
-    crossing_args = actions.wait_for_joint_crossing.call_args[0]
-    assert crossing_args[0] == 'joint_5'
-    assert crossing_args[1] == pytest.approx(throw.THROW_RELEASE_JOINT5)
-    assert crossing_args[2] == pytest.approx(throw.THROW_WINDUP_POSE[3])
+    # toward the captured release threshold - not a timed sleep - bounded
+    # by the planned fling's own real duration, not a flat guess
+    crossing_call = actions.wait_for_joint_crossing.call_args
+    assert crossing_call.args[0] == 'joint_5'
+    assert crossing_call.args[1] == pytest.approx(throw.THROW_RELEASE_JOINT5)
+    assert crossing_call.args[2] == pytest.approx(throw.THROW_WINDUP_POSE[3])
+    assert crossing_call.kwargs['timeout'] == pytest.approx(fake_plan.duration + throw.RELEASE_TIMEOUT_MARGIN_SEC)
 
     actions.detach_object.assert_called_once_with("red_cube")
     assert actions.held_object is None
@@ -2514,8 +2532,10 @@ def test_throw_without_target_defaults_to_held_object(actions):
         'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
     }
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
-    actions.call_joint_move_service_async = MagicMock(return_value=_mock_future())
+    actions.motion.plan_joints = MagicMock(return_value=(_fake_fling_plan(), None))
+    actions.motion.execute_async = MagicMock(return_value=_mock_future())
     actions.wait_for_joint_crossing = MagicMock(return_value=True)
+    actions.compute_fk = MagicMock(return_value=(0.5, 0.1, 0.0))
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
@@ -2568,13 +2588,13 @@ def test_throw_fails_if_rotate_fails(actions):
         'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
     }
     actions.call_joint_move_service = MagicMock(return_value={"success": False, "message": "MoveIt failed"})
-    actions.call_joint_move_service_async = MagicMock()
+    actions.motion.plan_joints = MagicMock()
 
     success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
     assert success is False
     assert actions.call_joint_move_service.call_count == 1
-    actions.call_joint_move_service_async.assert_not_called()
+    actions.motion.plan_joints.assert_not_called()
 
 
 def test_throw_fails_if_windup_fails(actions):
@@ -2590,12 +2610,12 @@ def test_throw_fails_if_windup_fails(actions):
         'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
     }
     actions.call_joint_move_service = MagicMock(side_effect=[{"success": True}, {"success": False, "message": "MoveIt failed"}])
-    actions.call_joint_move_service_async = MagicMock()
+    actions.motion.plan_joints = MagicMock()
 
     success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
     assert success is False
-    actions.call_joint_move_service_async.assert_not_called()
+    actions.motion.plan_joints.assert_not_called()
 
 
 def test_throw_fails_if_release_point_never_crossed(actions):
@@ -2612,13 +2632,66 @@ def test_throw_fails_if_release_point_never_crossed(actions):
         'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
     }
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
-    actions.call_joint_move_service_async = MagicMock(return_value=_mock_future())
+    actions.motion.plan_joints = MagicMock(return_value=(_fake_fling_plan(), None))
+    actions.motion.execute_async = MagicMock(return_value=_mock_future())
     actions.wait_for_joint_crossing = MagicMock(return_value=False)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
 
     success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
 
     assert success is False
+    actions.call_move_gripper_service.assert_not_called()
+    assert actions.held_object == "red_cube"
+
+
+def test_throw_fails_if_fling_cannot_be_planned(actions):
+    """If neither Pilz nor the RRT* fallback can plan the fling at all,
+    throw should fail cleanly before ever executing or releasing anything."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
+    })
+    actions.latest_joint_positions = {
+        'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
+    }
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.motion.plan_joints = MagicMock(return_value=(None, "Pilz PTP: joint limit violated; RRT*: timed out"))
+    actions.motion.execute_async = MagicMock()
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+
+    success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+
+    assert success is False
+    actions.motion.execute_async.assert_not_called()
+    actions.call_move_gripper_service.assert_not_called()
+    assert actions.held_object == "red_cube"
+
+
+def test_throw_fails_if_fling_never_reaches_release_point(actions):
+    """If the planned fling's own trajectory never actually crosses the
+    release joint_5 angle at all, throw should fail cleanly before ever
+    executing it, rather than firing the arm and only finding out via a
+    live-position timeout later."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
+    })
+    actions.latest_joint_positions = {
+        'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
+    }
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.motion.plan_joints = MagicMock(return_value=(_fake_fling_plan(crosses=False), None))
+    actions.motion.execute_async = MagicMock()
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+
+    success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
+
+    assert success is False
+    actions.motion.execute_async.assert_not_called()
     actions.call_move_gripper_service.assert_not_called()
     assert actions.held_object == "red_cube"
 
@@ -2696,8 +2769,10 @@ def test_throw_with_direction(actions):
         'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
     }
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
-    actions.call_joint_move_service_async = MagicMock(return_value=_mock_future())
+    actions.motion.plan_joints = MagicMock(return_value=(_fake_fling_plan(), None))
+    actions.motion.execute_async = MagicMock(return_value=_mock_future())
     actions.wait_for_joint_crossing = MagicMock(return_value=True)
+    actions.compute_fk = MagicMock(return_value=(1.0, 0.0, 0.05))
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
@@ -2712,8 +2787,9 @@ def test_throw_with_direction(actions):
     rotate_joints = actions.call_joint_move_service.call_args_list[0][0][0]
     assert rotate_joints[0] == pytest.approx(expected_yaw)
 
-    actions.update_object_pose.assert_called_once()
-    pose_args = actions.update_object_pose.call_args[0]
+    # the flight animation's last step should land exactly on the intended
+    # release point, even though it's not the only update_object_pose call
+    pose_args = actions.update_object_pose.call_args_list[-1][0]
     assert pose_args[0] == "red_cube"
     assert pose_args[1] == pytest.approx(1.0)
     assert pose_args[2] == pytest.approx(0.3)
@@ -2732,10 +2808,11 @@ def test_throw_fails_on_unknown_direction(actions):
     assert success is False
 
 
-def test_throw_fails_if_fling_does_not_start(actions):
-    """If the fling itself can't even be started (e.g. the joint move
-    service is unavailable), throw should fail cleanly rather than
-    releasing the gripper on an arm that never actually swung."""
+def test_throw_fails_if_fling_execution_cannot_be_started(actions):
+    """If the fling plans fine but its execution can't even be fired (e.g.
+    the execute-trajectory service is unavailable), throw should fail
+    cleanly rather than releasing the gripper on an arm that never
+    actually swung."""
 
     actions.held_object = "red_cube"
     actions.get_object_info = MagicMock(return_value={
@@ -2745,9 +2822,10 @@ def test_throw_fails_if_fling_does_not_start(actions):
     actions.latest_joint_positions = {
         'joint_1': 0.0, 'joint_2': 0.1, 'joint_3': 0.2, 'joint_4': 0.3, 'joint_5': 0.4, 'joint_6': 0.5
     }
-    # rotate and windup succeed, but the fling itself fails to start
+    # rotate and windup succeed, the fling plans fine, but execution fails to start
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
-    actions.call_joint_move_service_async = MagicMock(return_value=None)
+    actions.motion.plan_joints = MagicMock(return_value=(_fake_fling_plan(), None))
+    actions.motion.execute_async = MagicMock(return_value=None)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
 
     success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})

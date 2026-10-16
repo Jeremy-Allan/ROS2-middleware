@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from scipy.spatial.transform import Rotation
@@ -42,6 +42,20 @@ def _trajectory(end, seconds=2.0, names=JOINT_NAMES):
     point = JointTrajectoryPoint(positions=list(end), velocities=[1.0] * 6, accelerations=[2.0] * 6)
     point.time_from_start.sec, point.time_from_start.nanosec = int(seconds), int((seconds % 1) * 1e9)
     trajectory.joint_trajectory.points = [point]
+    return trajectory
+
+
+def _multi_trajectory(waypoints, names=JOINT_NAMES):
+    """A trajectory with several points - `waypoints` is [(positions, seconds), ...] -
+    for exercising Plan.time_at_joint_crossing, which needs more than one point to interpolate between."""
+    trajectory = RobotTrajectory()
+    trajectory.joint_trajectory.joint_names = list(names)
+    points = []
+    for positions, seconds in waypoints:
+        point = JointTrajectoryPoint(positions=list(positions))
+        point.time_from_start.sec, point.time_from_start.nanosec = int(seconds), int((seconds % 1) * 1e9)
+        points.append(point)
+    trajectory.joint_trajectory.points = points
     return trajectory
 
 
@@ -265,6 +279,68 @@ def test_unreachable_moveit_raises_instead_of_failing_the_candidate(mover):
         assert mover.move(FREE, DOWN, CONFIG) == (False, 'no response from /plan_kinematic_path')
 
 
+# Joint-space planning (throw's fling - a joint shape, not tool_frame's pose)
+def test_plan_joints_is_a_pilz_ptp_joint_goal(mover):
+    patched, requests = _services(_planned())
+    with patched:
+        plan, reason = mover.plan_joints([0.1, 0.2, 0.3, 0.4, 0.5, 0.6], CONFIG, label='throw fling')
+
+    assert reason is None and plan.planner == 'Pilz PTP'
+    motion_request = requests[0].motion_plan_request
+    assert motion_request.pipeline_id == 'pilz_industrial_motion_planner'
+    assert (motion_request.planner_id, motion_request.group_name) == ('PTP', 'arm')
+    assert motion_request.max_velocity_scaling_factor == 0.5
+    assert motion_request.max_acceleration_scaling_factor == 0.2
+    goal = motion_request.goal_constraints[0]
+    assert not goal.position_constraints and not goal.orientation_constraints  # a joint goal, not a pose
+    assert [jc.joint_name for jc in goal.joint_constraints] == JOINT_NAMES
+    assert [jc.position for jc in goal.joint_constraints] == pytest.approx([0.1, 0.2, 0.3, 0.4, 0.5, 0.6])
+
+
+def test_plan_joints_falls_back_to_rrtstar(mover):
+    patched, requests = _services(_not_planned(), _planned())
+    with patched:
+        plan, _ = mover.plan_joints([0.0] * 6, CONFIG, label='throw fling')
+
+    assert plan.planner == 'RRT*'
+    motion_request = requests[1].motion_plan_request
+    assert (motion_request.pipeline_id, motion_request.planner_id) == ('ompl', 'RRTstarkConfigDefault')
+    assert motion_request.allowed_planning_time == CONFIG['fallback_planning_time']
+
+
+def test_plan_joints_reports_the_fallback_reason_when_both_fail(mover):
+    patched, _ = _services(_not_planned(), _not_planned(MoveItErrorCodes.PLANNING_FAILED))
+    with patched:
+        plan, reason = mover.plan_joints([0.0] * 6, CONFIG, label='throw fling')
+
+    assert plan is None
+    assert reason == ("no path to throw fling (Pilz PTP: out of reach (no IK solution); "
+                      "RRT*: planning failed (path blocked by an obstacle or self-collision))")
+
+
+def test_execute_async_fires_without_waiting(mover):
+    """execute_async should send the trajectory and return the raw future
+    immediately, without waiting for any response - unlike execute, which
+    always waits for the full run to finish."""
+
+    mover.execute_client.wait_for_service = MagicMock(return_value=True)
+    future = MagicMock()
+    mover.execute_client.call_async = MagicMock(return_value=future)
+    plan = Plan(_trajectory([0.1] * 6), 'Pilz PTP')
+
+    result = mover.execute_async(plan)
+
+    assert result is future
+    request = mover.execute_client.call_async.call_args[0][0]
+    assert request.trajectory == plan.trajectory
+
+
+def test_execute_async_returns_none_if_unavailable(mover):
+    mover.execute_client.wait_for_service = MagicMock(return_value=False)
+
+    assert mover.execute_async(Plan(_trajectory([0.1] * 6), 'Pilz PTP')) is None
+
+
 # Scene
 def test_touching_lists_what_the_held_object_is_in_contact_with(mover):
     response = GetStateValidity.Response(valid=False, contacts=[
@@ -311,6 +387,32 @@ def test_end_joints_are_in_joint_order():
     names = list(reversed(JOINT_NAMES))
     plan = Plan(_trajectory(end=[6, 5, 4, 3, 2, 1], names=names), 'Pilz PTP')
     assert plan.end_joints == [1, 2, 3, 4, 5, 6]
+
+
+def test_time_at_joint_crossing_interpolates_between_the_straddling_waypoints():
+    """throw's release trigger needs the exact moment within *this*
+    trajectory that joint_5 reaches the release angle - not just whether
+    it does - so a crossing partway through a segment should be linearly
+    interpolated, not snapped to either endpoint's own timestamp."""
+    trajectory = _multi_trajectory([
+        ([0.0] * 6, 0.0),
+        ([0.0, 0.0, 0.0, 0.0, 1.0, 0.0], 1.0),
+        ([0.0, 0.0, 0.0, 0.0, -1.0, 0.0], 2.0),
+    ])
+    plan = Plan(trajectory, 'Pilz PTP')
+
+    # crosses -0.5 three-quarters of the way through the second segment (1s -> 2s)
+    assert plan.time_at_joint_crossing('joint_5', -0.5) == pytest.approx(1.75)
+
+
+def test_time_at_joint_crossing_returns_none_if_never_crossed():
+    trajectory = _multi_trajectory([
+        ([0.0] * 6, 0.0),
+        ([0.0, 0.0, 0.0, 0.0, 1.0, 0.0], 1.0),
+    ])
+    plan = Plan(trajectory, 'Pilz PTP')
+
+    assert plan.time_at_joint_crossing('joint_5', 5.0) is None
 
 
 def test_slow_down_stretches_time_and_scales_velocity_and_acceleration():
