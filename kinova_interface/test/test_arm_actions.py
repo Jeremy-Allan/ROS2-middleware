@@ -1722,7 +1722,10 @@ def test_push_faces_object_and_extends_shoulder_elbow_only(actions):
     actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
+    actions.motion = FakeMotion(supports=["table"])
 
     success, message = actions.handlers['push']({"target": "push_block", "destination": "delivery_tray"})
 
@@ -1732,9 +1735,10 @@ def test_push_faces_object_and_extends_shoulder_elbow_only(actions):
     assert allow_calls[0][0] == ("push_block", True)
     assert allow_calls[-1][0] == ("push_block", False)
 
-    approach_call, extend_call = actions.call_joint_move_service.call_args_list
+    approach_call, extend_call, retreat_call = actions.call_joint_move_service.call_args_list
     assert approach_call[0][0] == [pytest.approx(expected_base_yaw), pytest.approx(-0.3), pytest.approx(2.0), 0.0, 0.0, 0.0]
     assert extend_call[0][0] == [pytest.approx(expected_base_yaw), pytest.approx(-0.5), pytest.approx(1.6), 0.0, 0.0, 0.0]
+    assert retreat_call[0][0] == [pytest.approx(expected_base_yaw), pytest.approx(-0.3), pytest.approx(2.0), 0.0, 0.0, 0.0]
 
     actions.update_object_pose.assert_called_once_with(
         "push_block", 0.6, 0.2, 0.02, {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
@@ -1812,7 +1816,10 @@ def test_push_allows_target_object_contact_before_checking(actions):
     )
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
+    actions.motion = FakeMotion(supports=["table"])
 
     success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
@@ -1905,6 +1912,263 @@ def test_push_reverts_collision_allowance_if_real_move_fails(actions):
     assert allow_calls[-1][0] == ("push_block", False)
 
 
+def test_push_fails_if_attach_fails(actions):
+    """If attaching the object after closing the gripper fails, push
+    should fail cleanly before ever extending, still reverting the
+    collision allowance."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=False)
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert success is False
+    # only the approach move happened - never the extend
+    assert actions.call_joint_move_service.call_count == 1
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[-1][0] == ("push_block", False)
+
+
+def test_push_fails_if_detach_fails(actions):
+    """If detaching the object after a successful extend fails, push
+    should fail cleanly rather than silently retreating with the
+    planning scene still carrying the object as attached."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=False)
+    actions.motion = FakeMotion(supports=["table"])
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert success is False
+    assert "detach" in message.lower()
+    # retreat never attempted - only approach + extend
+    assert actions.call_joint_move_service.call_count == 2
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[-1][0] == ("push_block", False)
+
+
+def test_push_fails_if_cant_check_what_its_resting_on(actions):
+    """If touching() can't be answered (no response from
+    /check_state_validity) right after attaching, push should fail
+    cleanly rather than risk the attached object digging into whatever
+    it's resting on with no exemption in place."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+
+    class RaisingMotion:
+        def touching(self, object_id):
+            raise MotionUnavailable('no response from /check_state_validity')
+
+    actions.motion = RaisingMotion()
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert success is False
+    assert "resting on" in message.lower()
+    # never reached the extend
+    assert actions.call_joint_move_service.call_count == 1
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[-1][0] == ("push_block", False)
+
+
+def test_push_fails_if_cant_allow_contact_with_what_its_resting_on(actions):
+    """If the ACM update to permit the table contact fails, push should
+    fail cleanly before ever extending."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+    actions.motion = FakeMotion(supports=["table"])
+    actions.motion.allow_contact = MagicMock(return_value=False)
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert success is False
+    assert "table" in message.lower()
+    assert actions.call_joint_move_service.call_count == 1
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[-1][0] == ("push_block", False)
+
+
+def test_push_allows_and_reverts_table_contact_around_the_extend(actions):
+    """touching() finding the object rests on the table should permit
+    (and, win or lose, always revert) that one specific contact for the
+    extend only - not for the approach before it or the retreat after,
+    which don't need it."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(
+        side_effect=[{"success": True}, {"success": False, "message": "MoveIt failed"}]
+    )
+    actions.attach_object = MagicMock(return_value=True)
+    actions.motion = FakeMotion(supports=["table"])
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert success is False
+    # reverted even though the extend itself failed
+    assert actions.motion.allowed == [("push_block", ["table"], True), ("push_block", ["table"], False)]
+
+
+def test_push_attaches_after_closing_and_detaches_before_retreating(actions):
+    """The object should be attached right after the gripper closes on
+    it (so its position in the planning scene tracks the real arm
+    motion through the extend, like pickup/dropoff/throw), and detached
+    again - mirroring dropoff/throw's open -> detach -> update-pose
+    ordering - before the arm retreats, so retreating moves through
+    space the object has genuinely vacated rather than through its
+    still-registered pre-push position."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+
+    call_order = []
+    actions.call_move_gripper_service = MagicMock(
+        side_effect=lambda pos: call_order.append(f"gripper:{pos}") or {"success": True}
+    )
+    actions.call_joint_move_service = MagicMock(
+        side_effect=lambda *a, **k: call_order.append("joint_move") or {"success": True}
+    )
+    actions.attach_object = MagicMock(side_effect=lambda name: call_order.append("attach") or True)
+    actions.detach_object = MagicMock(side_effect=lambda name: call_order.append("detach") or True)
+    actions.update_object_pose = MagicMock(side_effect=lambda *a: call_order.append("update_pose") or True)
+    actions.motion = FakeMotion(supports=["table"])
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert success is True
+    actions.attach_object.assert_called_once_with("push_block")
+    actions.detach_object.assert_called_once_with("push_block")
+
+    # open, approach, close, attach, extend, open, detach, update_pose, retreat
+    assert call_order == [
+        "gripper:0.0", "joint_move", "gripper:0.75", "attach", "joint_move",
+        "gripper:0.0", "detach", "update_pose", "joint_move",
+    ]
+
+    joint_calls = actions.call_joint_move_service.call_args_list
+    approach_joints = joint_calls[0][0][0]
+    retreat_joints = joint_calls[-1][0][0]
+    assert retreat_joints == approach_joints  # retreats to the contact pose
+
+    # retreat happens before the collision allowance is reverted
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[-1][0] == ("push_block", False)
+
+
+def test_push_fails_if_retreat_gripper_open_fails(actions):
+    """If the post-push gripper-open fails, push should report the
+    failure (while still having completed the push itself) rather than
+    silently continuing with the gripper still closed on the object."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_move_gripper_service = MagicMock(
+        side_effect=[{"success": True}, {"success": True}, {"success": False, "message": "gripper fault"}]
+    )
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
+    actions.motion = FakeMotion(supports=["table"])
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert success is False
+    assert "gripper fault" in message
+    actions.detach_object.assert_not_called()
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[-1][0] == ("push_block", False)
+
+
+def test_push_fails_if_retreat_move_fails(actions):
+    """If the post-push retreat move itself fails, push should report
+    the failure rather than silently succeeding with the arm still in
+    contact with the object."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(
+        side_effect=[{"success": True}, {"success": True}, {"success": False, "message": "MoveIt failed"}]
+    )
+    actions.attach_object = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
+    actions.update_object_pose = MagicMock(return_value=True)
+    actions.motion = FakeMotion(supports=["table"])
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert success is False
+    assert "MoveIt failed" in message
+    actions.detach_object.assert_called_once_with("push_block")
+    allow_calls = actions.set_collision_allowed.call_args_list
+    assert allow_calls[-1][0] == ("push_block", False)
+
+
 def test_push_uses_dynamic_distance_when_none_given(actions):
     """With a direction but no explicit distance, push should ask
     _find_max_planar_reach_distance for how far it can actually go,
@@ -1922,7 +2186,10 @@ def test_push_uses_dynamic_distance_when_none_given(actions):
     actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
+    actions.motion = FakeMotion(supports=["table"])
     actions._find_max_planar_reach_distance = MagicMock(return_value=0.12)
 
     success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
@@ -1949,7 +2216,10 @@ def test_push_honors_explicit_distance_without_dynamic_search(actions):
     actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
+    actions.motion = FakeMotion(supports=["table"])
     actions._find_max_planar_reach_distance = MagicMock(return_value=0.12)
 
     success, message = actions.handlers['push']({"target": "push_block", "direction": "forward", "distance": 0.08})

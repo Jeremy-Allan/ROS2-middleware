@@ -19,9 +19,13 @@ objects:
       orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
     shape: {type: BOX, dimensions: [0.06, 0.06, 0.075]}
 
-  blue_cube: 
+  blue_cube:
     pose:
-      position: {x: 0.45, y: 0.2, z: -0.0275}
+      # z=-0.0275 (copied from tea_pot's unrotated value) left it ~3cm into
+      # the table once pitch:1.57 was added - pitched 90 deg, its vertical
+      # extent is the 0.107 dimension (half 0.0535), not 0.073, so it needs
+      # a much higher resting z than an unrotated box of the same shape.
+      position: {x: 0.45, y: 0.2, z: 0.0035}
       orientation: {roll: 0.0, pitch: 1.57, yaw: 0.0}
     shape: {type: BOX, dimensions: [0.107, 0.043, 0.073]}
   

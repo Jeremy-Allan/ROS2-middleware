@@ -2,7 +2,9 @@
 import math
 from typing import TYPE_CHECKING
 
+from kinova_interface.actions.motion import MotionUnavailable
 from kinova_interface.utils.geometry import resolve_direction_offset
+from kinova_interface.utils.robot import GRIPPER_OPEN
 
 # Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
 # because arm_actions imports this module and that would be circular.
@@ -42,8 +44,26 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     so a normal collision-aware plan would otherwise reject it, or
     silently route around the object instead of actually pushing it -
     set_collision_allowed temporarily exempts just this one object for
-    the duration, and is always reverted in a 'finally' block even if
-    the push fails partway through.
+    the whole approach/extend/retreat sequence, and is always reverted
+    in a 'finally' block even if the push fails partway through.
+
+    Once the gripper closes on the object it's also attached (like
+    pickup/dropoff/throw), so its position in the planning scene - and
+    in RViz - tracks the real arm motion through the extend, rather
+    than staying frozen at its pre-push pose the whole time. It's
+    opened and detached again (same open -> detach -> update-pose
+    ordering as dropoff/throw) before the arm retreats back to the
+    contact pose, which only makes sense because the object has by
+    then genuinely relocated out of the way.
+
+    Being attached means the object is now rigidly carried with the
+    gripper through the extend's joint-space interpolated path, which -
+    unlike the single solved contact/extend endpoints - isn't
+    guaranteed to stay perfectly level in between, and can dip the
+    object fractionally into whatever it's resting on (the table).
+    Same reasoning as pickup's lift: touching()/allow_contact()
+    temporarily permits just that one contact for the extend, reverted
+    immediately after, rather than it being flagged a real collision.
 
     Where to push it is either a named 'destination' object, or a
     'direction' ('forward'/'backward'/'left'/'right', relative to the
@@ -137,7 +157,7 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         close_pos = float(params.get('close_position', 0.75))
 
         # 1. Open the gripper before approaching
-        rg = ctx.call_move_gripper_service(0.0)
+        rg = ctx.call_move_gripper_service(GRIPPER_OPEN)
         if not rg['success']:
             return False, f"Failed to open gripper before push approach: {rg['message']}"
 
@@ -146,22 +166,63 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         if not r['success']:
             return False, f"Failed to approach push target: {r['message']}"
 
-        # 3. Close the gripper onto it
+        # 3. Close the gripper onto it, then attach it so its position in
+        # the planning scene (and RViz) tracks the real arm motion
+        # through the extend below, instead of staying frozen at its
+        # pre-push pose for the entire push the way a bare collision
+        # exemption would leave it.
         rg = ctx.call_move_gripper_service(close_pos)
         if not rg['success']:
             return False, f"Failed to set gripper for push: {rg['message']}"
+        if not ctx.attach_object(target_name):
+            return False, f"Failed to attach '{target_name}' for push"
+
+        # Now attached, the object's geometry is rigidly carried with the
+        # tool_frame through the joint-space interpolated extend below -
+        # which, unlike the single solved endpoint, isn't guaranteed to
+        # stay exactly level, so it can dip the object fractionally into
+        # whatever it's resting on (the table). Same reasoning as
+        # pickup's lift: allow that one specific contact for the
+        # duration, rather than it being flagged as a real collision.
+        try:
+            resting_on = ctx.motion.touching(target_name)
+        except MotionUnavailable as error:
+            return False, f"Attached '{target_name}' but can't check what it's resting on: {error}"
+        if resting_on and not ctx.motion.allow_contact(target_name, resting_on, True):
+            return False, f"Attached '{target_name}' but couldn't allow its contact with {', '.join(resting_on)}"
 
         # 4. Extend - shoulder/elbow only, same plane
-        r = ctx.call_joint_move_service(extend_joints, motion_params=motion_params)
+        try:
+            r = ctx.call_joint_move_service(extend_joints, motion_params=motion_params)
+        finally:
+            if resting_on and not ctx.motion.allow_contact(target_name, resting_on, False):
+                ctx.get_logger().warn(f"Couldn't restore collision checking between '{target_name}' and {', '.join(resting_on)}")
         if not r['success']:
             return False, f"Failed to push to destination: {r['message']}"
+
+        # 5. Open the gripper, detach (mirrors dropoff/throw's release
+        # ordering: open -> detach -> update the registered pose), then
+        # retreat to the contact pose before the collision exemption
+        # below is revoked. Retreating is safe now because the object
+        # has genuinely relocated away from contact_joints during the
+        # attached extend above - push only ever extends an object
+        # further away, never back towards the arm (see docstring
+        # above) - rather than relying on it having silently stayed put
+        # the whole time, which left the gripper retreating straight
+        # back into it.
+        rg = ctx.call_move_gripper_service(GRIPPER_OPEN)
+        if not rg['success']:
+            return False, f"Pushed '{target_name}' but failed to open the gripper to retreat: {rg['message']}"
+        if not ctx.detach_object(target_name):
+            return False, f"Pushed '{target_name}' but failed to detach it afterward"
+        orient = target_info['pose']['orientation']
+        if not ctx.update_object_pose(target_name, release_x, release_y, origin['z'], orient):
+            ctx.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
+        r = ctx.call_joint_move_service(contact_joints, motion_params=motion_params)
+        if not r['success']:
+            return False, f"Pushed '{target_name}' but failed to retreat afterward: {r['message']}"
     finally:
         ctx.set_collision_allowed(target_name, False)
-
-    # It moved by contact, not attachment - update its known position.
-    orient = target_info['pose']['orientation']
-    if not ctx.update_object_pose(target_name, release_x, release_y, origin['z'], orient):
-        ctx.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
 
     where = f"to '{destination_name}'" if destination_name else f"{direction}"
     return True, f"Pushed '{target_name}' {where}"
