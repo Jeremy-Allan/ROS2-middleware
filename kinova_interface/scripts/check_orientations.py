@@ -6,7 +6,7 @@ Also shows which spots above the table each orientation can reach.
 Moves to a grid of points with every orientation and prints one line per move:
   'ok 0.8 P'  got there, 0.8 deg off, planned by Pilz ('R' = RRT* fallback)
   'BAD 14.3 P' moved, but ended up in the wrong orientation or position
-  'FAIL'      couldn't get there (often just out of reach)
+  'FAIL (..)' couldn't get there, with the reason (often just out of reach)
 --ik-only only checks reachability ('ik ok' / 'no IK') and never moves.
 See docs/testing.md for how to read the results.
 
@@ -52,32 +52,33 @@ def _orientations():
 
 
 def _check(actions, tf_buffer, x, y, z, target, args):
-    """Move to (x, y, z) with orientation `target` (or just check IK) and report the result.
+    """Check one position and orientation, and describe the result.
 
     Args:
-        actions (ArmActions): Shared action context.
-        tf_buffer (Buffer): TF buffer used to read the reached tool pose.
-        x (float): Target X position.
-        y (float): Target Y position.
-        z (float): Target Z position.
-        target (Rotation): Desired tool orientation.
-        args (argparse.Namespace): Parsed CLI args (``ik_only``, ``speed``,
+        actions (ArmActions): Action context used to call the move services.
+        tf_buffer (Buffer): TF buffer for reading where the gripper ended up.
+        x (float): Target x in ``base_link``, metres.
+        y (float): Target y in ``base_link``, metres.
+        z (float): Target z in ``base_link``, metres.
+        target (Rotation): Orientation to check.
+        args (argparse.Namespace): Parsed options (``ik_only``, ``speed``,
             ``tolerance_deg``).
 
     Returns:
-        tuple[str, bool]: A one-line result label (e.g. ``'ok 0.8 P'``), and
-            whether the attempt counted as reached.
+        tuple[str, bool]: The text for the results line, and whether the
+        check passed.
     """
-    roll, pitch, yaw = target.as_euler('xyz')
     if args.ik_only:
-        if actions.find_ik_solution(x, y, z, roll, pitch, yaw) is None:
+        if actions.find_ik_solution(x, y, z, target) is None:
             return 'no IK', False
         return 'ik ok', True
 
+    roll, pitch, yaw = target.as_euler('xyz')
+
     motion_params = actions.build_motion_params(args.speed)
     result = actions.call_move_service(x, y, z, True, roll, pitch, yaw, motion_params)
-    if not (result and result['success']):
-        return 'FAIL', False
+    if not result['success']:
+        return f"FAIL ({result['message']})", False
     planner = 'P' if 'Pilz PTP' in result['message'] else 'R'
 
     tf = tf_buffer.lookup_transform(BASE_FRAME, TOOL_FRAME, rclpy.time.Time(), timeout=rclpy.duration.Duration(seconds=1.0))
@@ -90,17 +91,15 @@ def _check(actions, tf_buffer, x, y, z, target, args):
 
 
 def main():
-    """Run the orientation/reachability sweep and exit non-zero if any cell failed.
+    """Run the orientation check over the grid and exit with the result.
 
-    Parses CLI args, spins up a standalone node and ArmActions context, then
-    checks every orientation preset against every grid position via
-    :func:`_check`, printing one result line per combination.
+    Exits 0 only if every position and orientation passed.
     """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--ik-only', action='store_true', help='only check IK reachability, never move the arm')
     parser.add_argument('--speed', type=float, default=0.2, help='velocity/acceleration scale, 0.0-1.0')
     parser.add_argument('--tolerance-deg', type=float, default=6.0, help='max angular error to count as reached')
-    args = parser.parse_args()
+    args, _ = parser.parse_known_args()  # leaves --ros-args for rclpy
 
     rclpy.init()
     node = Node('check_orientations')

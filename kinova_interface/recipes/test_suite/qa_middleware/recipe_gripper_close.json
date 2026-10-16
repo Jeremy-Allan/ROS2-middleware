@@ -1,0 +1,14 @@
+{
+  "recipe_name": "QA - Gripper Close Only",
+  "description": "Close the gripper fully, nothing else",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "gripper",
+      "description": "Close the gripper fully",
+      "parameters": {
+        "position": 1.0
+      }
+    }
+  ]
+}

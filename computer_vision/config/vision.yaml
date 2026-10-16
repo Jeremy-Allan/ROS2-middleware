@@ -21,6 +21,7 @@ vision_snapshot_node:
 
     # --- stability across snapshots ---
     unknown_margin: 0.005
+    table_clearance: 0.01      # objects sit this far above table_fit's top, so they never start inside it
     id_match_dist: 0.08
     label_flip_conf: 0.6
     grace_snapshots: 2 #if object is missing for x many snapshots, it is considered stale and removed

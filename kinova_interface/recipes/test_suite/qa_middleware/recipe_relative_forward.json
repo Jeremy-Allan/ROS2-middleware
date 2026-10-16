@@ -1,0 +1,19 @@
+{
+  "recipe_name": "QA - Relative Move Forward",
+  "description": "Move the arm +0.1m in x using the thrust_forward vector",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    },
+    {
+      "step_id": 2,
+      "action": "relative_move",
+      "description": "Move forward 0.1m",
+      "parameters": {
+        "vector": "thrust_forward"
+      }
+    }
+  ]
+}

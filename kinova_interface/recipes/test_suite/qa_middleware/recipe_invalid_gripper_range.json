@@ -1,0 +1,14 @@
+{
+  "recipe_name": "QA - Invalid, Gripper Position Out of Range",
+  "description": "Request a gripper position outside the normal 0.0-1.0 range",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "gripper",
+      "description": "Attempt a gripper position outside the normal range",
+      "parameters": {
+        "position": 1.5
+      }
+    }
+  ]
+}

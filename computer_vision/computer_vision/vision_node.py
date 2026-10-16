@@ -74,6 +74,7 @@ DEFAULTS = {
     'num_frames': 8,
     'save_dir': '',
     'unknown_margin': 0.005,
+    'table_clearance': 0.01,
     'id_match_dist': 0.08,
     'label_flip_conf': 0.6,
     'grace_snapshots': 2,
@@ -415,6 +416,11 @@ class VisionSnapshotNode(Node):
             return self.table_z
         return float(self.plane[0] * x + self.plane[1] * y + self.plane[2])
 
+    def table_top(self):
+        """Highest plane point over the workspace, the top of table_fit."""
+        x0, x1, y0, y1 = self.workspace
+        return max(self.table_z_at(x, y) for x in (x0, x1) for y in (y0, y1))
+
     @staticmethod
     def _project(pts_base, K, T_cam_to_base):
         cam = (np.linalg.inv(T_cam_to_base) @ np.c_[pts_base, np.ones(len(pts_base))].T).T[:, :3]
@@ -594,7 +600,8 @@ class VisionSnapshotNode(Node):
         label, src, conf = ('object', 'fallback', 0.3) if fallback else (det.label, 'yolo', det.conf)
         m = self.cfg['unknown_margin'] if fallback else 0.0
         w, d, h = cl.dims[0] + 2 * m, cl.dims[1] + 2 * m, cl.dims[2] + m
-        base = cl.center[2] - cl.dims[2] / 2.0
+        # Sit on table_fit's top, so the arm doesn't attach an object that's already in the table
+        base = self.table_top() + self.cfg['table_clearance']
         return {
             'label': label, 'label_source': src, 'confidence': round(float(conf), 2),
             'color': color_name(color[cl.uv[:, 1], cl.uv[:, 0]]),
@@ -607,10 +614,9 @@ class VisionSnapshotNode(Node):
         """Axis-aligned BOX whose top sits at the highest plane point over the workspace."""
         if self.plane is None:
             return None
-        a, b, c = self.plane
         x0, x1, y0, y1 = self.workspace
         t = 0.05
-        top = max(a * x + b * y + c for x in (x0, x1) for y in (y0, y1))
+        top = self.table_top()
         return {'label': 'table', 'label_source': 'vision', 'confidence': 1.0, 'color': 'unknown',
                 'description': f'auto-fit table plane (top z={top:+.3f})',
                 'pose': pose_dict((x0 + x1) / 2, (y0 + y1) / 2, top - t / 2),

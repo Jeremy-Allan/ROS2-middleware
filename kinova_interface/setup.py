@@ -13,10 +13,12 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob(os.path.join('launch', '*launch.[pxy][yma]*'))),
-        (os.path.join('share', package_name, 'data', 'configs', 'env'), glob('data/configs/env/*.json')),
+        (os.path.join('share', package_name, 'data', 'configs'), glob('data/configs/*.yaml')),
+        (os.path.join('share', package_name, 'data', 'configs', 'env'), glob('data/configs/env/*.yaml')),
         (os.path.join('share', package_name, 'data', 'configs', 'moveit'), glob('data/configs/moveit/*.yaml')),
         (os.path.join('share', package_name, 'recipes'), glob(os.path.join('recipes', '*.json'))),
         (os.path.join('share', package_name, 'recipes', 'test_suite'), glob(os.path.join('recipes', 'test_suite', '*.json'))),
+        (os.path.join('share', package_name, 'recipes', 'test_suite', 'qa_middleware'), glob(os.path.join('recipes', 'test_suite', 'qa_middleware', '*.json'))),
         (os.path.join('lib', package_name), ['scripts/run_recipe.py', 'scripts/check_orientations.py']),
     ],
     
@@ -25,7 +27,7 @@ setup(
     maintainer='jeremyallan',
     maintainer_email='jeremyallan@todo.todo', # TODO: update to correct email
     description='Kinova Kortex ROS2 Middleware Interface',
-    license='Apache License 2.0',
+    license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [

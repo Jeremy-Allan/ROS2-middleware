@@ -5,7 +5,7 @@
   <version>0.1.0</version>
   <description>Computer vision integration with depth sensing camera</description>
   <maintainer email="enoch@todo.todo">enoch</maintainer>
-  <license>Apache License 2.0</license>
+  <license>Apache-2.0</license>
 
   <buildtool_depend>ament_python</buildtool_depend>
 

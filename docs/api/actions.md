@@ -6,6 +6,8 @@ One module per recipe action, plus `arm_actions.py`'s shared `ArmActions` contex
 
 ::: kinova_interface.actions.basic
 
+::: kinova_interface.actions.motion
+
 ::: kinova_interface.actions.pickup
 
 ::: kinova_interface.actions.dropoff

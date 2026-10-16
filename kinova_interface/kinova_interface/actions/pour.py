@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 POUR_DEFAULT_TILT_ANGLE = math.radians(135)
 POUR_DEFAULT_LIFT_HEIGHT = 0.14  # meters; demo measured ~0.137m
 
-def run(ctx: 'ArmActions', params: dict) -> bool:
+def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     """Lift a held object and tip it to pour, then return level -
     directly above wherever it currently is by default, or above a
     'destination'/'direction' first if one is given. Assumes 'target'
@@ -49,33 +49,31 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     coupling that handle_relative_move's own docstring already warns
     about (see hardware_interface_client.py) - which is what produced
     the unreachable target that made the original design fail."""
-    # Fall back to whatever's actually held if the recipe step didn't name
-    # one - "pour it"/"pour" with no target given should refer to the
-    # currently held object, not fail just because 'target' was omitted.
+    # No target means the held object
     target_name = params.get('target') or ctx.held_object
     if not target_name:
-        return ctx.fail("pour action requires a held object, but nothing is currently held")
+        return False, "pour action requires a held object, but nothing is currently held"
     if target_name != ctx.held_object:
-        return ctx.fail(f"Cannot pour '{target_name}': held object is '{ctx.held_object}'")
+        return False, f"Cannot pour '{target_name}': held object is '{ctx.held_object}'"
 
     destination_name = params.get('destination')
     direction = params.get('direction')
 
     target_info = ctx.get_object_info(target_name)
     if not target_info:
-        return ctx.fail(f"Could not resolve held object '{target_name}' for pour")
+        return False, f"Could not resolve held object '{target_name}' for pour"
     origin = target_info['pose']['position']
 
     if destination_name:
         dest_info = ctx.get_object_info(destination_name)
         if not dest_info:
-            return ctx.fail(f"Could not resolve pour destination '{destination_name}'")
+            return False, f"Could not resolve pour destination '{destination_name}'"
         release_x, release_y = dest_info['pose']['position']['x'], dest_info['pose']['position']['y']
     elif direction:
         distance = float(params.get('distance', 0.3))
         offset = resolve_direction_offset(origin['x'], origin['y'], direction, distance)
         if offset is None:
-            return ctx.fail(f"Unknown pour direction '{direction}'")
+            return False, f"Unknown pour direction '{direction}'"
         release_x, release_y = offset
     else:
         # No destination/direction - pour stays exactly where the
@@ -89,8 +87,8 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     # relative move - orientation is preserved, never recomputed)
     lift_height = float(params.get('lift_height', POUR_DEFAULT_LIFT_HEIGHT))
     r = ctx.call_relative_move_service(0.0, 0.0, lift_height, motion_params=motion_params)
-    if not (r and r['success']):
-        return ctx.fail('Failed to lift for pour')
+    if not r['success']:
+        return False, f"Failed to lift for pour: {r['message']}"
 
     # 2. Move horizontally to hover above the destination, at that same
     # lifted height - orientation still untouched. Skipped entirely
@@ -99,15 +97,15 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     dx, dy = release_x - origin['x'], release_y - origin['y']
     if dx != 0.0 or dy != 0.0:
         r = ctx.call_relative_move_service(dx, dy, 0.0, motion_params=motion_params)
-        if not (r and r['success']):
-            return ctx.fail('Failed to move above pour destination')
+        if not r['success']:
+            return False, f"Failed to move above pour destination: {r['message']}"
 
     # 3. Tilt: a pure joint-space delta on joint_6 alone (see docstring)
     tilt_angle = float(params.get('tilt_angle', POUR_DEFAULT_TILT_ANGLE))
     tilt_delta = [0.0, 0.0, 0.0, 0.0, 0.0, tilt_angle]
     r = ctx.call_joint_move_service(tilt_delta, motion_params=motion_params, relative=True)
-    if not (r and r['success']):
-        return ctx.fail('Failed to tilt for pour')
+    if not r['success']:
+        return False, f"Failed to tilt for pour: {r['message']}"
 
     # 4. Hold the tilt so contents can pour out
     dwell = float(params.get('duration', 1.5))
@@ -116,8 +114,8 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
     # 5. Rotate back level - the exact negated delta
     untilt_delta = [0.0, 0.0, 0.0, 0.0, 0.0, -tilt_angle]
     r = ctx.call_joint_move_service(untilt_delta, motion_params=motion_params, relative=True)
-    if not (r and r['success']):
-        return ctx.fail('Failed to return to level after pour')
+    if not r['success']:
+        return False, f"Failed to return to level after pour: {r['message']}"
 
     if destination_name:
         where = f"toward '{destination_name}'"
@@ -125,5 +123,4 @@ def run(ctx: 'ArmActions', params: dict) -> bool:
         where = direction
     else:
         where = "in place"
-    ctx.get_logger().info(f"Poured '{target_name}' {where}")
-    return True
+    return True, f"Poured '{target_name}' {where}"

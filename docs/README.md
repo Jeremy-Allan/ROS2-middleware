@@ -10,9 +10,8 @@ If you read nothing else, read these two pages:
 ## Pick your path
 
 - **I'm brand new to this project:** Start with [Overview](overview.md), then [Installation](installation.md). You do not need prior ROS 2 experience, both pages explain concepts as they come up.
-- **I'm not on native Ubuntu:** [Environment Setup](environment-setup.md) covers WSL2, Distrobox, and VM options before you start [Installation](installation.md).
-- **I just want to get it running:** [Installation](installation.md), then [Running the System](running.md) walks through the three terminals you need.
-- **I need to add a new object, movement, or recipe:** [Configuration](configuration.md) covers the coordinate dictionary, relative movements, obstacles, recipes, and the LLM provider/prompt setup.
+- **I just want to get it running:** [Installation](installation.md), then [Running the System](running.md).
+- **I need to add a new object, movement, or recipe:** [Configuration](configuration.md) covers the coordinate dictionary, relative movements, obstacles and recipes.
 - **I'm writing or running tests:** [Testing](testing.md) covers the middleware's test suites and the proxy's LLM-output test suite, and is honest about what neither one currently catches.
 - **Something's broken:** [Troubleshooting](troubleshooting.md) is organized by symptom, with the likely cause and the fix, split by which half of the pipeline it's in.
 - **I want to understand how it actually works:** [Architecture](architecture.md) is the deep dive, per-node internals, the full pipeline diagram, every custom service and message type, and the package layout.
@@ -25,15 +24,15 @@ If you read nothing else, read these two pages:
 | Doc | What it gives you |
 |---|---|
 | [Overview](overview.md) | What the system is, the request path end to end, the four middleware nodes, the proxy's two domains |
-| [Environment Setup](environment-setup.md) | Preparing a non-native-Ubuntu host (WSL2, Distrobox, VM) before installing |
+| [Environment Setup](environment-setup.md) | Getting Ubuntu 22.04 on Windows, macOS or another Linux |
 | [Installation](installation.md) | ROS 2, the Kinova driver stack, the middleware workspace, the proxy, an LLM provider |
 
 ### Use it day to day
 
 | Doc | What it gives you |
 |---|---|
-| [Running the System](running.md) | The three-terminal startup, running the middleware alone, watching live telemetry |
-| [Configuration](configuration.md) | Coordinate dictionary, relative movements, obstacles, recipes and the action contract, LLM provider config, system prompt and schema |
+| [Running the System](running.md) | Starting the middleware and the proxy, running the middleware alone, watching live telemetry |
+| [Configuration](configuration.md) | Coordinate dictionary, relative movements, obstacles, motion settings, recipes and the action contract |
 | [Testing](testing.md) | The middleware's recipe test suite, the proxy's LLM-output test suite, a manual smoke test |
 | [Troubleshooting](troubleshooting.md) | Symptom-first tables across build errors, recipe errors, motion errors, telemetry, and proxy/LLM connection issues |
 
@@ -43,15 +42,13 @@ If you read nothing else, read these two pages:
 |---|---|
 | [Architecture](architecture.md) | Full pipeline diagram, per-node internals, custom service/message types, package layout |
 | [Safety and Contracts](safety-and-contracts.md) | The execution contract, safety layers, failure mode table, and system readiness definition |
-| [Pour Motion Reference](pour-motion-reference.md) | The manually-verified joint-space sequence `pour`'s implementation is built against |
-| [Push Motion Reference](push-motion-reference.md) | The manually-verified joint-space sequence `push`'s implementation is built against |
-| [Throw Motion Reference](throw-motion-reference.md) | The manually-verified joint-space sequence `throw`'s implementation is built against, and why the original design was replaced |
 
 ### Reference
 
 | Doc | What it gives you |
 |---|---|
 | [Video Demos](demos.md) | Short recordings of each feature in action |
+| [Pour](pour-motion-reference.md), [Push](push-motion-reference.md), [Throw](throw-motion-reference.md) motion references | How each composite motion was captured and designed |
 | [API Reference](api/nodes.md) | Function-level reference generated from the code's own docstrings (nodes, actions, utils) |
 
 ## Support

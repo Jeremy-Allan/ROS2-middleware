@@ -1,0 +1,40 @@
+{
+  "recipe_name": "QA - Relative Move Down/Left/Right",
+  "description": "Exercise the move_downwards, move_left, and move_right vectors - resolved gaps, previously undefined",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    },
+    {
+      "step_id": 2,
+      "action": "relative_move",
+      "description": "Move down 0.1m",
+      "parameters": {
+        "vector": "move_downwards"
+      }
+    },
+    {
+      "step_id": 3,
+      "action": "relative_move",
+      "description": "Move left 0.1m",
+      "parameters": {
+        "vector": "move_left"
+      }
+    },
+    {
+      "step_id": 4,
+      "action": "relative_move",
+      "description": "Move right 0.1m",
+      "parameters": {
+        "vector": "move_right"
+      }
+    },
+    {
+      "step_id": 5,
+      "action": "home",
+      "description": "Return home"
+    }
+  ]
+}

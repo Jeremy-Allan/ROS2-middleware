@@ -4,6 +4,8 @@ Shared pure helpers used across nodes and actions: no ROS 2 node or service depe
 
 ::: kinova_interface.utils.geometry
 
+::: kinova_interface.utils.grasping
+
 ::: kinova_interface.utils.robot
 
 ::: kinova_interface.utils.ros

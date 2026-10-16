@@ -2,7 +2,7 @@
 
 # Overview
 
-This project lets you type a plain English instruction, like "pick up the red cube and put it on the tray," and have a real (or simulated) Kinova Gen3 Lite robot arm actually do it.
+This project lets you type a plain English instruction, like "pick up the blue cube and put it on the tray," and have a real (or simulated) Kinova Gen3 Lite robot arm actually do it.
 
 It assumes zero prior ROS 2 experience. Anywhere a ROS 2 concept shows up for the first time, it's explained in plain English before it's used.
 
@@ -11,7 +11,7 @@ It assumes zero prior ROS 2 experience. Anywhere a ROS 2 concept shows up for th
 This is split across two separate git repositories, built and run independently, but they only make sense together:
 
 - `Jeremy-Allan/ROS2-middleware` (this repo): the ROS 2 side. Four nodes that turn a structured recipe into real robot motion using MoveIt 2.
-- `paul-isit/embodied-ai-proxy`: the LLM side. A terminal app that takes a natural language command, sends it to a configurable LLM, validates the LLM's JSON output, and forwards it to this middleware over a websocket bridge.
+- `paul-isit/embodied-ai-proxy`: the LLM side. A set of Go services and a terminal UI that take a natural language command, send it to a configurable LLM, validate the LLM's JSON output, and forward it to this middleware over a websocket bridge.
 
 ## The path your command takes
 
@@ -25,32 +25,33 @@ This is split across two separate git repositories, built and run independently,
 
 ## What the system does not do
 
-- Accept direct hardware commands from user input. Every instruction goes through the LLM and the schema validator first; nothing bypasses that path.
+- Accept direct hardware commands from the proxy's user input. Every command typed into the proxy goes through the LLM and the schema validator first. Note that the websocket bridge itself does not filter services, so any websocket client can call any middleware service (see [Safety and Contracts](safety-and-contracts.md)).
 - Do any of its own path-planning or collision math. That's entirely delegated to MoveIt 2.
 - Talk to the physical robot directly from the proxy side. Only this middleware talks to the standard Kinova ROS 2 driver (`ros2_kortex`), which in turn talks to the arm.
-- See anything. Object positions currently come from a hand-maintained coordinate dictionary (covered in [Configuration](configuration.md)), not from a camera. Computer vision, automatically detecting where objects actually are instead of relying on pre-typed coordinates, is the direction the team is working toward this semester for the arm, but it is not implemented anywhere in either repository yet. This page will be updated when it lands.
 
 ## The middleware's four nodes, in one sentence each
 
-This repository is built from four independent ROS 2 programs called nodes, each doing one job and talking to the others over the network:
+This repository is built from four ROS 2 programs called nodes, each doing one job and talking to the others over the network:
 
 | Node | Nickname | Job |
 |---|---|---|
 | `hardware_interface_client.py` | The Muscle | The only node that actually talks to the arm and gripper. Sends motion commands, waits for them to finish, reports hardware faults. |
-| `environment_mapping_node.py` | The Database | Holds the "map" of named locations (for example, `red_cube` maps to an X, Y, Z position), named relative movements, and known obstacles. Answers lookup questions from other nodes. |
+| `environment_mapping_node.py` | The Database | Holds the "map" of named objects (for example, `blue_cube` maps to a pose and shape), named relative movements, and known obstacles. Answers lookup questions from other nodes. |
 | `json_parser_node.py` | The Brain / Supervisor | Reads a recipe, resolves names via the Database node, and tells the Muscle node what to do, step by step, in order. |
 | `telemetry_node.py` | The Monitor | Listens to heartbeats from all the other nodes, decides if the whole system is READY, BUSY, or FAULT, and can trigger a hardware fault reset. |
 
+Object positions come from a hand-maintained dictionary (see [Configuration](configuration.md)). An optional fifth node in the `computer_vision` package (`enable_CV:=true`) can add objects detected by a Kinect camera when `/vision/snapshot` is called.
+
 See [Architecture](architecture.md) for the internals of each node.
 
-## The proxy's two domains
+## The proxy and the bridge
 
-The embodied-ai-proxy repository is split into two halves that are deliberately kept separate, so a bug in the LLM logic can never directly touch the robot:
+The proxy and the middleware are deliberately kept separate, so a bug in the LLM logic can never directly touch the robot:
 
-| Domain | What it is | Job |
+| Side | What it is | Job |
 |---|---|---|
-| Inference domain (`src/`) | A pure Python process, no ROS 2 involved | Talks to the LLM provider, builds the prompt, validates the JSON response against the schema, runs the terminal interface, and connects to the bridge as a websocket client. |
-| ROS 2 bridge domain (`ros2_bridge_ws/`) | Its own small ROS 2 workspace, owned by the proxy | Runs `rosbridge_suite`'s websocket server on port 9090 and translates incoming JSON requests into real ROS 2 service calls against this middleware. This is the only part of the proxy allowed to touch ROS 2 at all. |
+| The proxy (embodied-ai-proxy) | No ROS 2 installed or launched | Talks to the LLM provider, builds the prompt, validates the JSON response against the schema, runs the terminal interface, and connects to the middleware's websocket as a client. |
+| The websocket bridge (this repo's launch) | `rosbridge_suite`'s websocket server, started by `robot.launch.py` | Listens on port 9090 and translates incoming JSON requests into ROS 2 service calls against this middleware. The proxy's only way in. |
 
 If you only remember one sentence about this whole project: **your words go to an LLM, the LLM's structured answer goes through a validator and a websocket bridge, and only then does the middleware's Brain drive the Muscle one step at a time while the Monitor watches everyone's pulse.**
 

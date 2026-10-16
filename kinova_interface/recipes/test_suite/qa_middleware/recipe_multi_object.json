@@ -1,0 +1,48 @@
+{
+  "recipe_name": "QA - Multi-Object Sequential Pick-and-Place",
+  "description": "Relocate the blue cube, then the water bottle, to the delivery tray in sequence",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    },
+    {
+      "step_id": 2,
+      "action": "pickup",
+      "description": "Grasp the blue cube",
+      "parameters": {
+        "target": "blue_cube"
+      }
+    },
+    {
+      "step_id": 3,
+      "action": "dropoff",
+      "description": "Relocate it to the delivery tray",
+      "parameters": {
+        "destination": "delivery_tray"
+      }
+    },
+    {
+      "step_id": 4,
+      "action": "pickup",
+      "description": "Grasp the water bottle",
+      "parameters": {
+        "target": "water_bottle"
+      }
+    },
+    {
+      "step_id": 5,
+      "action": "dropoff",
+      "description": "Relocate it to the delivery tray too",
+      "parameters": {
+        "destination": "delivery_tray"
+      }
+    },
+    {
+      "step_id": 6,
+      "action": "home",
+      "description": "Return home"
+    }
+  ]
+}

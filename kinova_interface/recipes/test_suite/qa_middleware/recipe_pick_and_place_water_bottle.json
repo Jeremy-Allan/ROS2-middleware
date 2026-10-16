@@ -1,0 +1,32 @@
+{
+  "recipe_name": "QA - Pick and Place, Water Bottle",
+  "description": "Full pick-and-place cycle: grasp the water bottle and relocate it to the delivery tray",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    },
+    {
+      "step_id": 2,
+      "action": "pickup",
+      "description": "Grasp the water bottle",
+      "parameters": {
+        "target": "water_bottle"
+      }
+    },
+    {
+      "step_id": 3,
+      "action": "dropoff",
+      "description": "Relocate it to the delivery tray",
+      "parameters": {
+        "destination": "delivery_tray"
+      }
+    },
+    {
+      "step_id": 4,
+      "action": "home",
+      "description": "Return home"
+    }
+  ]
+}

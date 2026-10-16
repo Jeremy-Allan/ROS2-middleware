@@ -5,6 +5,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(shape_msgs REQUIRED)
+find_package(moveit_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetObjectCoordinates.srv"
@@ -22,6 +23,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/HomeArm.srv"
   "srv/UpdateObjectPose.srv"
   "srv/JointMove.srv"
+  "srv/ExecuteTrajectory.srv"
 
   "srv/GetSceneObjects.srv"
   "srv/Snapshot.srv"
@@ -30,7 +32,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/ExtendedStatus.msg"
   "msg/SystemSummary.msg"
   "msg/MotionParams.msg"
-  DEPENDENCIES geometry_msgs shape_msgs
+  DEPENDENCIES geometry_msgs shape_msgs moveit_msgs
 )
 
 ament_package()

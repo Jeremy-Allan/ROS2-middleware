@@ -1,0 +1,5 @@
+{
+  "recipe_name": "QA - Invalid, Empty Steps",
+  "description": "A recipe with no executable steps at all",
+  "steps": []
+}

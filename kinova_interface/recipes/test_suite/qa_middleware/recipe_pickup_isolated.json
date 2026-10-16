@@ -1,0 +1,19 @@
+{
+  "recipe_name": "QA - Pickup Isolated",
+  "description": "Grasp a single object with the default auto grasp style, nothing else",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    },
+    {
+      "step_id": 2,
+      "action": "pickup",
+      "description": "Grasp the push block, auto chooses the grasp style",
+      "parameters": {
+        "target": "push_block"
+      }
+    }
+  ]
+}

@@ -1,4 +1,8 @@
+[Docs Home](README.md)
+
 # Push Motion Reference
+
+> Design record. Object names and some function names are from when it was captured; the `box` object has since been removed. Current behaviour is in `actions/push.py` and `actions/thrust.py`.
 
 This records a manually-driven demonstration of the intended `push`
 motion, captured the same way as `pour` (see `pour-motion-reference.md`):
@@ -6,7 +10,7 @@ one joint-space snapshot per stage, via RViz's MotionPlanning interactive
 marker/Joints tab and `Plan and Execute`, on fake hardware.
 
 Captured with a new dedicated test object, `push_block`
-(`kinova_interface/data/configs/env/object_dictionary.json`), added
+(`kinova_interface/data/configs/env/workspace_objects.yaml`), added
 specifically so push testing didn't keep disturbing `box`'s state. Resting
 at `x=0.25, y=-0.05, z=0.01`.
 
@@ -82,7 +86,8 @@ the same generic `FAILURE` code with zero diagnostic output, on requests
 `/compute_ik` solved and `call_move_service` (actually executing) had
 already been proven to handle correctly elsewhere. That points at "plan
 without executing" not being reliably usable in this setup at all, not
-at these specific goals being unreachable - so a "try for real, retreat
+at these specific goals being unreachable. (Pickup and dropoff now plan
+with `/plan_kinematic_path` successfully, so this finding is outdated.) A "try for real, retreat
 if it fails" version was built on top of attempt 1 instead. It worked in
 principle but still inherited attempt 1's real problem: an essentially
 arbitrary, hard-to-predict contact configuration each time.

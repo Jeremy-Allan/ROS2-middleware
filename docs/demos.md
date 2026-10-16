@@ -6,9 +6,9 @@ Short screen recordings of each feature in action, for anyone who'd rather watch
 
 | Feature | What it shows | Link |
 |---|---|---|
-| Full pipeline, natural language to motion | All three terminals running, a typed command resulting in real arm movement | (add link) |
-| Running a pick-and-place recipe directly | `recipe_pickup.json` then `recipe_dropoff.json` end to end, no LLM involved | (add link) |
-| Switching LLM providers | Editing `llm_config.json` from Ollama to a cloud provider | (add link) |
+| Full pipeline, natural language to motion | The middleware and proxy running, a typed command resulting in real arm movement | (add link) |
+| Running a pick-and-place recipe directly | `recipe_dropoff.json` (pickup then dropoff) end to end, no LLM involved | (add link) |
+| Switching LLM providers | Editing the proxy's `data/config/config.json` from Ollama to a cloud provider | (add link) |
 | Telemetry and fault recovery | Simulated fault, `/system/status` flips to FAULT, `/system/reset_fault` clears it | (add link) |
 | Editing the coordinate dictionary | Adding a new named object and asking for it in plain English | (add link) |
 | Physical hardware run | Same command running on the real Gen3 Lite arm | (add link) |

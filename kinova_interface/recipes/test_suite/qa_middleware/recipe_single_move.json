@@ -1,0 +1,19 @@
+{
+  "recipe_name": "QA - Single Absolute Move",
+  "description": "Move the arm to a single named object's coordinate",
+  "steps": [
+    {
+      "step_id": 1,
+      "action": "home",
+      "description": "Reset arm to home position"
+    },
+    {
+      "step_id": 2,
+      "action": "move_arm",
+      "description": "Move to the water bottle's coordinate",
+      "parameters": {
+        "target": "water_bottle"
+      }
+    }
+  ]
+}

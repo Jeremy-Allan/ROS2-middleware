@@ -15,20 +15,23 @@
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| `Object <name> NOT Found` | The `target` doesn't match a key in `coordinate_dictionary.json` exactly (case-sensitive) | Check spelling/casing; see the `_pickup` mismatch in [Testing](testing.md) |
-| `Movement <name> NOT Found` | Same issue, for `relative_move` and `relative_movement.json` | See the known gap in [Configuration](configuration.md) |
-| `No executable steps found or recipe failed to load` | Recipe JSON is malformed, missing a top-level `steps` key, or `steps` is empty | Validate the JSON; confirm `steps` exists at the top level |
+| `Object <name> NOT Found` | The `target` doesn't match an object in `workspace_objects.yaml` exactly (case-sensitive) | Check spelling and casing |
+| `Movement <name> NOT Found` | Same issue, for `relative_move` and `movements_and_orientations.yaml` | Check spelling and casing |
+| `Failed to parse JSON recipe string.` | Recipe JSON sent to `/execute_recipe` is malformed | Validate the JSON |
+| `No executable steps found or recipe failed to load` | Missing top-level `steps` key, or `steps` is empty | Confirm `steps` exists at the top level |
 | Edited a JSON config but nothing changed at runtime | `colcon build` copies configs into `install/`; you edited the `src/` copy after the last build | Rebuild, or use `colcon build --symlink-install` |
-| A step silently fails with no clear message | You used an action name that isn't in the real whitelist | See [Configuration](configuration.md), use `home` and `gripper` |
+| `Unknown action '<name>'` | The action isn't one of the ten in [Configuration](configuration.md) | Use a listed action |
 
 ## Middleware motion / MoveIt errors
 
 | Log message | Meaning | Fix |
 |---|---|---|
-| `Coordinates out of reach!` (`NO_IK_SOLUTION`) | No valid joint configuration reaches that position | Double-check the coordinate against known-reachable ones already in `coordinate_dictionary.json` |
-| `Planning failed!` (`PLANNING_FAILED`) | MoveIt couldn't find a collision-free path | Check `obstacles.json` for a box blocking the route |
-| `Goal is in collision!` (`GOAL_IN_COLLISION`) | The target pose overlaps a known obstacle | Adjust the target coordinate or the obstacle definition |
-| `Movement timed out!` (`TIMED_OUT`) | Planning or execution exceeded the allowed time | Usually transient, retry; if consistent, the target may be near the edge of reachability |
+| `out of reach (no IK solution)` | No valid joint configuration reaches that position | Compare the coordinate against reachable ones in `workspace_objects.yaml` |
+| `planning failed (path blocked by an obstacle or self-collision)` | MoveIt couldn't find a collision-free path | Check `workspace_objects.yaml`'s obstacles for a box blocking the route |
+| `goal in collision (target inside an obstacle)` | The target pose overlaps a known obstacle | Adjust the target coordinate or the obstacle definition |
+| `timed out` / `<call> timed out after Ns` | Planning or execution exceeded `hardware.action_timeout` | Retry; if consistent, the target may be near the edge of reachability |
+
+The full list of MoveIt messages is in `utils/robot.py`.
 
 ## Middleware fault state / telemetry
 
@@ -42,13 +45,12 @@
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Status bar shows "DISCONNECTED" | `rosbridge` isn't running, or died | Confirm Terminal 1 in [Running the System](running.md) is still up and listening on port 9090 |
-| "ROS service /execute_recipe not found" | `json_parser_node` isn't running | Confirm Terminal 2 launched successfully with no errors |
-| "ROS service /get_robot_parameters not found" | `environment_mapping_node` isn't running | Same as above; the proxy will still proceed with an empty object list rather than crash |
-| LLM not responding, or times out | Wrong `base_url`, missing/invalid API key, or Ollama not running | Check `llm_config.json` (see [Configuration](configuration.md)); for Ollama, confirm `ollama serve` is running and `curl http://localhost:11434` responds |
-| "Failed to parse LLM output as JSON" | The model produced malformed or non-JSON output | Usually a `temperature` that's too high, or a local model too small to reliably follow the schema; try a larger model or lower temperature |
-| Import errors running `main.py` or `evaluate_proxy.py` | `PYTHONPATH` not set, or not running from the repo root | Confirm `PYTHONPATH=.` is set (see [Installation](installation.md)) and you're in the `embodied-ai-proxy` directory |
-| Recipe looks correct in the log panel but the robot doesn't move | Middleware not fully initialized, or the recipe failed partway through | Check Terminal 2's logs; the log panel shows "Dispatched to middleware successfully" only on real success |
+| UI status shows `bridge: disconnected` | `rosbridge` isn't running | It starts with the middleware launch; check that's still up and listening on port 9090 |
+| UI shows `disconnected - reconnecting...` | The proxy backend isn't running | Restart with `./run.sh` and check `data/logs/server.log` |
+| `rosbridge is not connected` | Same as `bridge: disconnected` | Same as above |
+| `robot failed to execute the recipe` | The middleware rejected or failed a step | Check the middleware terminal for the failing step |
+| LLM not responding, or times out | Wrong `base_url`, missing/invalid API key, or Ollama not running | Check the proxy's `data/config/config.json`; for Ollama, confirm `curl http://localhost:11434` responds |
+| Schema validation errors | The model produced malformed or off-schema output | Lower `temperature` or use a larger model |
 
 ## Simulation-specific quirks
 

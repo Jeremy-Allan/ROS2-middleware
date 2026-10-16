@@ -1,3 +1,5 @@
+[Docs Home](README.md)
+
 # Throw Motion Reference
 
 This records a manually-driven demonstration of the redesigned `throw`
@@ -78,7 +80,7 @@ happening").
 
 ## Implementation
 
-- `_THROW_WINDUP_POSE`/`_THROW_FLING_POSE` - fixed `joint_2..6` shapes
+- `THROW_WINDUP_POSE`/`THROW_FLING_POSE` - fixed `joint_2..6` shapes
   captured directly from stages 1 and 4 above. Only `joint_1` varies per
   throw (the facing direction), exactly like `push`/`thrust`'s single
   fixed shapes.
@@ -86,11 +88,11 @@ happening").
   - current shoulder/elbow/wrist (read from `latest_joint_positions`,
     wherever `pickup` left them) held exactly as they are. This replaces
     routing through a fixed `face_pose` derived from `home`.
-- **Wind-up**: a normal blocking joint move straight to `_THROW_WINDUP_POSE`
+- **Wind-up**: a normal blocking joint move straight to `THROW_WINDUP_POSE`
   (joint_1 = the same face yaw).
-- **Fling**: `call_joint_move_service_async` straight to `_THROW_FLING_POSE`
+- **Fling**: `call_joint_move_service_async` straight to `THROW_FLING_POSE`
   - fired, not waited on.
-- **Release**: `wait_for_joint_crossing('joint_5', _THROW_RELEASE_JOINT5, windup_joint5)`
+- **Release**: `wait_for_joint_crossing('joint_5', THROW_RELEASE_JOINT5, windup_joint5)`
   - the moment it returns, the gripper opens immediately.
 
 `wind_up_angle`/`fling_angle`/`joint_2_rock_angle`/`release_delay` are all

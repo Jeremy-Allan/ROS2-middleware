@@ -1,5 +1,6 @@
-import json
 from pathlib import Path
+
+import yaml
 
 import numpy as np
 import pytest
@@ -37,8 +38,8 @@ def test_orientation_from_axes_rejects_parallel_axes():
         orientation_from_axes((0, 0, -1), (0, 0, 2))
 
 
-# orientation_presets.json
-_PRESETS_PATH = Path(__file__).resolve().parents[1] / 'data' / 'configs' / 'env' / 'orientation_presets.json'
+# Orientation presets in movements_and_orientations.yaml
+_PRESETS_PATH = Path(__file__).resolve().parents[1] / 'data' / 'configs' / 'env' / 'movements_and_orientations.yaml'
 _PRESET_AXES = {
     # name: (approach, closing), base frame
     'top_down': ((0, 0, -1), (0, 1, 0)),
@@ -48,9 +49,9 @@ _PRESET_AXES = {
 
 
 def test_orientation_presets_match_their_axes():
-    """The RPY in orientation_presets.json must be the orientation its
+    """The RPY of each orientation preset must be the orientation its
     name describes, per the gripper axis convention."""
-    presets = json.loads(_PRESETS_PATH.read_text())
+    presets = yaml.safe_load(_PRESETS_PATH.read_text())['orientations']
     assert set(presets) == set(_PRESET_AXES)
     for name, (approach, closing) in _PRESET_AXES.items():
         p = presets[name]
