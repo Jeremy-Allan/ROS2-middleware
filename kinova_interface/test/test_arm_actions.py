@@ -2478,6 +2478,7 @@ def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
     actions.compute_fk = MagicMock(return_value=(0.5, 0.1, 0.0))
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.detach_object = MagicMock(return_value=True)
+    actions.remove_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
 
     success, message = actions.handlers['throw']({"target": "red_cube", "destination": "delivery_tray"})
@@ -2516,6 +2517,7 @@ def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
     assert crossing_call.kwargs['timeout'] == pytest.approx(fake_plan.duration + throw.RELEASE_TIMEOUT_MARGIN_SEC)
 
     actions.detach_object.assert_called_once_with("red_cube")
+    actions.remove_object.assert_called_once_with("red_cube")
     assert actions.held_object is None
 
 
@@ -2538,6 +2540,7 @@ def test_throw_without_target_defaults_to_held_object(actions):
     actions.compute_fk = MagicMock(return_value=(0.5, 0.1, 0.0))
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.detach_object = MagicMock(return_value=True)
+    actions.remove_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
 
     success, message = actions.handlers['throw']({"destination": "delivery_tray"})
@@ -2775,6 +2778,7 @@ def test_throw_with_direction(actions):
     actions.compute_fk = MagicMock(return_value=(1.0, 0.0, 0.05))
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.detach_object = MagicMock(return_value=True)
+    actions.remove_object = MagicMock(return_value=True)
     actions.update_object_pose = MagicMock(return_value=True)
 
     success, message = actions.handlers['throw']({"target": "red_cube", "direction": "left", "distance": 0.3})

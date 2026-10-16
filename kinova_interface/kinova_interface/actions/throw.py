@@ -108,7 +108,16 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     release was timed. This still isn't a physics simulation - the
     landing position itself remains an approximation of the intended
     target, not a computed trajectory - just enough to visually read as
-    thrown rather than placed."""
+    thrown rather than placed.
+
+    After that, the object is removed from the scene entirely
+    (ctx.remove_object) rather than left behind as a real collision
+    object. Detaching mid-swing puts the actual collision geometry back
+    wherever the gripper happened to be at that instant, nowhere near
+    the approximate landing spot above - with no physics confirming it
+    actually comes to rest there (or anywhere), leaving it in the scene
+    would mean a floating obstacle that can block later moves, like the
+    arm being unable to plan its way home afterward."""
     # No target means the held object
     target_name = params.get('target') or ctx.held_object
     destination_name = params.get('destination')
@@ -213,6 +222,15 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
 
     ctx.detach_object(target_name)
     _animate_flight(ctx, target_name, release_point, (release_x, release_y, origin['z']), None)
+    # Detaching mid-swing put the real collision object back into the
+    # world scene at wherever the gripper was at that instant - nowhere
+    # near the landing spot above, and with no physics simulating where
+    # it actually settles, there's no pose we could set it to that's
+    # trustworthy as a solid obstacle. Removed rather than left behind as
+    # a floating collision object that could block later moves (e.g. the
+    # arm being unable to plan home afterward) - a /reset_environment_scene
+    # call is what brings it back.
+    ctx.remove_object(target_name)
     ctx.held_object = None
     ctx.held_grasp = None
     where = f"toward '{destination_name}'" if destination_name else direction

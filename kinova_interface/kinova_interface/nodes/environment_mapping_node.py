@@ -5,7 +5,7 @@ import rclpy
 from pathlib import Path
 import yaml
 from rclpy.node import Node
-from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose,GetSceneObjects, UpdateSceneObjects
+from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, RemoveObject, UpdateObjectPose,GetSceneObjects, UpdateSceneObjects
 from std_srvs.srv import Trigger
 from moveit_msgs.msg import PlanningScene, CollisionObject, AttachedCollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
@@ -62,6 +62,7 @@ class EnvironmentMappingNode(Node):
         self.scene_client = self.create_client(ApplyPlanningScene, '/apply_planning_scene', callback_group=self.scene_cb_group)
         self.attach_srv = self.create_service(AttachObject, '/attach_object', self.attach_object_callback, callback_group=self.scene_cb_group)
         self.detach_srv = self.create_service(DetachObject, '/detach_object', self.detach_object_callback, callback_group=self.scene_cb_group)
+        self.remove_srv = self.create_service(RemoveObject, '/remove_object', self.remove_object_callback, callback_group=self.scene_cb_group)
         self.reset_srv = self.create_service(Trigger, '/reset_environment_scene', self.reset_environment_callback, callback_group=self.scene_cb_group)
         self.srv_get_scene = self.create_service(GetSceneObjects, '/get_scene_objects',
         self.get_scene_objects_callback, callback_group=self.scene_cb_group)
@@ -339,6 +340,46 @@ class EnvironmentMappingNode(Node):
         else:
             response.success = False
             response.message = f"Failed to detach '{obj_id}'"
+        return response
+
+    def remove_object_callback(self, request, response):
+        """Delete an object entirely - from the planning scene's collision
+        geometry and from the object dictionary - rather than just update
+        its pose (update_object_pose only touches the dictionary, not the
+        live scene - see that callback). For a caller (e.g. throw) whose
+        action leaves the real collision object somewhere no longer worth
+        representing as a solid obstacle: detaching mid-swing puts it back
+        into the world scene at wherever the gripper was at that instant,
+        nowhere near wherever the action's own bookkeeping says it landed,
+        and with no physics simulating where it actually settles, it would
+        otherwise linger as a floating obstacle blocking later moves (e.g.
+        the arm being unable to plan home afterward). A
+        '/reset_environment_scene' call is what brings a removed object back."""
+        obj_id = request.object_id
+        if obj_id not in self.static_objects:
+            response.success = False
+            response.message = f"Object '{obj_id}' not found"
+            return response
+        if obj_id in self.attached_objects:
+            response.success = False
+            response.message = f"Object '{obj_id}' is still attached - detach it first"
+            return response
+
+        collision_object = CollisionObject()
+        collision_object.header.frame_id = BASE_FRAME
+        collision_object.id = obj_id
+        collision_object.operation = CollisionObject.REMOVE
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.world.collision_objects.append(collision_object)
+
+        if self.send_apply_planning_scene(scene, obj_id, "remove"):
+            del self.static_objects[obj_id]
+            response.success = True
+            response.message = f"Object '{obj_id}' removed from the scene"
+        else:
+            response.success = False
+            response.message = f"Failed to remove '{obj_id}'"
         return response
 
     def reset_environment_callback(self, request, response):
