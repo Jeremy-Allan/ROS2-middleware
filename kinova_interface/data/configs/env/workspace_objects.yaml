@@ -15,13 +15,13 @@ objects:
 
   tea_pot:
     pose:
-      position: {x: 0.25, y: -0.30, z: -0.0275}
+      position: {x: 0.25, y: -0.30, z: -0.0125}
       orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
     shape: {type: BOX, dimensions: [0.06, 0.06, 0.075]}
 
-  blue_cube: 
+  blue_cube:
     pose:
-      position: {x: 0.45, y: 0.2, z: -0.0275}
+      position: {x: 0.45, y: 0.2, z: 0.0035}
       orientation: {roll: 0.0, pitch: 1.57, yaw: 0.0}
     shape: {type: BOX, dimensions: [0.107, 0.043, 0.073]}
   
