@@ -12,6 +12,7 @@ from kinova_interfaces.srv import (
     GetObjectCoordinates,
     GetRelativeMovement,
     GetRobotParameters,
+    RemoveObject,
 )
 
 from kinova_interfaces.msg import ExtendedStatus
@@ -586,3 +587,82 @@ def test_reset_environment_callback_scene_apply_failure():
 
     assert result.success is False
     assert FakeNode.command_success is False
+
+
+# remove_object_callback()
+def test_remove_object_callback_success():
+    """remove_object_callback should delete the object from both the
+    planning scene and the object dictionary - unlike update_object_pose,
+    which only ever touches the dictionary."""
+
+    class FakeNode:
+        static_objects = {"box": {}}
+        attached_objects = set()
+        send_apply_planning_scene = MagicMock(return_value=True)
+
+    request = RemoveObject.Request(object_id="box")
+    response = RemoveObject.Response()
+
+    result = EnvironmentMappingNode.remove_object_callback(FakeNode, request, response)
+
+    assert result.success is True
+    assert "box" not in FakeNode.static_objects
+    FakeNode.send_apply_planning_scene.assert_called_once()
+    scene = FakeNode.send_apply_planning_scene.call_args[0][0]
+    collision_object = scene.world.collision_objects[0]
+    assert collision_object.id == "box"
+    assert collision_object.operation == CollisionObject.REMOVE
+
+
+def test_remove_object_callback_not_found():
+    class FakeNode:
+        static_objects = {}
+        attached_objects = set()
+        send_apply_planning_scene = MagicMock()
+
+    request = RemoveObject.Request(object_id="missing")
+    response = RemoveObject.Response()
+
+    result = EnvironmentMappingNode.remove_object_callback(FakeNode, request, response)
+
+    assert result.success is False
+    FakeNode.send_apply_planning_scene.assert_not_called()
+
+
+def test_remove_object_callback_still_attached():
+    """An attached object shouldn't be removable out from under the
+    gripper - detach it first."""
+
+    class FakeNode:
+        static_objects = {"box": {}}
+        attached_objects = {"box"}
+        send_apply_planning_scene = MagicMock()
+
+    request = RemoveObject.Request(object_id="box")
+    response = RemoveObject.Response()
+
+    result = EnvironmentMappingNode.remove_object_callback(FakeNode, request, response)
+
+    assert result.success is False
+    assert "attached" in result.message.lower()
+    FakeNode.send_apply_planning_scene.assert_not_called()
+    assert "box" in FakeNode.static_objects
+
+
+def test_remove_object_callback_scene_apply_failure():
+    """If applying the removal diff fails, the object should stay tracked
+    rather than being dropped from the dictionary while still a real
+    collision object in the scene."""
+
+    class FakeNode:
+        static_objects = {"box": {}}
+        attached_objects = set()
+        send_apply_planning_scene = MagicMock(return_value=False)
+
+    request = RemoveObject.Request(object_id="box")
+    response = RemoveObject.Response()
+
+    result = EnvironmentMappingNode.remove_object_callback(FakeNode, request, response)
+
+    assert result.success is False
+    assert "box" in FakeNode.static_objects

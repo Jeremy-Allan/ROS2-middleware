@@ -9,11 +9,10 @@ middleware_logs/
 
 __pycache__/
 
-# MkDocs local build output (CI builds this fresh, never commit it)
+# MkDocs local build output
 site/
 _site/
 
-# Proxy repo content pulled in at docs-build time (see .github/workflows/docs.yml),
-# never checked into this repo
+# Proxy docs pulled in during the docs build
 docs/technical/proxy/
 .proxy-src/

@@ -16,8 +16,8 @@ from typing import Optional
 import numpy as np
 from geometry_msgs.msg import Pose
 from moveit_msgs.msg import (
-    AllowedCollisionEntry, AllowedCollisionMatrix, Constraints, MoveItErrorCodes, OrientationConstraint,
-    PlanningScene, PlanningSceneComponents, PositionConstraint, RobotState, RobotTrajectory,
+    AllowedCollisionEntry, AllowedCollisionMatrix, Constraints, JointConstraint, MoveItErrorCodes,
+    OrientationConstraint, PlanningScene, PlanningSceneComponents, PositionConstraint, RobotState, RobotTrajectory,
 )
 from moveit_msgs.srv import (
     ApplyPlanningScene, GetCartesianPath, GetMotionPlan, GetPlanningScene, GetPositionFK, GetStateValidity,
@@ -76,6 +76,26 @@ class Plan:
         """
         return _seconds(self.trajectory.joint_trajectory.points[-1].time_from_start)
 
+    def time_at_joint_crossing(self, joint_name: str, threshold: float) -> Optional[float]:
+        """Seconds into this trajectory at which `joint_name` first crosses
+        `threshold` - linearly interpolated between whichever two waypoints
+        straddle it - or None if it never does. Derives a release moment
+        straight from this specific, already-planned trajectory (whichever
+        planner produced it) instead of assuming a fixed delay/threshold
+        pairing that only holds for one particular trajectory shape."""
+        joint_trajectory = self.trajectory.joint_trajectory
+        index = list(joint_trajectory.joint_names).index(joint_name)
+        points = joint_trajectory.points
+        for first, second in zip(points, points[1:]):
+            a, b = first.positions[index], second.positions[index]
+            if a == b:
+                continue
+            fraction = (threshold - a) / (b - a)
+            if 0.0 <= fraction <= 1.0:
+                return _seconds(first.time_from_start) + fraction * (
+                    _seconds(second.time_from_start) - _seconds(first.time_from_start))
+        return None
+
 
 def _seconds(duration) -> float:
     """Convert a ROS duration to seconds.
@@ -118,6 +138,18 @@ def _pose(position, rotation: Rotation) -> Pose:
     quaternion = rotation.as_quat()
     pose.orientation.x, pose.orientation.y, pose.orientation.z, pose.orientation.w = (float(value) for value in quaternion)
     return pose
+
+
+def _joint_goal(joint_positions, tolerance: float = 1e-3) -> Constraints:
+    """[joint_1..joint_6] as MoveIt goal constraints, for a caller (e.g.
+    throw) whose goal is an absolute joint-space shape rather than
+    tool_frame's Cartesian pose."""
+    constraints = Constraints()
+    for name, position in zip(JOINT_NAMES, joint_positions):
+        constraints.joint_constraints.append(JointConstraint(
+            joint_name=name, position=float(position),
+            tolerance_above=tolerance, tolerance_below=tolerance, weight=1.0))
+    return constraints
 
 
 def _pose_goal(position, rotation: Rotation, config: dict) -> Constraints:
@@ -263,18 +295,45 @@ class Motion:
             start = plan.end_joints
         return plans, None
 
-    def _plan_pose(self, pipeline: str, planner: str, position, rotation: Rotation, start_state: RobotState,
-                   config: dict, planning_time: float, path_constraints: Optional[Constraints] = None
-                   ) -> tuple[Optional[RobotTrajectory], Optional[str]]:
-        """Ask MoveIt to plan a ``tool_frame`` pose goal with one planner.
+    def plan_joints(self, joint_positions: list[float], config: dict, start: Optional[list[float]] = None,
+                    label: str = 'move') -> tuple[Optional[Plan], Optional[str]]:
+        """Plan straight to an absolute [joint_1..joint_6] goal (Pilz PTP,
+        then RRT* fallback) - the joint-space equivalent of plan(), for a
+        caller (e.g. throw) whose goal is a joint shape rather than
+        tool_frame's Cartesian pose, and/or that needs to inspect the
+        resulting trajectory (see Plan.time_at_joint_crossing) before
+        committing to executing it. `config` only needs 'velocity_scale',
+        'acceleration_scale' and 'fallback_planning_time' - the Cartesian-
+        only tolerances plan() needs don't apply to a joint-space goal."""
+        start_state = _start_state(start)
+        goal = _joint_goal(joint_positions)
+        attempts = [
+            ('Pilz PTP', lambda: self._plan_request(PILZ, 'PTP', goal, start_state, config, PILZ_PLANNING_TIME)),
+            ('RRT*', lambda: self._plan_request('ompl', RRT_STAR, goal, start_state, config,
+                                                 config['fallback_planning_time'])),
+        ]
+        reasons = []
+        for planner_label, attempt in attempts:
+            trajectory, reason = attempt()
+            if trajectory is not None:
+                plan = Plan(trajectory, planner_label)
+                self.logger.debug(f"Planned {label} with {planner_label} ({plan.duration:.2f} s)")
+                return plan, None
+            self.logger.debug(f"{planner_label} could not plan {label}: {reason}")
+            reasons.append(f"{planner_label}: {reason}")
+        return None, f"no path to {label} ({'; '.join(reasons)})"
+
+    def _plan_request(self, pipeline: str, planner: str, goal_constraints: Constraints, start_state: RobotState,
+                      config: dict, planning_time: float, path_constraints: Optional[Constraints] = None
+                      ) -> tuple[Optional[RobotTrajectory], Optional[str]]:
+        """Ask MoveIt to plan to a set of goal constraints with one planner.
 
         Args:
             pipeline (str): MoveIt planning pipeline id.
             planner (str): Planner id within that pipeline.
-            position: Target ``tool_frame`` position in ``base_link``.
-            rotation (Rotation): Target orientation.
+            goal_constraints (Constraints): The goal to plan to.
             start_state (RobotState): State to plan from.
-            config (dict): Grasping settings (speed scaling and tolerances).
+            config (dict): Grasping settings (speed scaling).
             planning_time (float): Seconds allowed for planning.
             path_constraints (Constraints, optional): Constraints along the path.
 
@@ -299,7 +358,7 @@ class Motion:
         workspace.min_corner.x = workspace.min_corner.y = workspace.min_corner.z = -1.0
         workspace.max_corner.x = workspace.max_corner.y = workspace.max_corner.z = 1.0
         motion_request.start_state = start_state
-        motion_request.goal_constraints = [_pose_goal(position, rotation, config)]
+        motion_request.goal_constraints = [goal_constraints]
         if path_constraints is not None:
             motion_request.path_constraints = path_constraints
 
@@ -312,6 +371,30 @@ class Motion:
         if result.error_code.val != MoveItErrorCodes.SUCCESS:
             return None, moveit_error(result.error_code.val)
         return result.trajectory, None
+
+    def _plan_pose(self, pipeline: str, planner: str, position, rotation: Rotation, start_state: RobotState,
+                   config: dict, planning_time: float, path_constraints: Optional[Constraints] = None
+                   ) -> tuple[Optional[RobotTrajectory], Optional[str]]:
+        """Ask MoveIt to plan a ``tool_frame`` pose goal with one planner.
+
+        Args:
+            pipeline (str): MoveIt planning pipeline id.
+            planner (str): Planner id within that pipeline.
+            position: Target ``tool_frame`` position in ``base_link``.
+            rotation (Rotation): Target orientation.
+            start_state (RobotState): State to plan from.
+            config (dict): Grasping settings (speed scaling and tolerances).
+            planning_time (float): Seconds allowed for planning.
+            path_constraints (Constraints, optional): Constraints along the path.
+
+        Returns:
+            tuple: ``(trajectory, None)`` on success, or ``(None, reason)``.
+
+        Raises:
+            MotionUnavailable: If ``/plan_kinematic_path`` doesn't answer.
+        """
+        return self._plan_request(pipeline, planner, _pose_goal(position, rotation, config), start_state, config,
+                                  planning_time, path_constraints)
 
     def _plan_cartesian(self, position, rotation: Rotation, start_state: RobotState,
                         config: dict) -> tuple[Optional[RobotTrajectory], Optional[str]]:
@@ -435,6 +518,21 @@ class Motion:
         if response is None:
             return False, 'no response from the hardware interface'
         return response.success, response.message
+
+    def execute_async(self, plan: Plan):
+        """Fire `plan` for execution without waiting for anything at all -
+        not even the bounded fire-and-forget window a normal service call
+        still waits for (mirrors ArmActions.call_joint_move_service_async's
+        reasoning). For a caller (e.g. throw) with its own timing-sensitive
+        logic to run immediately after, for which even that bounded wait
+        could eat into a short motion. Returns the raw future, or None if
+        the service isn't even available to call."""
+        if not self.execute_client.wait_for_service(timeout_sec=5.0):
+            self.logger.error("Execute Trajectory service not available")
+            return None
+        request = ExecuteTrajectory.Request()
+        request.trajectory = plan.trajectory
+        return self.execute_client.call_async(request)
 
     def move(self, waypoint: Waypoint, rotation: Rotation, config: dict) -> tuple[bool, str]:
         """Plan from where the arm is now, then run it."""

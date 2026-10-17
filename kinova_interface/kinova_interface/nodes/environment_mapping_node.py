@@ -13,7 +13,7 @@ import rclpy
 from pathlib import Path
 import yaml
 from rclpy.node import Node
-from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, UpdateObjectPose,GetSceneObjects, UpdateSceneObjects
+from kinova_interfaces.srv import GetObjectCoordinates, GetRobotParameters, GetRelativeMovement, GetOrientationPreset, GetObjectInfo, AttachObject, DetachObject, RemoveObject, UpdateObjectPose,GetSceneObjects, UpdateSceneObjects
 from std_srvs.srv import Trigger
 from moveit_msgs.msg import PlanningScene, CollisionObject, AttachedCollisionObject
 from moveit_msgs.srv import ApplyPlanningScene
@@ -35,8 +35,8 @@ class EnvironmentMappingNode(Node):
     Answers lookups for object coordinates and info, relative movements,
     orientation presets and robot parameters, lets callers read and update the
     scene's objects, and pushes the objects and obstacles into MoveIt's
-    planning scene on a background thread. Also attaches and detaches objects
-    at the gripper and can reset the scene to the configured state.
+    planning scene on a background thread. Also attaches, detaches and removes objects
+    at the gripper, and can reset the scene to the configured state.
     """
     def __init__(self):
         """Load the configuration, create the lookup and scene services, start the scene thread.
@@ -44,7 +44,7 @@ class EnvironmentMappingNode(Node):
         Reads the ``config_dir`` parameter, which must point at the folder with
         the environment YAML files. Loads the objects, obstacles, relative
         movements and orientation presets once, creates the services (coordinate
-        and info lookups, pose and scene updates, attach, detach and reset),
+        and info lookups, pose and scene updates, attach, detach, remove and reset),
         the telemetry publisher, and starts the background thread that keeps
         MoveIt's planning scene up to date.
 
@@ -91,6 +91,7 @@ class EnvironmentMappingNode(Node):
         self.scene_client = self.create_client(ApplyPlanningScene, '/apply_planning_scene', callback_group=self.scene_cb_group)
         self.attach_srv = self.create_service(AttachObject, '/attach_object', self.attach_object_callback, callback_group=self.scene_cb_group)
         self.detach_srv = self.create_service(DetachObject, '/detach_object', self.detach_object_callback, callback_group=self.scene_cb_group)
+        self.remove_srv = self.create_service(RemoveObject, '/remove_object', self.remove_object_callback, callback_group=self.scene_cb_group)
         self.reset_srv = self.create_service(Trigger, '/reset_environment_scene', self.reset_environment_callback, callback_group=self.scene_cb_group)
         self.srv_get_scene = self.create_service(GetSceneObjects, '/get_scene_objects',
         self.get_scene_objects_callback, callback_group=self.scene_cb_group)
@@ -494,6 +495,47 @@ class EnvironmentMappingNode(Node):
         else:
             response.success = False
             response.message = f"Failed to detach '{obj_id}'"
+        return response
+
+    def remove_object_callback(self, request, response):
+        """Remove an object from the planning scene and object dictionary.
+
+        Args:
+            request: RemoveObject request containing the object_id to remove.
+            response: RemoveObject response to populate with the result.
+
+        Returns:
+            The response, with success/message describing the outcome.
+
+        Note:
+            The object must not be attached. Removed objects can be
+            restored by resetting the environment scene.
+        """
+        obj_id = request.object_id
+        if obj_id not in self.static_objects:
+            response.success = False
+            response.message = f"Object '{obj_id}' not found"
+            return response
+        if obj_id in self.attached_objects:
+            response.success = False
+            response.message = f"Object '{obj_id}' is still attached - detach it first"
+            return response
+
+        collision_object = CollisionObject()
+        collision_object.header.frame_id = BASE_FRAME
+        collision_object.id = obj_id
+        collision_object.operation = CollisionObject.REMOVE
+        scene = PlanningScene()
+        scene.is_diff = True
+        scene.world.collision_objects.append(collision_object)
+
+        if self.send_apply_planning_scene(scene, obj_id, "remove"):
+            self.static_objects.pop(obj_id, None)
+            response.success = True
+            response.message = f"Object '{obj_id}' removed from the scene"
+        else:
+            response.success = False
+            response.message = f"Failed to remove '{obj_id}'"
         return response
 
     def reset_environment_callback(self, request, response):

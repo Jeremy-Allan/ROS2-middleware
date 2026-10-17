@@ -1,6 +1,6 @@
 # Utils
 
-Shared pure helpers used across nodes and actions: no ROS 2 node or service dependencies.
+Shared helper functions used across nodes and actions.
 
 ::: kinova_interface.utils.geometry
 

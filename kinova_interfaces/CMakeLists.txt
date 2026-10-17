@@ -15,6 +15,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/GetObjectInfo.srv"
   "srv/AttachObject.srv"
   "srv/DetachObject.srv"
+  "srv/RemoveObject.srv"
 
   "srv/ExecuteRecipe.srv"
   "srv/MoveArm.srv"

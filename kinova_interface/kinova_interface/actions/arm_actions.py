@@ -29,6 +29,7 @@ from kinova_interfaces.srv import (
     JointMove,
     AttachObject,
     DetachObject,
+    RemoveObject,
     UpdateObjectPose,
 )
 from kinova_interfaces.msg import MotionParams
@@ -83,6 +84,7 @@ class ArmActions:
         # Service clients for attach/detach/update-pose, provided by the environment mapping node
         self.attach_client = node.create_client(AttachObject, '/attach_object', callback_group=cb_group)
         self.detach_client = node.create_client(DetachObject, '/detach_object', callback_group=cb_group)
+        self.remove_client = node.create_client(RemoveObject, '/remove_object', callback_group=cb_group)
         self.update_pose_client = node.create_client(UpdateObjectPose, '/update_object_pose', callback_group=cb_group)
         self.reset_scene_client = node.create_client(Trigger, '/reset_environment_scene', callback_group=cb_group)
 
@@ -696,6 +698,23 @@ class ArmActions:
         else:
             detail = f": {response.message}" if response and getattr(response, 'message', None) else ""
             self.get_logger().error(f"Failed to detach '{obj_id}'{detail}")
+            return False
+
+    def remove_object(self, obj_id):
+        """Delete the object entirely, from the planning scene's collision
+        geometry and from the object dictionary - unlike update_object_pose,
+        which only ever touches the dictionary (see
+        EnvironmentMappingNode.remove_object_callback). Only
+        '/reset_environment_scene' brings it back."""
+        req = RemoveObject.Request()
+        req.object_id = obj_id
+        response = call_service(self.remove_client, req, '/remove_object', self.get_logger())
+        if response and response.success:
+            self.get_logger().info(f"Removed '{obj_id}' from the scene")
+            return True
+        else:
+            detail = f": {response.message}" if response and getattr(response, 'message', None) else ""
+            self.get_logger().error(f"Failed to remove '{obj_id}'{detail}")
             return False
 
     def update_object_pose(self, obj_id, x, y, z, orientation=None):
