@@ -21,7 +21,7 @@ Found something in the docs that's wrong, stale, or confusing? Flag it or fix it
 
 ## Docstrings
 
-Every module, class, and function/method in `kinova_interface/` (nodes, actions, utils, launch, scripts) needs a docstring, module-level and class-level included, not just "the important ones." CI checks this on every push and PR (`.github/workflows/docstring-coverage.yml`) and fails the build if anything's missing; run it yourself locally with `python3 .github/scripts/check_docstring_coverage.py` before pushing.
+Document what isn't obvious from the name and signature: public interfaces, non-trivial behaviour, and anything a caller could get wrong. Trivial helpers don't need one.
 
 Style: Google-style docstrings (`Args:`, `Returns:`, `Raises:` sections). Skip a section that doesn't apply, don't write `Args: None` or `Returns: None` for a function that takes no arguments or returns nothing. Continuation lines under an `Args:`/`Raises:` entry get an extra level of indent under the name they continue.
 
