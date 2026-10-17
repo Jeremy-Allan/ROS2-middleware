@@ -4,7 +4,7 @@ Optional Kinect v2 vision node. It detects objects on the table and adds them to
 
 ## Running
 
-Install the extra dependencies listed in [Installation](../docs/installation.md#optional-computer-vision), then:
+Install the extra dependencies listed in [Installation](../docs/installation/middleware-and-proxy.md#optional-computer-vision), then:
 
 ```bash
 ros2 launch kinova_interface robot.launch.py enable_CV:=true

@@ -47,17 +47,33 @@ class MotionUnavailable(Exception):
 
 @dataclass
 class Plan:
+    """A planned trajectory and which planner made it.
+
+    Attributes:
+        trajectory (RobotTrajectory): The planned joint trajectory.
+        planner (str): Planner label (e.g. ``Pilz PTP``), for logs.
+    """
     trajectory: RobotTrajectory
     planner: str                # which planner made it, for logs
 
     @property
     def end_joints(self) -> list[float]:
+        """The arm's joint positions at the end of the trajectory.
+
+        Returns:
+            list[float]: Positions for joint_1 to joint_6, in that order.
+        """
         joint_trajectory = self.trajectory.joint_trajectory
         last_positions = joint_trajectory.points[-1].positions
         return [last_positions[list(joint_trajectory.joint_names).index(name)] for name in JOINT_NAMES]
 
     @property
     def duration(self) -> float:
+        """How long the trajectory takes.
+
+        Returns:
+            float: Seconds from start to the last point.
+        """
         return _seconds(self.trajectory.joint_trajectory.points[-1].time_from_start)
 
     def time_at_joint_crossing(self, joint_name: str, threshold: float) -> Optional[float]:
@@ -82,6 +98,14 @@ class Plan:
 
 
 def _seconds(duration) -> float:
+    """Convert a ROS duration to seconds.
+
+    Args:
+        duration: A ROS ``Duration`` with ``sec`` and ``nanosec``.
+
+    Returns:
+        float: The duration in seconds.
+    """
     return duration.sec + duration.nanosec * 1e-9
 
 
@@ -100,6 +124,15 @@ def _start_state(start: Optional[list[float]], gripper: Optional[float] = None) 
 
 
 def _pose(position, rotation: Rotation) -> Pose:
+    """Build a ROS pose from a position and a rotation.
+
+    Args:
+        position: ``(x, y, z)`` in metres.
+        rotation (Rotation): Orientation of the pose.
+
+    Returns:
+        Pose: The pose, with the rotation as a quaternion.
+    """
     pose = Pose()
     pose.position.x, pose.position.y, pose.position.z = (float(value) for value in position)
     quaternion = rotation.as_quat()
@@ -183,6 +216,14 @@ class Motion:
     """Plans and runs tool_frame moves for pickup and dropoff."""
 
     def __init__(self, node, execute_timeout_margin: float):
+        """Create the MoveIt service clients used for planning and running moves.
+
+        Args:
+            node: ROS 2 node that owns the clients. It must have a ``cb_group``
+                callback group.
+            execute_timeout_margin (float): Seconds to wait, beyond a trajectory's
+                own length, for the hardware interface to run it.
+        """
         self.logger = node.get_logger()
         # s past a trajectory's own length to wait for the hardware interface to run it
         self.execute_timeout_margin = execute_timeout_margin
@@ -204,6 +245,17 @@ class Motion:
         start_state = _start_state(start, waypoint.gripper)
 
         def plan_to_pose(pipeline, planner, planning_time, path_constraints=None):
+            """Make a function that plans to this waypoint's pose with the given planner.
+
+            Args:
+                pipeline (str): MoveIt planning pipeline id.
+                planner (str): Planner id within that pipeline.
+                planning_time (float): Seconds allowed for planning.
+                path_constraints (Constraints, optional): Constraints along the path.
+
+            Returns:
+                Callable: Takes no arguments and returns ``(trajectory, reason)``.
+            """
             return lambda: self._plan_pose(pipeline, planner, waypoint.position, rotation, start_state, config,
                                            planning_time, path_constraints)
 
@@ -274,6 +326,24 @@ class Motion:
     def _plan_request(self, pipeline: str, planner: str, goal_constraints: Constraints, start_state: RobotState,
                       config: dict, planning_time: float, path_constraints: Optional[Constraints] = None
                       ) -> tuple[Optional[RobotTrajectory], Optional[str]]:
+        """Ask MoveIt to plan to a set of goal constraints with one planner.
+
+        Args:
+            pipeline (str): MoveIt planning pipeline id.
+            planner (str): Planner id within that pipeline.
+            goal_constraints (Constraints): The goal to plan to.
+            start_state (RobotState): State to plan from.
+            config (dict): Grasping settings (speed scaling).
+            planning_time (float): Seconds allowed for planning.
+            path_constraints (Constraints, optional): Constraints along the path.
+
+        Returns:
+            tuple: ``(trajectory, None)`` on success, or ``(None, reason)`` with
+            MoveIt's error text.
+
+        Raises:
+            MotionUnavailable: If ``/plan_kinematic_path`` doesn't answer.
+        """
         request = GetMotionPlan.Request()
         motion_request = request.motion_plan_request
         motion_request.group_name = PLANNING_GROUP
@@ -305,11 +375,46 @@ class Motion:
     def _plan_pose(self, pipeline: str, planner: str, position, rotation: Rotation, start_state: RobotState,
                    config: dict, planning_time: float, path_constraints: Optional[Constraints] = None
                    ) -> tuple[Optional[RobotTrajectory], Optional[str]]:
+        """Ask MoveIt to plan a ``tool_frame`` pose goal with one planner.
+
+        Args:
+            pipeline (str): MoveIt planning pipeline id.
+            planner (str): Planner id within that pipeline.
+            position: Target ``tool_frame`` position in ``base_link``.
+            rotation (Rotation): Target orientation.
+            start_state (RobotState): State to plan from.
+            config (dict): Grasping settings (speed scaling and tolerances).
+            planning_time (float): Seconds allowed for planning.
+            path_constraints (Constraints, optional): Constraints along the path.
+
+        Returns:
+            tuple: ``(trajectory, None)`` on success, or ``(None, reason)``.
+
+        Raises:
+            MotionUnavailable: If ``/plan_kinematic_path`` doesn't answer.
+        """
         return self._plan_request(pipeline, planner, _pose_goal(position, rotation, config), start_state, config,
                                   planning_time, path_constraints)
 
     def _plan_cartesian(self, position, rotation: Rotation, start_state: RobotState,
                         config: dict) -> tuple[Optional[RobotTrajectory], Optional[str]]:
+        """Ask MoveIt to plan a straight line to a ``tool_frame`` pose.
+
+        Counts only if the whole line was planned (``MIN_CARTESIAN_FRACTION``);
+        the trajectory is slowed to the configured velocity scale.
+
+        Args:
+            position: Target ``tool_frame`` position in ``base_link``.
+            rotation (Rotation): Target orientation.
+            start_state (RobotState): State to plan from.
+            config (dict): Grasping settings (step size, joint jump limit, speed).
+
+        Returns:
+            tuple: ``(trajectory, None)`` on success, or ``(None, reason)``.
+
+        Raises:
+            MotionUnavailable: If ``/compute_cartesian_path`` doesn't answer.
+        """
         request = GetCartesianPath.Request()
         request.header.frame_id = BASE_FRAME
         request.start_state = start_state

@@ -1,3 +1,4 @@
+"""TF/URDF frame, joint and link names, gripper constants and MoveIt error-code text for the Kinova Gen3 Lite."""
 from moveit_msgs.msg import MoveItErrorCodes
 
 # TF/URDF frame, joint and link names for the Kinova Gen3 Lite.
@@ -71,4 +72,13 @@ BEFORE_MOTION_ERRORS = {
 
 
 def moveit_error(code):
+    """Return readable text for a MoveIt error code.
+
+    Args:
+        code (int): A ``MoveItErrorCodes`` value.
+
+    Returns:
+        str: The matching entry of ``MOVEIT_ERRORS``, or ``unknown MoveIt error
+        code <code>`` if the code isn't listed.
+    """
     return MOVEIT_ERRORS.get(code, f'unknown MoveIt error code {code}')

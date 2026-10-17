@@ -1,4 +1,4 @@
-"""'pour' recipe action (see docs/pour-motion-reference.md)."""
+"""'pour' recipe action (see docs/technical/motion-and-actions/pour.md)."""
 import math
 import time
 from typing import TYPE_CHECKING
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 
 # Default tilt: matches the ~135 degree joint_6 delta captured in the
-# manual RViz demo this was built from - see docs/pour-motion-reference.md.
+# manual RViz demo this was built from - see docs/technical/motion-and-actions/pour.md.
 POUR_DEFAULT_TILT_ANGLE = math.radians(135)
 POUR_DEFAULT_LIFT_HEIGHT = 0.14  # meters; demo measured ~0.137m
 
@@ -38,7 +38,7 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     orientation delta on top of whatever arbitrary orientation an
     unconstrained pickup happened to produce - workable in principle,
     but only if the starting orientation is actually known, which it
-    wasn't. See docs/pour-motion-reference.md for the manually-driven
+    wasn't. See docs/technical/motion-and-actions/pour.md for the manually-driven
     RViz demonstration this sequence is built from, and why.
 
     The actual tilt is a pure joint-space delta on joint_6 alone (like

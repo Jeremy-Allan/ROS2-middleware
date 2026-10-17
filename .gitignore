@@ -8,3 +8,11 @@ log/
 middleware_logs/
 
 __pycache__/
+
+# MkDocs local build output
+site/
+_site/
+
+# Proxy docs pulled in during the docs build
+docs/technical/proxy/
+.proxy-src/
