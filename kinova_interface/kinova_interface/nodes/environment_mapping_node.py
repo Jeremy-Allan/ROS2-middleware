@@ -343,18 +343,19 @@ class EnvironmentMappingNode(Node):
         return response
 
     def remove_object_callback(self, request, response):
-        """Delete an object entirely - from the planning scene's collision
-        geometry and from the object dictionary - rather than just update
-        its pose (update_object_pose only touches the dictionary, not the
-        live scene - see that callback). For a caller (e.g. throw) whose
-        action leaves the real collision object somewhere no longer worth
-        representing as a solid obstacle: detaching mid-swing puts it back
-        into the world scene at wherever the gripper was at that instant,
-        nowhere near wherever the action's own bookkeeping says it landed,
-        and with no physics simulating where it actually settles, it would
-        otherwise linger as a floating obstacle blocking later moves (e.g.
-        the arm being unable to plan home afterward). A
-        '/reset_environment_scene' call is what brings a removed object back."""
+        """Remove an object from the planning scene and object dictionary.
+
+        Args:
+            request: RemoveObject request containing the object_id to remove.
+            response: RemoveObject response to populate with the result.
+
+        Returns:
+            The response, with success/message describing the outcome.
+
+        Note:
+            The object must not be attached. Removed objects can be
+            restored by resetting the environment scene.
+        """
         obj_id = request.object_id
         if obj_id not in self.static_objects:
             response.success = False
@@ -374,7 +375,7 @@ class EnvironmentMappingNode(Node):
         scene.world.collision_objects.append(collision_object)
 
         if self.send_apply_planning_scene(scene, obj_id, "remove"):
-            del self.static_objects[obj_id]
+            self.static_objects.pop(obj_id, None)
             response.success = True
             response.message = f"Object '{obj_id}' removed from the scene"
         else:

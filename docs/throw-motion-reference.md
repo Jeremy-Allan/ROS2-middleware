@@ -99,23 +99,3 @@ happening").
 gone - there's nothing left to tune per-call for the shape of the swing
 itself; `distance`/`destination`/`direction` still control which way it
 faces, the same as `push`/`thrust`.
-
-## Update: release point tuned after in-person testing
-
-`THROW_RELEASE_JOINT5` is now `-35.0` deg, not the `-42.7` deg captured
-directly from the demo above (stage 3 in the table is the original
-captured value, not the current one). In-person testing on the real
-arm found `-42.7` released too late - visibly near the very end of the
-fling rather than clearly mid-swing - so it's been nudged earlier, to
-roughly 75% through the joint_5 sweep from wind-up to fling-end instead
-of ~82%. This is still an empirically-tuned value, not a computed one;
-further adjustment may be needed depending on what real-hardware
-testing shows.
-
-The fling itself is also no longer fired blind through the joint-move
-service as described above - it's planned explicitly first
-(`Motion.plan_joints`), then executed (`Motion.execute_async`), so the
-release-timeout is bounded by that specific plan's own real duration
-rather than a flat guess. See `push.py`-style trajectory planning in
-`actions/motion.py` (`plan_joints`, `Plan.time_at_joint_crossing`,
-`execute_async`) for the current implementation.
