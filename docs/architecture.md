@@ -75,7 +75,7 @@ The proxy's own components (the Go backend, the LLM proxy and the terminal UI) a
 | `GetObjectInfo` | `object_id` (string) | `pose` (`Pose`), `shape` (`SolidPrimitive`), `success`, `message` |
 | `GetRelativeMovement` | `move_id` (string) | `x`, `y`, `z`, `success`, `message` |
 | `GetOrientationPreset` | `preset_name` (string) | `roll`, `pitch`, `yaw`, `success`, `message` |
-| `GetRobotParameters` | (none) | `object_list[]`, `movement_names[]`, `orientation_names[]`, `has_table_bounds`, `table_x_min`, `table_x_max`, `table_y_min`, `table_y_max` |
+| `GetRobotParameters` | (none) | `object_list[]`, `movement_names[]`, `orientation_names[]`, `has_table_bounds`, `table_x_min`, `table_x_max`, `table_y_min`, `table_y_max`, `held_objects[]` (objects currently attached to the gripper) |
 | `JointMove` | `joint_positions[]` (float64), `wait_for_completion` (bool), `relative` (bool), `motion_params` (`MotionParams`) | `success`, `message`, `error_code` (`moveit_msgs/MoveItErrorCodes`, 0 if MoveIt never answered) |
 | `ExecuteTrajectory` | `trajectory` (`moveit_msgs/RobotTrajectory`, already planned) | `success`, `message`, `error_code` (`moveit_msgs/MoveItErrorCodes`, 0 if MoveIt never answered) |
 | `ExecuteRecipe` | `recipe_json` (string) | `success`, `message` (the failing step, action and reason on failure) |

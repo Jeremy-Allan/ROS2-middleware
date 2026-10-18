@@ -227,10 +227,11 @@ class EnvironmentMappingNode(Node):
         return response
 
     def get_robot_parameters_callback(self, request, response):
-        # Service for the LLM Proxy || send list of objects + relative movements + orientation presets
+        # Service for the LLM Proxy || send list of objects + relative movements + orientation presets + held objects
         response.object_list = list(self.static_objects.keys())
         response.movement_names = list(self.relative_movements.keys())
         response.orientation_names = list(self.orientation_presets.keys())
+        response.held_objects = sorted(self.attached_objects)
 
         table = self.obstacles.get('table')
         if table and table.get('shape', {}).get('type') == 'BOX':

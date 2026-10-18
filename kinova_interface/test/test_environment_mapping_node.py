@@ -349,6 +349,7 @@ def test_get_robot_parameters_callback(node):
 
     assert result.object_list == ["cube"]
     assert result.movement_names == ["forward"]
+    assert result.held_objects == []
 
     assert node.command_success is True
     assert node.status_text == "Robot Parameters queried"
@@ -368,6 +369,7 @@ def test_get_robot_parameters_callback_table_bounds():
         static_objects = {}
         relative_movements = {}
         orientation_presets = {}
+        attached_objects = set()
         obstacles = {
             "table": {
                 "pose": {"position": {"x": 0.0, "y": 0.0, "z": -0.05}},
@@ -397,6 +399,7 @@ def test_get_robot_parameters_callback_no_table_configured():
         static_objects = {}
         relative_movements = {}
         orientation_presets = {}
+        attached_objects = set()
         obstacles = {}
         command_success = None
         status_text = None
@@ -666,3 +669,13 @@ def test_remove_object_callback_scene_apply_failure():
 
     assert result.success is False
     assert "box" in FakeNode.static_objects
+
+
+def test_get_robot_parameters_callback_reports_held_objects(node):
+    """Attached objects are reported as held, so the proxy can tell the LLM what 'it' is."""
+    node.publish_status = MagicMock()
+    node.attached_objects = {"water_bottle"}
+
+    result = node.get_robot_parameters_callback(GetRobotParameters.Request(), GetRobotParameters.Response())
+
+    assert result.held_objects == ["water_bottle"]

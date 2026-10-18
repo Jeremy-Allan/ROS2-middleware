@@ -8,3 +8,4 @@ float64 table_x_min
 float64 table_x_max
 float64 table_y_min
 float64 table_y_max
+string[] held_objects
