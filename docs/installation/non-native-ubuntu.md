@@ -2,11 +2,11 @@
 
 This document explains how to prepare a non-Ubuntu host environment for development.
 
-The project environment is based on **Ubuntu 22.04 (Jammy)** and **ROS 2 Humble**. If you are already running Ubuntu 22.04 natively, you can skip this document and proceed directly to [`installation.md`](./installation.md).
+The project environment is based on **Ubuntu 22.04 (Jammy)** and **ROS 2 Humble**. If you are already running Ubuntu 22.04 natively, you can skip this document and proceed directly to [Middleware and proxy installation](./middleware-and-proxy.md).
 
 This document covers the setup required for:
 
-* [macOS](#4-virtual-machine-windows--macos)
+* [macOS](#4-virtual-machine-windows-macos)
 * [Windows](#3-wsl-2-windows)
 * [Other Linux distributions](#2-linux-distrobox)
 
@@ -66,7 +66,7 @@ Verify the Ubuntu version from within the container
 lsb_release -a
 ```
 
-![Verify Environment](diagrams/verify_environment.png)
+![Verify Environment](../diagrams/verify_environment.png)
 
 This should return Ubuntu 22.04
 A version number should be displayed.
@@ -87,7 +87,7 @@ Install basic development utilities:
 sudo apt install -y git curl wget build-essential python3 python3-pip
 ```
 
-Do not install the project's ROS 2 dependencies here unless instructed by [`installation.md`](./installation.md).
+Do not install the project's ROS 2 dependencies here unless instructed by [Middleware and proxy installation](./middleware-and-proxy.md).
 
 ### 2.4 USB and Camera Access
 
@@ -337,7 +337,7 @@ Inside Ubuntu, test:
 ping -c 3 google.com
 ```
 
-If this fails, resolve the VM networking issue before proceeding with [`installation.md`](./installation.md).
+If this fails, resolve the VM networking issue before proceeding with [Middleware and proxy installation](./middleware-and-proxy.md).
 
 ### 4.4 Shared Folders
 
@@ -485,7 +485,7 @@ cat /etc/os-release
 
 If Ubuntu 22.04 is not being used, resolve the environment configuration before continuing.
 
-If Ubuntu 22.04 is correct, proceed to [`installation.md`](./installation.md) and follow the ROS 2 installation procedure.
+If Ubuntu 22.04 is correct, proceed to [Middleware and proxy installation](./middleware-and-proxy.md) and follow the ROS 2 installation procedure.
 
 ---
 

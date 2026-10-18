@@ -8,6 +8,16 @@ if TYPE_CHECKING:
 
 
 def home(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
+    """Move the arm to its predefined home joint configuration.
+
+    Args:
+        ctx (ArmActions): Shared action context.
+        params (dict): Recipe step parameters. Optional ``speed`` (0.0-1.0).
+
+    Returns:
+        tuple[bool, str]: ``(True, message)`` if the move succeeded, otherwise
+        ``(False, reason)`` including the hardware node's failure message.
+    """
     motion_params = ctx.build_motion_params(params.get('speed'))
     result = ctx.call_home_service(motion_params)
     if not result['success']:
@@ -16,6 +26,20 @@ def home(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
 
 
 def move_arm(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
+    """Move the arm to a named object's position, with an optional orientation.
+
+    Args:
+        ctx (ArmActions): Shared action context.
+        params (dict): Recipe step parameters. Required ``target`` (object
+            id). Optional ``orientation`` (preset name) and ``speed``
+            (0.0-1.0).
+
+    Returns:
+        tuple[bool, str]: ``(True, message)`` if the move succeeded, otherwise
+        ``(False, reason)``. The reason says whether the target or the
+        orientation preset could not be resolved, or carries the hardware
+        node's failure message.
+    """
     target_name = params['target']
     coords = ctx.get_static_object_coords(target_name)
     if not coords:
@@ -34,6 +58,18 @@ def move_arm(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
 
 
 def relative_move(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
+    """Move the arm by a named relative offset, keeping its current orientation.
+
+    Args:
+        ctx (ArmActions): Shared action context.
+        params (dict): Recipe step parameters. Required ``vector`` (movement
+            id). Optional ``speed`` (0.0-1.0). An ``orientation`` key is
+            ignored (logged as a warning); use ``move_arm`` for that.
+
+    Returns:
+        tuple[bool, str]: ``(True, message)`` if the move succeeded, otherwise
+        ``(False, reason)``.
+    """
     vector_name = params['vector']
     vector = ctx.get_relative_movement_vector(vector_name)
     if not vector:
@@ -50,6 +86,18 @@ def relative_move(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
 
 
 def gripper(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
+    """Move the gripper to a position.
+
+    Args:
+        ctx (ArmActions): Shared action context.
+        params (dict): Recipe step parameters. Required ``position``
+            (gripper joint command in radians, ``GRIPPER_OPEN`` to
+            ``GRIPPER_CLOSED``).
+
+    Returns:
+        tuple[bool, str]: ``(True, message)`` if the gripper moved, otherwise
+        ``(False, reason)``.
+    """
     position = float(params['position'])
     result = ctx.call_move_gripper_service(position)
     if not result['success']:

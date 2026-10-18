@@ -1,4 +1,4 @@
-"""'throw' recipe action (see docs/throw-motion-reference.md)."""
+"""'throw' recipe action (see docs/technical/motion-and-actions/throw.md)."""
 import math
 import time
 from typing import TYPE_CHECKING
@@ -12,7 +12,7 @@ if TYPE_CHECKING:
     from kinova_interface.actions.arm_actions import ArmActions
 
 
-# A captured, fixed joint_2..6 shape (see docs/throw-motion-reference.md)
+# A captured, fixed joint_2..6 shape (see docs/technical/motion-and-actions/throw.md)
 # for a real, manually-demonstrated wind-up - not derived from home by
 # a wind-up angle like an earlier version of this; joint_1 (base
 # facing) is the only thing that varies per throw.
@@ -23,7 +23,7 @@ THROW_FLING_POSE = [math.radians(v) for v in [32.63, -34.26, 80.71, -63.25, 0.0]
 # joint_5 barely moves during the early part of the fling, then swings
 # hard right at the release moment - this is where the gripper should
 # open. -42.7 deg was the value directly captured from the original
-# manual demo (see docs/throw-motion-reference.md), but in-person
+# manual demo (see docs/technical/motion-and-actions/throw.md), but in-person
 # testing on the real arm found that released too late - visibly near
 # the very end of the fling rather than clearly mid-swing - so this has
 # been nudged earlier to -35.0 deg (~75% through the joint_5 sweep from
@@ -67,7 +67,7 @@ def _animate_flight(ctx: 'ArmActions', target_name: str, start, end, orientation
 
 def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     """A genuine joint-space throw, captured from a manual RViz
-    demonstration (see docs/throw-motion-reference.md): rotate to
+    demonstration (see docs/technical/motion-and-actions/throw.md): rotate to
     face the throw direction (joint_1 only, current shoulder/elbow/
     wrist held exactly where pickup left them), move straight to a
     captured wind-up shape (THROW_WINDUP_POSE), then one continuous
@@ -98,7 +98,7 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     The release itself is still a closed-loop trigger on the arm's
     real, live joint_5 position (wait_for_joint_crossing), not a
     computed time.sleep() - same reasoning as before (see
-    docs/throw-motion-reference.md): it's tied to where the arm
+    docs/technical/motion-and-actions/throw.md): it's tied to where the arm
     actually is, not an assumption about how long a motion should
     take. What's new is the timeout passed to it: plan.duration (the
     fling's own real planned length) plus a fixed dispatch-jitter

@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 
 def _rounded(position) -> list[float]:
+    """Round a position to millimetres (3 decimals) as a plain list, for log messages."""
     return np.round(position, 3).tolist()
 
 

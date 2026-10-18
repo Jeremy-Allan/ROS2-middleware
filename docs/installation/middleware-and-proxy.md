@@ -1,6 +1,6 @@
-[Docs Home](README.md)
+[Docs Home](../README.md)
 
-# Installation
+# Install the middleware and proxy
 
 ## What you need on your machine
 
@@ -14,7 +14,7 @@
 | RAM | 8GB minimum, 16GB+ recommended | More if you run a larger local LLM through Ollama |
 | Ollama | Latest, only if running a local LLM | Not needed if you're only using a cloud provider (OpenAI, Anthropic, Gemini) |
 
-If you're on Windows or macOS, you'll need a Ubuntu 22.04 VM or WSL2 with Ubuntu 22.04. ROS 2 Humble is not natively supported elsewhere. Instructions to configure workspace with alternative OS is found in [Environment Setup](./environment-setup.md)
+If you're on Windows or macOS, you'll need a Ubuntu 22.04 VM or WSL2 with Ubuntu 22.04. ROS 2 Humble is not natively supported elsewhere. Instructions to configure workspace with alternative OS is found in [Environment Setup](./non-native-ubuntu.md)
 
 ## 1. Install ROS 2 Humble
 
@@ -32,7 +32,7 @@ Verify that ROS Humble has been installed:
 echo $ROS_DISTRO
 # it should say `humble`
 ```
-![ROS 2 Humble Verification](diagrams/ros_humble_verify.png)
+![ROS 2 Humble Verification](../diagrams/ros_humble_verify.png)
 
 Tip: add this line to your `~/.bashrc` so you don't have to type it in every terminal.
 
@@ -147,4 +147,4 @@ It should respond `Ollama is running`.
 
 `enable_CV:=true` needs a Kinect v2 and these packages, which rosdep does not install: `kinect2_bridge`, `aruco_opencv` and `easy_handeye2`. The vision node also needs `pip install ultralytics` for YOLO. Build it with `colcon build --packages-select computer_vision`.
 
-Next: [Running the System](running.md)
+Next: [Quickstart](../user-guide/quickstart.md)

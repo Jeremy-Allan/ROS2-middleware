@@ -25,7 +25,7 @@ This is split across two separate git repositories, built and run independently,
 
 ## What the system does not do
 
-- Accept direct hardware commands from the proxy's user input. Every command typed into the proxy goes through the LLM and the schema validator first. Note that the websocket bridge itself does not filter services, so any websocket client can call any middleware service (see [Safety and Contracts](safety-and-contracts.md)).
+- Accept direct hardware commands from the proxy's user input. Every command typed into the proxy goes through the LLM and the schema validator first. Note that the websocket bridge itself does not filter services, so any websocket client can call any middleware service (see [Safety and Contracts](technical/safety-and-contracts.md)).
 - Do any of its own path-planning or collision math. That's entirely delegated to MoveIt 2.
 - Talk to the physical robot directly from the proxy side. Only this middleware talks to the standard Kinova ROS 2 driver (`ros2_kortex`), which in turn talks to the arm.
 
@@ -40,9 +40,9 @@ This repository is built from four ROS 2 programs called nodes, each doing one j
 | `json_parser_node.py` | The Brain / Supervisor | Reads a recipe, resolves names via the Database node, and tells the Muscle node what to do, step by step, in order. |
 | `telemetry_node.py` | The Monitor | Listens to heartbeats from all the other nodes, decides if the whole system is READY, BUSY, or FAULT, and can trigger a hardware fault reset. |
 
-Object positions come from a hand-maintained dictionary (see [Configuration](configuration.md)). An optional fifth node in the `computer_vision` package (`enable_CV:=true`) can add objects detected by a Kinect camera when `/vision/snapshot` is called.
+Object positions come from a hand-maintained dictionary (see [Configuration](installation/configuration.md)). An optional fifth node in the `computer_vision` package (`enable_CV:=true`) can add objects detected by a Kinect camera when `/vision/snapshot` is called.
 
-See [Architecture](architecture.md) for the internals of each node.
+See [Architecture](technical/architecture.md) for the internals of each node.
 
 ## The proxy and the bridge
 
@@ -55,4 +55,4 @@ The proxy and the middleware are deliberately kept separate, so a bug in the LLM
 
 If you only remember one sentence about this whole project: **your words go to an LLM, the LLM's structured answer goes through a validator and a websocket bridge, and only then does the middleware's Brain drive the Muscle one step at a time while the Monitor watches everyone's pulse.**
 
-Next: [Installation](installation.md)
+Next: [Installation](installation/middleware-and-proxy.md)

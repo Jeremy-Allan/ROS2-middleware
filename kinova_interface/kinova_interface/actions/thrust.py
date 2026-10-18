@@ -1,4 +1,4 @@
-"""'thrust' recipe action (single-plane reach, see docs/push-motion-reference.md)."""
+"""'thrust' recipe action (single-plane reach, see docs/technical/motion-and-actions/push.md)."""
 import math
 from typing import TYPE_CHECKING
 
@@ -14,7 +14,7 @@ if TYPE_CHECKING:
 def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     """Raise a held object and thrust it toward a destination -
     reuses the exact same single-plane mechanism as 'push' (see
-    docs/push-motion-reference.md): joint_1 fixed per stage, wrist
+    docs/technical/motion-and-actions/push.md): joint_1 fixed per stage, wrist
     held level at _PLANAR_REACH_WRIST, only joint_2/joint_3
     (shoulder/elbow) ever change to reach a position.
 

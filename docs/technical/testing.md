@@ -1,4 +1,4 @@
-[Docs Home](README.md)
+[Docs Home](../README.md)
 
 # Testing
 
@@ -30,7 +30,7 @@ Test in simulation first, always.
 | `recipe_pour.json`, `recipe_push.json`, `recipe_thrust.json`, `recipe_throw.json` | One composite action each (see the `*-motion-reference.md` docs) |
 | `qa_middleware/*.json` | One recipe per action or failure case, including invalid recipes that should be rejected |
 
-Run them like any other recipe (see [Running the System](running.md)):
+Run them like any other recipe (see [Quickstart](../user-guide/quickstart.md)):
 
 ```bash
 ros2 launch kinova_interface robot.launch.py recipe:=test_suite/recipe_pickup.json
@@ -93,6 +93,6 @@ The proxy has its own evaluation suite: see "Evaluating an LLM with Test Suites"
 
 ## Testing the full pipeline end to end
 
-There is currently no automated test for this. The practical way to check it: start the middleware and proxy as in [Running the System](running.md), type a real command into the proxy, and compare the recipe shown in the UI against what you'd expect, then confirm the arm actually did it in RViz or on the physical robot.
+There is currently no automated test for this. The practical way to check it: start the middleware and proxy as in [Quickstart](../user-guide/quickstart.md), type a real command into the proxy, and compare the recipe shown in the UI against what you'd expect, then confirm the arm actually did it in RViz or on the physical robot.
 
-Next: [Troubleshooting](troubleshooting.md)
+Next: [Troubleshooting](../user-guide/troubleshooting.md)
