@@ -32,7 +32,6 @@ Pages marked *draft* are placeholders that don't have content yet.
 | Doc | What it gives you |
 |---|---|
 | [Quickstart](user-guide/quickstart.md) | Starting the middleware and the proxy, running the middleware alone, watching live telemetry |
-| [Using the TUI](user-guide/tui.md) | *Draft.* Typing commands into the terminal UI |
 | [Command reference](user-guide/command-reference.md) | *Draft.* The actions, objects and movements you can ask for |
 | [Troubleshooting](user-guide/troubleshooting.md) | Symptom-first tables across build errors, recipe errors, motion errors, telemetry, and proxy/LLM connection issues |
 | [Demos](user-guide/demos.md) | Short recordings of each feature in action |
@@ -56,7 +55,6 @@ Pages marked *draft* are placeholders that don't have content yet.
 | [Architecture](technical/architecture.md) | Full pipeline diagram, per-node internals, custom service/message types, package layout |
 | [Middleware nodes](technical/middleware-nodes.md) | *Draft.* What each node does |
 | [Motion and actions](technical/motion-and-actions/index.md) | How actions become motion. [Pour](technical/motion-and-actions/pour.md), [Push](technical/motion-and-actions/push.md) and [Throw](technical/motion-and-actions/throw.md) show how each composite motion was captured and designed |
-| [Proxy internals](technical/proxy-internals.md) | *Draft.* How the backend, LLM proxy and TUI fit together |
 | [Computer vision](technical/computer-vision.md) | *Draft.* How objects are detected and added to the scene |
 | [Safety and contracts](technical/safety-and-contracts.md) | The execution contract, safety layers, failure mode table, and system readiness definition |
 | [Kinova drivers and APIs](technical/kinova-drivers-and-apis.md) | *Draft.* The driver interfaces, their errors, and where to look when a move fails |

@@ -11,7 +11,6 @@ nav:
       - Overview: overview.md
   - User Guide:
       - Quickstart: user-guide/quickstart.md
-      - Using the TUI: user-guide/tui.md
       - Command reference: user-guide/command-reference.md
       - Troubleshooting: user-guide/troubleshooting.md
       - Demos: user-guide/demos.md
@@ -31,9 +30,7 @@ nav:
           - Pour: technical/motion-and-actions/pour.md
           - Push: technical/motion-and-actions/push.md
           - Throw: technical/motion-and-actions/throw.md
-      - Proxy internals:
-          - Overview: technical/proxy-internals.md
-          - Proxy README: technical/proxy/readme.md
+      - Proxy (from the proxy repo): technical/proxy/readme.md
       - Computer vision: technical/computer-vision.md
       - Safety and contracts: technical/safety-and-contracts.md
       - Kinova drivers and APIs: technical/kinova-drivers-and-apis.md
