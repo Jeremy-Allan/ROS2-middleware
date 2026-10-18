@@ -1,0 +1,7 @@
+easy_handeye2:
+29bd50a7939e853d768d203d2abc61eb6e50facc
+https://github.com/marcoesposito1988/easy_handeye2
+
+ros2_kortex:
+116d87ae595c791ba7ae32201b88693a3ba02324
+https://github.com/Kinovarobotics/ros2_kortex.git

@@ -1,0 +1,86 @@
+diff --git a/kortex_driver/src/hardware_interface.cpp b/kortex_driver/src/hardware_interface.cpp
+index a054ad8..841639e 100644
+--- a/kortex_driver/src/hardware_interface.cpp
++++ b/kortex_driver/src/hardware_interface.cpp
+@@ -771,6 +771,23 @@ return_type KortexMultiInterfaceHardware::read(
+   // read if robot is faulted
+   in_fault_ = (feedback_.base().active_state() == Kinova::Api::Common::ArmState::ARMSTATE_IN_FAULT);
+ 
++  RCLCPP_INFO(
++    LOGGER,
++    "Kortex active_state=%d, base_fault_a=%u, base_fault_b=%u",
++    static_cast<int>(feedback_.base().active_state()),
++    feedback_.base().fault_bank_a(),
++    feedback_.base().fault_bank_b());
++
++  for (std::size_t i = 0; i < actuator_count_; i++)
++  {
++    RCLCPP_INFO(
++      LOGGER,
++      "Actuator %zu: fault_a=%u, fault_b=%u",
++      i + 1,
++      feedback_.actuators(i).fault_bank_a(),
++      feedback_.actuators(i).fault_bank_b());
++  }
++
+   // read gripper state
+   readGripperPosition();
+ 
+@@ -801,6 +818,12 @@ return_type KortexMultiInterfaceHardware::read(
+   // add mode that can't be easily reached
+   in_fault_ += (feedback_.base().active_state() == k_api::Common::ARMSTATE_SERVOING_READY);
+ 
++  RCLCPP_INFO(
++    LOGGER,
++    "FINAL Kortex in_fault=%f, active_state=%d",
++    in_fault_,
++    static_cast<int>(feedback_.base().active_state()));
++
+   return return_type::OK;
+ }
+ 
+@@ -896,6 +919,14 @@ return_type KortexMultiInterfaceHardware::write(
+       sendGripperCommand(
+         arm_mode_, gripper_command_position_, gripper_speed_command_, gripper_force_command_);
+ 
++      RCLCPP_INFO(
++        LOGGER,
++        "WRITE: in_fault=%f, arm_mode=%d, active_state=%d, joint_based_controller_running=%d",
++        in_fault_,
++        static_cast<int>(arm_mode_),
++        static_cast<int>(feedback_.base().active_state()),
++        joint_based_controller_running_);
++
+       if (joint_based_controller_running_)
+       {
+         // send commands to the joints
+@@ -949,8 +980,29 @@ void KortexMultiInterfaceHardware::sendJointCommands()
+   // identifier++
+   incrementId();
+ 
++  RCLCPP_INFO(
++    LOGGER,
++    "ARM COMMAND ARRAY: [%.6f, %.6f, %.6f, %.6f, %.6f, %.6f]",
++    arm_commands_positions_[0],
++    arm_commands_positions_[1],
++    arm_commands_positions_[2],
++    arm_commands_positions_[3],
++    arm_commands_positions_[4],
++    arm_commands_positions_[5]);
++
+   prepareCommands();
+ 
++  RCLCPP_INFO(
++    LOGGER,
++    "SEND JOINT COMMAND: frame_id=%u, positions=[%.3f, %.3f, %.3f, %.3f, %.3f, %.3f]",
++    base_command_.frame_id(),
++    base_command_.actuators(0).position(),
++    base_command_.actuators(1).position(),
++    base_command_.actuators(2).position(),
++    base_command_.actuators(3).position(),
++    base_command_.actuators(4).position(),
++    base_command_.actuators(5).position());
++
+   // send the command to the robot
+   try
+   {

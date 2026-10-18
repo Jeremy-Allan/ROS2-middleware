@@ -1,0 +1,1149 @@
+diff --git a/easy_handeye2/easy_handeye2/handeye_calibration.py b/easy_handeye2/easy_handeye2/handeye_calibration.py
+index 789d9d3..6ccbf45 100644
+--- a/easy_handeye2/easy_handeye2/handeye_calibration.py
++++ b/easy_handeye2/easy_handeye2/handeye_calibration.py
+@@ -24,7 +24,8 @@ class HandeyeCalibrationParametersProvider:
+         self.node.declare_parameter('tracking_base_frame', '', descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_STRING))
+         self.node.declare_parameter('tracking_marker_frame', '', descriptor=ParameterDescriptor(type=ParameterType.PARAMETER_STRING))
+         self.node.declare_parameter('freehand_robot_movement', True)
+-
++        self.node.declare_parameter('move_group_namespace', '/')
++        self.node.declare_parameter('move_group', 'manipulator')
+     def read(self):
+         ret = HandeyeCalibrationParameters(
+             name=self.node.get_parameter('name').get_parameter_value().string_value,
+@@ -34,10 +35,11 @@ class HandeyeCalibrationParametersProvider:
+             tracking_base_frame=self.node.get_parameter('tracking_base_frame').get_parameter_value().string_value,
+             tracking_marker_frame=self.node.get_parameter('tracking_marker_frame').get_parameter_value().string_value,
+             freehand_robot_movement=self.node.get_parameter('freehand_robot_movement').get_parameter_value().bool_value,
++            move_group_namespace=self.node.get_parameter('move_group_namespace').get_parameter_value().string_value,
++            move_group=self.node.get_parameter('move_group').get_parameter_value().string_value,
+         )
+         return ret
+ 
+-
+ def load_calibration(name) -> HandeyeCalibration:
+     filepath = filepath_for_calibration(name)
+     with open(filepath) as f:
+diff --git a/easy_handeye2/easy_handeye2/handeye_robot.py b/easy_handeye2/easy_handeye2/handeye_robot.py
+index ba23c7a..ddc1753 100644
+--- a/easy_handeye2/easy_handeye2/handeye_robot.py
++++ b/easy_handeye2/easy_handeye2/handeye_robot.py
+@@ -1,170 +1,554 @@
+ from __future__ import print_function
+ from __future__ import division
+-from transforms3d.quaternions import qmult
+-from transforms3d.euler import euler2quat
+-from geometry_msgs.msg import Quaternion
+-from moveit_commander import MoveGroupCommander
+-import rclpy
+-import numpy as np
+-from itertools import chain
+ 
+-from copy import deepcopy
+ import math
++from copy import deepcopy
++from itertools import chain
++
++import numpy as np
++import rclpy
++import tf2_ros
++
++from geometry_msgs.msg import Pose, PoseStamped, Quaternion
++from moveit_msgs.action import MoveGroup
++from moveit_msgs.msg import (
++    Constraints,
++    OrientationConstraint,
++    PositionConstraint,
++)
++from shape_msgs.msg import SolidPrimitive
++from transforms3d.euler import euler2quat
++from transforms3d.quaternions import qmult
++from rclpy.action import ActionClient
+ 
+ 
+-def quaternion_from_euler(e):
+-    w, x, y, z = euler2quat(*e)
++def quaternion_from_euler(roll, pitch, yaw):
++    w, x, y, z = euler2quat(roll, pitch, yaw)
+     return x, y, z, w
+ 
+ 
+ def quaternion_multiply(q1, q2):
+     x1, y1, z1, w1 = q1
+     x2, y2, z2, w2 = q2
+-    w, x, y, z = qmult((w1, x1, y1, z1), (w2, x2, y2, z2))
++    w, x, y, z = qmult(
++        (w1, x1, y1, z1),
++        (w2, x2, y2, z2),
++    )
+     return x, y, z, w
+ 
+ 
+ class CalibrationMovements:
+-    def __init__(self, node: rclpy.node.Node, move_group_name: str, max_velocity_scaling: float,
+-                 max_acceleration_scaling: float, angle_delta: float, translation_delta: float,
+-                 move_group_namespace='/'):
++    """
++    ROS 2 / MoveIt 2 implementation of the robot-motion portion of
++    easy_handeye2 calibration.
++
++    The robot is moved between poses generated around the current pose.
++    Planning is performed through the MoveIt 2 MoveGroup action and
++    selected calibration poses are executed through MoveGroup.
++    """
++
++    def __init__(
++        self,
++        node: rclpy.node.Node,
++        move_group_name: str,
++        max_velocity_scaling: float,
++        max_acceleration_scaling: float,
++        angle_delta: float,
++        translation_delta: float,
++        move_group_namespace='/',
++        callback_group=None,
++    ):
+         self.node = node
+-        # self.client = HandeyeClient()  # TODO: move around marker when eye_in_hand, automatically take samples via trigger topic
+-        if not move_group_namespace.endswith('/'):
+-            move_group_namespace = move_group_namespace + '/'
+-        if move_group_namespace != '/':
+-            self.mgc = MoveGroupCommander(move_group_name, robot_description=move_group_namespace + 'robot_description',
+-                                          ns=move_group_namespace)
+-        else:
+-            self.mgc = MoveGroupCommander(move_group_name)
+-        self.mgc.set_planner_id("RRTConnectkConfigDefault")  # TODO: this is only needed for the UR5
+-        self.mgc.set_max_velocity_scaling_factor(max_velocity_scaling)
+-        self.mgc.set_max_acceleration_scaling_factor(max_acceleration_scaling)
+-        self.start_pose = self.mgc.get_current_pose()
+-        self.joint_limits = [math.radians(90)] * 5 + [math.radians(180)] + [math.radians(350)]  # TODO: make param
++        self.move_group_name = move_group_name
++        self.move_group_namespace = move_group_namespace
++        self.callback_group = callback_group
++        self.angle_delta = angle_delta
++        self.translation_delta = translation_delta
++
++        self.max_velocity_scaling = max_velocity_scaling
++        self.max_acceleration_scaling = max_acceleration_scaling
++
++        self.start_pose = None
+         self.target_poses = []
+         self.current_pose_index = None
++
++        # Keep both names for compatibility with the original implementation.
++        self.plan = None
+         self.current_plan = None
+-        self.fallback_joint_limits = [math.radians(90)] * 4 + [math.radians(90)] + [math.radians(180)] + [
+-            math.radians(350)]
+-        if len(self.mgc.get_active_joints()) == 6:
+-            self.fallback_joint_limits = self.fallback_joint_limits[1:]
+-        self.angle_delta = angle_delta
+-        self.translation_delta = translation_delta
+ 
+-    def set_and_check_starting_position(self):
+-        # sets the starting position to the current robot cartesian EE position and checks movement in all directions
+-        # TODO: make repeatable
+-        #  - save the home position and each target position as joint position
+-        #  - plan to each target position and back, save plan if not crazy
+-        #  - return true if can plan to each target position without going crazy
+-        self.start_pose = self.mgc.get_current_pose()
+-        self.target_poses = self._compute_poses_around_state(self.start_pose, self.angle_delta, self.translation_delta)
++        # TF is used to obtain the current end-effector pose.
++        self.tf_buffer = tf2_ros.Buffer()
++        self.tf_listener = tf2_ros.TransformListener(
++            self.tf_buffer,
++            self.node,
++        )
++
++        move_action_name = self._action_name('move_action')
++
++        self.node.get_logger().info(
++            f'Connecting to MoveIt action: {move_action_name}'
++        )
++
++        self.move_action_client = ActionClient(
++            self.node,
++            MoveGroup,
++            move_action_name,
++            callback_group=self.callback_group,
++        )
++
++        if not self.move_action_client.wait_for_server(timeout_sec=10.0):
++            raise RuntimeError(
++                f'MoveIt MoveGroup action not available: {move_action_name}'
++            )
++
++        self.node.get_logger().info(
++            f'MoveIt connected using planning group "{self.move_group_name}"'
++        )
++
++    def _action_name(self, name):
++        namespace = self.move_group_namespace or '/'
++
++        if namespace == '/':
++            return '/' + name
++
++        namespace = namespace.rstrip('/')
++        return namespace + '/' + name
++
++    def _get_current_pose(self):
++        """
++        Return the current tool pose from TF.
++
++        The calibration configuration uses base_link as the robot base
++        and tool_frame as the robot effector.
++        """
++        try:
++            transform = self.tf_buffer.lookup_transform(
++                'base_link',
++                'tool_frame',
++                rclpy.time.Time(),
++                timeout=rclpy.duration.Duration(seconds=2.0),
++            )
++        except Exception as exc:
++            self.node.get_logger().error(
++                f'Unable to obtain base_link -> tool_frame transform: {exc}'
++            )
++            return None
++
++        pose = PoseStamped()
++        pose.header = transform.header
++
++        pose.pose.position.x = transform.transform.translation.x
++        pose.pose.position.y = transform.transform.translation.y
++        pose.pose.position.z = transform.transform.translation.z
++
++        pose.pose.orientation = transform.transform.rotation
++
++        return pose
++
++    async def set_and_check_starting_position(self):
++        """
++        Set the current robot pose as the calibration home pose and verify
++        that all generated calibration poses can be planned.
++        """
++        self.start_pose = self._get_current_pose()
++
++        if self.start_pose is None:
++            self.target_poses = []
++            self.current_pose_index = None
++            return False
++
++        self.target_poses = self._compute_poses_around_state(
++            self.start_pose,
++            self.angle_delta,
++            self.translation_delta,
++        )
++
+         self.current_pose_index = -1
+-        ret = self._check_target_poses(self.joint_limits)
+-        if ret:
+-            self.node.get_logger().info("Set current pose as home")
++
++        if await self._check_target_poses():
++            self.node.get_logger().info(
++                'Set current pose as calibration home position'
++            )
+             return True
+-        else:
+-            self.node.get_logger().err("Can't calibrate from this position!")
+-            self.start_pose = None
+-            self.target_poses = None
+-            return False
++
++        self.node.get_logger().error(
++            "Can't calibrate from this position: one or more target "
++            "poses could not be planned"
++        )
++
++        self.start_pose = None
++        self.target_poses = []
++        self.current_pose_index = None
++
++        return False
+ 
+     def select_target_pose(self, i):
+         number_of_target_poses = len(self.target_poses)
++
+         if 0 <= i < number_of_target_poses:
+-            self.node.get_logger().info("Selected pose {} for next movement".format(i))
++            self.node.get_logger().info(
++                f'Selected pose {i} for next movement'
++            )
+             self.current_pose_index = i
+             return True
+-        else:
+-            self.node.get_logger().err("Index {} is out of bounds: there are {} target poses".format(i, number_of_target_poses))
++
++        self.node.get_logger().error(
++            f'Index {i} is out of bounds: '
++            f'there are {number_of_target_poses} target poses'
++        )
++        return False
++
++    async def plan_to_start_pose(self):
++        if self.start_pose is None:
++            self.node.get_logger().error(
++                'No calibration home pose has been established'
++            )
+             return False
+ 
+-    def plan_to_start_pose(self):
+-        # TODO: use joint position http://docs.ros.org/melodic/api/moveit_tutorials/html/doc/move_group_python_interface/move_group_python_interface_tutorial.html#planning-to-a-joint-goal
+-        self.node.get_logger().info("Planning to home pose")
+-        return self._plan_to_pose(self.start_pose)
++        self.node.get_logger().info('Planning to home pose')
++        return await self._plan_to_pose(self.start_pose)
++
++    async def plan_to_current_target_pose(self):
++        if self.current_pose_index is None:
++            self.node.get_logger().error(
++                'No calibration target pose has been selected'
++            )
++            return False
+ 
+-    def plan_to_current_target_pose(self):
+-        # TODO: use joint position http://docs.ros.org/melodic/api/moveit_tutorials/html/doc/move_group_python_interface/move_group_python_interface_tutorial.html#planning-to-a-joint-goal
+         i = self.current_pose_index
+-        self.node.get_logger().info("Planning to target pose {}".format(i))
+-        return self._plan_to_pose(self.target_poses[i])
+ 
+-    def execute_plan(self):
+-        if self.plan is None:
+-            self.node.get_logger().err("No plan found!")
++        if not 0 <= i < len(self.target_poses):
++            self.node.get_logger().error(
++                f'Invalid current target pose index: {i}'
++            )
+             return False
+-        if CalibrationMovements._is_crazy_plan(self.plan, self.fallback_joint_limits):
+-            self.node.get_logger().err("Crazy plan found, not executing!")
++
++        self.node.get_logger().info(
++            f'Planning to target pose {i}'
++        )
++
++        return await self._plan_to_pose(self.target_poses[i])
++
++    async def execute_plan(self):
++        """Plan and execute the selected calibration target pose.
++
++        This is the only calibration operation that commands the
++        physical robot. It uses MoveGroup's native plan-and-execute
++        path.
++        """
++        if not self.target_poses:
++            self.node.get_logger().error(
++                'No calibration target poses are available'
++            )
+             return False
+-        self.mgc.execute(self.plan)
+-        return True
+ 
+-    def _plan_to_pose(self, pose):
+-        self.mgc.set_start_state_to_current_state()
+-        self.mgc.set_pose_target(pose)
+-        ret = self.mgc.plan()
+-        if type(ret) is tuple:
+-            # noetic
+-            success, plan, planning_time, error_code = ret
+-        else:
+-            # melodic
+-            plan = ret
+-        if CalibrationMovements._is_crazy_plan(plan, self.fallback_joint_limits):
+-            self.node.get_logger().warn("Planning failed")
+-            self.plan = None
++        if self.current_pose_index is None:
++            self.node.get_logger().error(
++                'No calibration target pose has been selected'
++            )
++            return False
++
++        if not 0 <= self.current_pose_index < len(self.target_poses):
++            self.node.get_logger().error(
++                f'Invalid calibration target pose index: '
++                f'{self.current_pose_index}'
++            )
+             return False
+-        else:
+-            self.node.get_logger().info("Planning successful")
+-            self.plan = plan
++
++        pose = self.target_poses[self.current_pose_index]
++
++        goal = MoveGroup.Goal()
++
++        goal.request.group_name = self.move_group_name
++        goal.request.pipeline_id = 'pilz_industrial_motion_planner'
++        goal.request.planner_id = 'PTP'
++        goal.request.num_planning_attempts = 4
++        goal.request.allowed_planning_time = 10.0
++
++        goal.request.max_velocity_scaling_factor = (
++            self.max_velocity_scaling
++        )
++        goal.request.max_acceleration_scaling_factor = (
++            self.max_acceleration_scaling
++        )
++
++        goal.request.goal_constraints = [
++            self._pose_to_constraints(pose)
++        ]
++
++        # False means MoveIt plans AND executes the trajectory.
++        goal.planning_options.plan_only = False
++
++        self.node.get_logger().info(
++            f'Planning and executing calibration target '
++            f'{self.current_pose_index + 1}/{len(self.target_poses)}'
++        )
++
++        send_future = self.move_action_client.send_goal_async(goal)
++        goal_handle = await send_future
++
++        if goal_handle is None or not goal_handle.accepted:
++            self.node.get_logger().error(
++                'MoveIt rejected the calibration execution request'
++            )
++            return False
++
++        self.node.get_logger().info(
++            'MoveIt accepted calibration movement; '
++            'waiting for execution result'
++        )
++
++        result_future = goal_handle.get_result_async()
++        result = (await result_future).result
++
++        if result.error_code.val == 1:
++            self.node.get_logger().info(
++                'Calibration pose executed successfully'
++            )
++
++            self.plan = result
++            self.current_plan = result
++
+             return True
+ 
+-    def _check_target_poses(self, joint_limits):
+-        if len(self.fallback_joint_limits) == 6:
+-            joint_limits = joint_limits[1:]
+-        for fp in self.target_poses:
+-            self.mgc.set_pose_target(fp)
+-            ret = self.mgc.plan()
+-            if type(ret) is tuple:
+-                # noetic
+-                success, plan, planning_time, error_code = ret
+-            else:
+-                # melodic
+-                plan = ret
+-            if len(plan.joint_trajectory.points) == 0 or CalibrationMovements._is_crazy_plan(plan, joint_limits):
++        self.node.get_logger().error(
++            f'Calibration execution failed with MoveIt error code '
++            f'{result.error_code.val}'
++        )
++
++        return False
++
++    async def _plan_to_pose(self, pose):
++        """Plan to a calibration pose without moving the physical robot."""
++        goal = MoveGroup.Goal()
++
++        goal.request.group_name = self.move_group_name
++        goal.request.pipeline_id = 'ompl'
++        goal.request.num_planning_attempts = 5
++        goal.request.allowed_planning_time = 5.0
++
++        goal.request.max_velocity_scaling_factor = (
++            self.max_velocity_scaling
++        )
++        goal.request.max_acceleration_scaling_factor = (
++            self.max_acceleration_scaling
++        )
++
++        goal.planning_options.plan_only = True
++
++        goal.request.goal_constraints = [
++            self._pose_to_constraints(pose)
++        ]
++
++        self.node.get_logger().info(
++            'Sending calibration pose to MoveIt for planning only'
++        )
++
++        send_future = self.move_action_client.send_goal_async(goal)
++        goal_handle = await send_future
++
++        if goal_handle is None or not goal_handle.accepted:
++            self.node.get_logger().error(
++                'MoveIt rejected the planning request'
++            )
++            self.plan = None
++            self.current_plan = None
++            return False
++
++        result_future = goal_handle.get_result_async()
++        result = (await result_future).result
++
++        if result.error_code.val != 1:
++            self.node.get_logger().error(
++                f'MoveIt planning failed with error code '
++                f'{result.error_code.val}'
++            )
++            self.plan = None
++            self.current_plan = None
++            return False
++
++        if not self._trajectory_is_valid(result.planned_trajectory):
++            self.node.get_logger().error(
++                'MoveIt returned an empty or invalid trajectory'
++            )
++            self.plan = None
++            self.current_plan = None
++            return False
++
++        self.plan = result
++        self.current_plan = result
++
++        self.node.get_logger().info(
++            f'Planning successful: '
++            f'{len(result.planned_trajectory.joint_trajectory.points)} '
++            f'trajectory points'
++        )
++
++        return True
++
++    async def _check_target_poses(self):
++        """
++        Verify that every generated calibration pose can be planned.
++
++        This is deliberately performed by MoveIt rather than using the
++        old hard-coded joint limits from the original ROS 1 implementation.
++        """
++        for index, pose in enumerate(self.target_poses):
++            self.node.get_logger().info(
++                f'Checking calibration target pose {index + 1}/'
++                f'{len(self.target_poses)}'
++            )
++
++            if not await self._plan_to_pose(pose):
++                self.node.get_logger().error(
++                    f'Calibration target pose {index} cannot be planned'
++                )
+                 return False
++
++        self.plan = None
++        self.current_plan = None
++
++        return True
++
++    def _pose_to_constraints(self, pose):
++        """
++        Convert a PoseStamped into MoveIt position/orientation constraints.
++        """
++        constraints = Constraints()
++
++        position_constraint = PositionConstraint()
++        position_constraint.header = pose.header
++        position_constraint.link_name = 'tool_frame'
++
++        # Require the tool origin to be within a 5 mm sphere around
++        # the requested calibration pose.
++        position_constraint.target_point_offset.x = 0.0
++        position_constraint.target_point_offset.y = 0.0
++        position_constraint.target_point_offset.z = 0.0
++
++        sphere = SolidPrimitive()
++        sphere.type = SolidPrimitive.SPHERE
++        sphere.dimensions = [0.005]
++
++        position_constraint.constraint_region.primitives.append(sphere)
++
++        region_pose = Pose()
++        region_pose.position = pose.pose.position
++        region_pose.orientation.w = 1.0
++
++        position_constraint.constraint_region.primitive_poses.append(
++            region_pose
++        )
++
++        position_constraint.weight = 1.0
++
++        orientation_constraint = OrientationConstraint()
++        orientation_constraint.header = pose.header
++        orientation_constraint.link_name = 'tool_frame'
++        orientation_constraint.orientation = pose.pose.orientation
++
++        # Approximately 5 degrees tolerance on each rotational axis.
++        tolerance = math.radians(5.0)
++
++        orientation_constraint.absolute_x_axis_tolerance = tolerance
++        orientation_constraint.absolute_y_axis_tolerance = tolerance
++        orientation_constraint.absolute_z_axis_tolerance = tolerance
++        orientation_constraint.weight = 1.0
++
++        constraints.position_constraints.append(
++            position_constraint
++        )
++        constraints.orientation_constraints.append(
++            orientation_constraint
++        )
++
++        return constraints
++
++    @staticmethod
++    def _trajectory_is_valid(trajectory):
++        points = trajectory.joint_trajectory.points
++
++        if len(points) == 0:
++            return False
++
++        for point in points:
++            if not np.all(np.isfinite(point.positions)):
++                return False
++
+         return True
+ 
+     @staticmethod
+-    def _compute_poses_around_state(start_pose, angle_delta, translation_delta):
++    def _compute_poses_around_state(
++        start_pose,
++        angle_delta,
++        translation_delta,
++    ):
++        """
++        Generate calibration poses around the current robot pose.
++
++        This preserves the original easy_handeye2 pose-generation pattern:
++        ±full rotation around X/Y/Z, ±half rotation around X/Y/Z,
++        followed by small Cartesian translations.
++        """
+         basis = np.eye(3)
+ 
+-        pos_deltas = [quaternion_from_euler(*rot_axis * angle_delta) for rot_axis in basis]
+-        neg_deltas = [quaternion_from_euler(*rot_axis * (-angle_delta)) for rot_axis in basis]
++        pos_deltas = [
++            quaternion_from_euler(*rot_axis * angle_delta)
++            for rot_axis in basis
++        ]
++        neg_deltas = [
++            quaternion_from_euler(*rot_axis * (-angle_delta))
++            for rot_axis in basis
++        ]
+ 
+-        quaternion_deltas = list(chain.from_iterable(zip(pos_deltas, neg_deltas)))  # interleave
++        quaternion_deltas = list(
++            chain.from_iterable(zip(pos_deltas, neg_deltas))
++        )
+ 
+         final_rots = []
++
+         for qd in quaternion_deltas:
+             final_rots.append(list(qd))
+ 
+-        # TODO: accept a list of delta values
++        pos_deltas = [
++            quaternion_from_euler(
++                *rot_axis * angle_delta / 2
++            )
++            for rot_axis in basis
++        ]
++        neg_deltas = [
++            quaternion_from_euler(
++                *rot_axis * (-angle_delta / 2)
++            )
++            for rot_axis in basis
++        ]
+ 
+-        pos_deltas = [quaternion_from_euler(*rot_axis * angle_delta / 2) for rot_axis in basis]
+-        neg_deltas = [quaternion_from_euler(*rot_axis * (-angle_delta / 2)) for rot_axis in basis]
++        quaternion_deltas = list(
++            chain.from_iterable(zip(pos_deltas, neg_deltas))
++        )
+ 
+-        quaternion_deltas = list(chain.from_iterable(zip(pos_deltas, neg_deltas)))  # interleave
+         for qd in quaternion_deltas:
+             final_rots.append(list(qd))
+ 
+         final_poses = []
++
+         for rot in final_rots:
+             fp = deepcopy(start_pose)
++
+             ori = fp.pose.orientation
+-            crx, cry, crz, crw = quaternion_multiply([ori.x, ori.y, ori.z, ori.w], rot)
+-            fp.pose.orientation = Quaternion(x=crx, y=cry, z=crz, w=crw)
++
++            crx, cry, crz, crw = quaternion_multiply(
++                [ori.x, ori.y, ori.z, ori.w],
++                rot,
++            )
++
++            fp.pose.orientation = Quaternion(
++                x=crx,
++                y=cry,
++                z=crz,
++                w=crw,
++            )
++
+             final_poses.append(fp)
+ 
+         fp = deepcopy(start_pose)
+@@ -188,23 +572,3 @@ class CalibrationMovements:
+         final_poses.append(fp)
+ 
+         return final_poses
+-
+-    @staticmethod
+-    def _rot_per_joint(plan, degrees=False):
+-        np_traj = np.array([p.positions for p in plan.joint_trajectory.points])
+-        if len(np_traj) == 0:
+-            raise ValueError
+-        np_traj_max_per_joint = np_traj.max(axis=0)
+-        np_traj_min_per_joint = np_traj.min(axis=0)
+-        ret = abs(np_traj_max_per_joint - np_traj_min_per_joint)
+-        if degrees:
+-            ret = [math.degrees(j) for j in ret]
+-        return ret
+-
+-    @staticmethod
+-    def _is_crazy_plan(plan, max_rotation_per_joint):
+-        abs_rot_per_joint = CalibrationMovements._rot_per_joint(plan)
+-        if (abs_rot_per_joint > max_rotation_per_joint).any():
+-            return True
+-        else:
+-            return False
+diff --git a/easy_handeye2/easy_handeye2/handeye_server_robot.py b/easy_handeye2/easy_handeye2/handeye_server_robot.py
+index 98adf9d..fade391 100644
+--- a/easy_handeye2/easy_handeye2/handeye_server_robot.py
++++ b/easy_handeye2/easy_handeye2/handeye_server_robot.py
+@@ -1,72 +1,184 @@
+ import math
+ 
+ import rclpy
+-from rclpy.executors import ExternalShutdownException
++from rclpy.callback_groups import ReentrantCallbackGroup
++from rclpy.executors import MultiThreadedExecutor, ExternalShutdownException
++
+ import easy_handeye2_msgs as ehm
+ from easy_handeye2_msgs import msg, srv
+-
+-import easy_handeye2 as hec
+-from easy_handeye2.handeye_calibration import HandeyeCalibrationParameters
++from easy_handeye2 import handeye_calibration
++from easy_handeye2.handeye_calibration import HandeyeCalibrationParametersProvider
+ from easy_handeye2.handeye_robot import CalibrationMovements
++import easy_handeye2 as hec
+ 
+ 
+ class HandeyeServerRobot(rclpy.node.Node):
+     def __init__(self, namespace=None):
+         super().__init__('handeye_server_robot')
++
+         if namespace is None:
+             namespace = self.get_namespace()
++
+         if not namespace.endswith('/'):
+-            namespace = namespace+'/'
+-        self.parameters = HandeyeCalibrationParameters.read_from_parameter_server(self, namespace)
+-        self.declare_parameter('rotation_delta_degrees', 25)
+-        self.declare_parameter('translation_delta_meters', 0.1)
++            namespace = namespace + '/'
++
++        # MoveIt action responses and robot-motion service callbacks must
++        # be allowed to execute concurrently because CalibrationMovements
++        # waits synchronously for MoveIt action futures.
++        self.callback_group = ReentrantCallbackGroup()
++
++        self.parameters = HandeyeCalibrationParametersProvider(self).read()
++
++        self.declare_parameter('rotation_delta_degrees', 10.0)
++        self.declare_parameter('translation_delta_meters', 0.03)
+         self.declare_parameter('max_velocity_scaling', 0.5)
+         self.declare_parameter('max_acceleration_scaling', 0.5)
+-        angle_delta = math.radians(self.get_parameter('rotation_delta_degrees').get_parameter_value().double_value)
+-        translation_delta = self.get_parameter('translation_delta_meters').get_parameter_value().double_value
+-        max_velocity_scaling = self.get_parameter('max_velocity_scaling').get_parameter_value().double_value
+-        max_acceleration_scaling = self.get_parameter('max_acceleration_scaling').get_parameter_value().double_value
+-        self.local_mover = CalibrationMovements(self, move_group_name=self.parameters.move_group,
+-                                                move_group_namespace=self.parameters.move_group_namespace,
+-                                                max_velocity_scaling=max_velocity_scaling,
+-                                                max_acceleration_scaling=max_acceleration_scaling,
+-                                                angle_delta=angle_delta, translation_delta=translation_delta)
+-
+-        # setup services and topics
+-
+-        self.check_starting_position_service = self.create_service(ehm.srv.CheckStartingPose, hec.CHECK_STARTING_POSE_TOPIC, self.check_starting_position)
+-        self.enumerate_target_poses_service = self.create_service(ehm.srv.EnumerateTargetPoses, hec.ENUMERATE_TARGET_POSES_TOPIC, self.enumerate_target_poses)
+-        self.select_target_pose_service = self.create_service(ehm.srv.SelectTargetPose, hec.SELECT_TARGET_POSE_TOPIC, self.select_target_pose)
+-        self.plan_to_selected_target_pose_service = self.create_service(ehm.srv.PlanToSelectedTargetPose, hec.PLAN_TO_SELECTED_TARGET_POSE_TOPIC, self.plan_to_selected_target_pose)
+-        self.execute_plan_service = self.create_service(ehm.srv.ExecutePlan, hec.EXECUTE_PLAN_TOPIC, self.execute_plan)
+-
+-    def check_starting_position(self, _):
+-        can_calibrate = self.local_mover.set_and_check_starting_position()
+-        target_poses = ehm.msg.TargetPoseList(home_pose=self.local_mover.start_pose,
+-                                              target_poses=self.local_mover.target_poses,
+-                                              current_target_pose_index=self.local_mover.current_pose_index)
+-        return ehm.srv.CheckStartingPoseResponse(can_calibrate=can_calibrate, target_poses=target_poses)
+-
+-    def enumerate_target_poses(self, _):
+-        target_poses = ehm.msg.TargetPoseList(home_pose=self.local_mover.start_pose,
+-                                              target_poses=self.local_mover.target_poses,
+-                                              current_target_pose_index=self.local_mover.current_pose_index)
+-        return ehm.srv.EnumerateTargetPosesResponse(target_poses=target_poses)
+-
+-    def select_target_pose(self, req):
+-        success = self.local_mover.select_target_pose(req.target_pose_index)
+-        target_poses = ehm.msg.TargetPoseList(home_pose=self.local_mover.start_pose,
+-                                              target_poses=self.local_mover.target_poses,
+-                                              current_target_pose_index=self.local_mover.current_pose_index)
+-        return ehm.srv.SelectTargetPoseResponse(success=success, target_poses=target_poses)
+-
+-    def plan_to_selected_target_pose(self, _):
+-        ret = self.local_mover.plan_to_current_target_pose()
+-        return ehm.srv.PlanToSelectedTargetPoseResponse(success=ret)
+-
+-    def execute_plan(self, _):
+-        ret = self.local_mover.execute_plan()
+-        return ehm.srv.ExecutePlanResponse(success=ret)
++
++        angle_delta = math.radians(
++            self.get_parameter(
++                'rotation_delta_degrees'
++            ).get_parameter_value().double_value
++        )
++
++        translation_delta = self.get_parameter(
++            'translation_delta_meters'
++        ).get_parameter_value().double_value
++
++        max_velocity_scaling = self.get_parameter(
++            'max_velocity_scaling'
++        ).get_parameter_value().double_value
++
++        max_acceleration_scaling = self.get_parameter(
++            'max_acceleration_scaling'
++        ).get_parameter_value().double_value
++
++        self.local_mover = CalibrationMovements(
++            self,
++            move_group_name=self.parameters.move_group,
++            move_group_namespace=self.parameters.move_group_namespace,
++            max_velocity_scaling=max_velocity_scaling,
++            max_acceleration_scaling=max_acceleration_scaling,
++            angle_delta=angle_delta,
++            translation_delta=translation_delta,
++            callback_group=self.callback_group,
++        )
++
++        # Robot movement services.
++        self.check_starting_position_service = self.create_service(
++            srv.CheckStartingPose,
++            hec.CHECK_STARTING_POSE_TOPIC,
++            self.check_starting_position,
++            callback_group=self.callback_group,
++        )
++
++        self.enumerate_target_poses_service = self.create_service(
++            srv.EnumerateTargetPoses,
++            hec.ENUMERATE_TARGET_POSES_TOPIC,
++            self.enumerate_target_poses,
++            callback_group=self.callback_group,
++        )
++
++        self.select_target_pose_service = self.create_service(
++            srv.SelectTargetPose,
++            hec.SELECT_TARGET_POSE_TOPIC,
++            self.select_target_pose,
++            callback_group=self.callback_group,
++        )
++
++        self.plan_to_selected_target_pose_service = self.create_service(
++            srv.PlanToSelectedTargetPose,
++            hec.PLAN_TO_SELECTED_TARGET_POSE_TOPIC,
++            self.plan_to_selected_target_pose,
++            callback_group=self.callback_group,
++        )
++
++        self.execute_plan_service = self.create_service(
++            srv.ExecutePlan,
++            hec.EXECUTE_PLAN_TOPIC,
++            self.execute_plan,
++            callback_group=self.callback_group,
++        )
++
++    async def check_starting_position(self, request, response):
++        can_calibrate = (
++            await self.local_mover.set_and_check_starting_position()
++        )
++
++        # A failed initialisation must not crash the service.
++        # Return an empty TargetPoseList when calibration is unavailable.
++        if not can_calibrate or self.local_mover.start_pose is None:
++            self.get_logger().error(
++                "Calibration pose validation failed"
++            )
++            return srv.CheckStartingPose.Response(
++                can_calibrate=False,
++                target_poses=msg.TargetPoseList(),
++            )
++
++        target_poses = msg.TargetPoseList(
++            home_pose=self.local_mover.start_pose,
++            target_poses=self.local_mover.target_poses,
++            current_target_pose_index=self.local_mover.current_pose_index,
++        )
++
++        return srv.CheckStartingPose.Response(
++            can_calibrate=True,
++            target_poses=target_poses,
++        )
++
++    def enumerate_target_poses(self, request, response):
++        self.get_logger().info(
++            f"start_pose type: {type(self.local_mover.start_pose)}"
++        )
++        self.get_logger().info(
++            f"target_poses type: {type(self.local_mover.target_poses)}"
++        )
++        self.get_logger().info(
++            f"first target type: "
++            f"{type(self.local_mover.target_poses[0])}"
++            if self.local_mover.target_poses
++            else "target_poses is empty"
++        )
++
++        target_poses = msg.TargetPoseList(
++            home_pose=self.local_mover.start_pose,
++            target_poses=self.local_mover.target_poses,
++            current_target_pose_index=self.local_mover.current_pose_index,
++        )
++
++        return srv.EnumerateTargetPoses.Response(
++            target_poses=target_poses
++        )
++
++    def select_target_pose(self, request, response):
++        success = self.local_mover.select_target_pose(
++            request.target_pose_index
++        )
++
++        target_poses = msg.TargetPoseList(
++            home_pose=self.local_mover.start_pose,
++            target_poses=self.local_mover.target_poses,
++            current_target_pose_index=self.local_mover.current_pose_index,
++        )
++
++        return srv.SelectTargetPose.Response(
++            success=success,
++            target_poses=target_poses,
++        )
++
++    async def plan_to_selected_target_pose(self, request, response):
++        ret = await self.local_mover.plan_to_current_target_pose()
++
++        return srv.PlanToSelectedTargetPose.Response(
++            success=ret
++        )
++
++    async def execute_plan(self, request, response):
++        ret = await self.local_mover.execute_plan()
++
++        return srv.ExecutePlan.Response(
++            success=ret
++        )
+ 
+ 
+ def main(args=None):
+@@ -74,12 +186,16 @@ def main(args=None):
+ 
+     handeye_server_robot = HandeyeServerRobot()
+ 
++    executor = MultiThreadedExecutor(num_threads=4)
++    executor.add_node(handeye_server_robot)
++
+     try:
+-        rclpy.spin(handeye_server_robot)
++        executor.spin()
+     except (KeyboardInterrupt, ExternalShutdownException):
+         pass
+     finally:
+         handeye_server_robot.destroy_node()
++        rclpy.shutdown()
+ 
+ 
+ if __name__ == '__main__':
+diff --git a/easy_handeye2/launch/calibrate.launch.py b/easy_handeye2/launch/calibrate.launch.py
+index b68fdb8..e5fc852 100644
+--- a/easy_handeye2/launch/calibrate.launch.py
++++ b/easy_handeye2/launch/calibrate.launch.py
+@@ -1,46 +1,114 @@
+ from launch import LaunchDescription
+ from launch.actions import DeclareLaunchArgument
+-from launch.substitutions import EqualsSubstitution
+-from launch.substitutions import LaunchConfiguration, PythonExpression
++from launch.substitutions import LaunchConfiguration
+ from launch_ros.actions import Node
+ 
+-from easy_handeye2.common_launch import arg_calibration_type, arg_tracking_base_frame, arg_tracking_marker_frame, arg_robot_base_frame, \
+-    arg_robot_effector_frame, is_eye_in_hand, is_eye_on_base
++from easy_handeye2.common_launch import (
++    arg_calibration_type,
++    arg_tracking_base_frame,
++    arg_tracking_marker_frame,
++    arg_robot_base_frame,
++    arg_robot_effector_frame,
++    is_eye_in_hand,
++    is_eye_on_base,
++)
+ 
+ 
+ def generate_launch_description():
+     arg_name = DeclareLaunchArgument('name')
+ 
+-    node_dummy_calib_eih = Node(package='tf2_ros', executable='static_transform_publisher', name='dummy_publisher',
+-                                condition=is_eye_in_hand,
+-                                arguments=f'--x 0 --y 0 --z 0.1 --qx 0 --qy 0 --qz 0 --qw 1'.split(' ') + ['--frame-id', LaunchConfiguration('robot_effector_frame'),
+-                                                                                                           '--child-frame-id', LaunchConfiguration('tracking_base_frame')])
+-
+-    node_dummy_calib_eob = Node(package='tf2_ros', executable='static_transform_publisher', name='dummy_publisher',
+-                                condition=is_eye_on_base,
+-                                arguments=f'--x 1 --y 0 --z 0 --qx 0 --qy 0 --qz 0 --qw 1'.split(' ') + ['--frame-id', LaunchConfiguration('robot_base_frame'),
+-                                                                                                         '--child-frame-id', LaunchConfiguration('tracking_base_frame')])
+-
+-    handeye_server = Node(package='easy_handeye2', executable='handeye_server', name='handeye_server', parameters=[{
+-        'name': LaunchConfiguration('name'),
+-        'calibration_type': LaunchConfiguration('calibration_type'),
+-        'tracking_base_frame': LaunchConfiguration('tracking_base_frame'),
+-        'tracking_marker_frame': LaunchConfiguration('tracking_marker_frame'),
+-        'robot_base_frame': LaunchConfiguration('robot_base_frame'),
+-        'robot_effector_frame': LaunchConfiguration('robot_effector_frame'),
+-    }])
+-
+-    handeye_rqt_calibrator = Node(package='easy_handeye2', executable='rqt_calibrator.py',
+-                                  name='handeye_rqt_calibrator',
+-                                  # arguments=['--ros-args', '--log-level', 'debug'],
+-                                  parameters=[{
+-                                      'name': LaunchConfiguration('name'),
+-                                      'calibration_type': LaunchConfiguration('calibration_type'),
+-                                      'tracking_base_frame': LaunchConfiguration('tracking_base_frame'),
+-                                      'tracking_marker_frame': LaunchConfiguration('tracking_marker_frame'),
+-                                      'robot_base_frame': LaunchConfiguration('robot_base_frame'),
+-                                      'robot_effector_frame': LaunchConfiguration('robot_effector_frame'),
+-                                  }])
++    node_dummy_calib_eih = Node(
++        package='tf2_ros',
++        executable='static_transform_publisher',
++        name='dummy_publisher',
++        condition=is_eye_in_hand,
++        arguments=[
++            '--x', '0',
++            '--y', '0',
++            '--z', '0.1',
++            '--qx', '0',
++            '--qy', '0',
++            '--qz', '0',
++            '--qw', '1',
++            '--frame-id', LaunchConfiguration('robot_effector_frame'),
++            '--child-frame-id', LaunchConfiguration('tracking_base_frame'),
++        ],
++    )
++
++    node_dummy_calib_eob = Node(
++        package='tf2_ros',
++        executable='static_transform_publisher',
++        name='dummy_publisher',
++        condition=is_eye_on_base,
++        arguments=[
++            '--x', '1',
++            '--y', '0',
++            '--z', '0',
++            '--qx', '0',
++            '--qy', '0',
++            '--qz', '0',
++            '--qw', '1',
++            '--frame-id', LaunchConfiguration('robot_base_frame'),
++            '--child-frame-id', LaunchConfiguration('tracking_base_frame'),
++        ],
++    )
++
++    # Calibration/sampling server.
++    handeye_server = Node(
++        package='easy_handeye2',
++        executable='handeye_server',
++        name='handeye_server',
++        parameters=[{
++            'name': LaunchConfiguration('name'),
++            'calibration_type': LaunchConfiguration('calibration_type'),
++            'tracking_base_frame': LaunchConfiguration('tracking_base_frame'),
++            'tracking_marker_frame': LaunchConfiguration('tracking_marker_frame'),
++            'robot_base_frame': LaunchConfiguration('robot_base_frame'),
++            'robot_effector_frame': LaunchConfiguration('robot_effector_frame'),
++            'freehand_robot_movement': True,
++            'move_group_namespace': '/',
++            'move_group': 'arm',
++        }],
++    )
++
++    # Robot movement server.
++    #
++    # This is the ROS 2 / MoveIt 2 replacement for the original
++    # moveit_commander-based robot movement implementation.
++    handeye_server_robot = Node(
++        package='easy_handeye2',
++        executable='handeye_server_robot',
++        name='handeye_server_robot',
++        parameters=[{
++            'name': LaunchConfiguration('name'),
++            'calibration_type': LaunchConfiguration('calibration_type'),
++            'tracking_base_frame': LaunchConfiguration('tracking_base_frame'),
++            'tracking_marker_frame': LaunchConfiguration('tracking_marker_frame'),
++            'robot_base_frame': LaunchConfiguration('robot_base_frame'),
++            'robot_effector_frame': LaunchConfiguration('robot_effector_frame'),
++            'freehand_robot_movement': True,
++            'move_group_namespace': '/',
++            'move_group': 'arm',
++        }],
++    )
++
++    # RQT calibration GUI.
++    handeye_rqt_calibrator = Node(
++        package='easy_handeye2',
++        executable='rqt_calibrator.py',
++        name='handeye_rqt_calibrator',
++        parameters=[{
++            'name': LaunchConfiguration('name'),
++            'calibration_type': LaunchConfiguration('calibration_type'),
++            'tracking_base_frame': LaunchConfiguration('tracking_base_frame'),
++            'tracking_marker_frame': LaunchConfiguration('tracking_marker_frame'),
++            'robot_base_frame': LaunchConfiguration('robot_base_frame'),
++            'robot_effector_frame': LaunchConfiguration('robot_effector_frame'),
++            'freehand_robot_movement': True,
++            'move_group_namespace': '/',
++            'move_group': 'arm',
++        }],
++    )
+ 
+     return LaunchDescription([
+         arg_name,
+@@ -52,5 +120,6 @@ def generate_launch_description():
+         node_dummy_calib_eih,
+         node_dummy_calib_eob,
+         handeye_server,
++        handeye_server_robot,
+         handeye_rqt_calibrator,
+     ])
+diff --git a/easy_handeye2/package.xml b/easy_handeye2/package.xml
+index d10d5b1..a5c1d88 100644
+--- a/easy_handeye2/package.xml
++++ b/easy_handeye2/package.xml
+@@ -21,6 +21,8 @@
+ 
+     <exec_depend>rclpy</exec_depend>
+     <exec_depend>tf2_ros</exec_depend>
++    <exec_depend>moveit_msgs</exec_depend>
++    <exec_depend>shape_msgs</exec_depend>
+     <exec_depend>python-transforms3d-pip</exec_depend>
+     <exec_depend>python3-opencv</exec_depend>
+ 
