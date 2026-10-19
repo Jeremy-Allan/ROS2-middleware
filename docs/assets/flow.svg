@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 920 150" font-family="Inter, Arial, sans-serif" role="img" aria-label="An instruction is typed, the model writes a recipe, the recipe is validated, ROS 2 runs each step, and MoveIt plans the arm movement">
+<g font-weight="700" font-size="22" fill="#fff" text-anchor="middle">
+<rect x="0" y="20" width="150" height="110" fill="#002855"/><text x="75" y="82">Instruction</text><text x="75" y="108" font-size="15" font-weight="400">typed by the user</text>
+<rect x="192" y="20" width="150" height="110" fill="#002855"/><text x="267" y="82">Model</text><text x="267" y="108" font-size="15" font-weight="400">writes a recipe</text>
+<rect x="384" y="20" width="150" height="110" fill="#E4002B"/><text x="459" y="82">Validation</text><text x="459" y="108" font-size="15" font-weight="400">schema and actions</text>
+<rect x="576" y="20" width="150" height="110" fill="#002855"/><text x="651" y="82">ROS 2</text><text x="651" y="108" font-size="15" font-weight="400">runs each step</text>
+<rect x="768" y="20" width="152" height="110" fill="#002855"/><text x="844" y="82">MoveIt</text><text x="844" y="108" font-size="15" font-weight="400">plans the motion</text>
+</g>
+<g fill="#002855"><path d="M156 69h18v12h-18z"/><path d="M174 58l14 17-14 17z"/><path d="M348 69h18v12h-18z"/><path d="M366 58l14 17-14 17z"/><path d="M540 69h18v12h-18z"/><path d="M558 58l14 17-14 17z"/><path d="M732 69h18v12h-18z"/><path d="M750 58l14 17-14 17z"/></g>
+</svg>

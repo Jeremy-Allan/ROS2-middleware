@@ -2,7 +2,7 @@
 
 # Safety and Contracts
 
-This page describes the execution contract, safety layers, and failure model this middleware is designed against. It's a mix of what's genuinely enforced in code today and some forward-looking design intent, both are marked as such below.
+This page describes the execution contract, the safety layers and the failure modes of the middleware. It states what the code enforces and notes where something is not enforced.
 
 ## Input contract
 
@@ -13,14 +13,14 @@ This page describes the execution contract, safety layers, and failure model thi
 
 - Every task is decomposed into discrete, ordered steps.
 - Each step must map to one of the ten known action types: `home`, `move_arm`, `relative_move`, `gripper`, `pickup`, `dropoff`, `pour`, `push`, `thrust`, `throw`. See [Configuration](../installation/configuration.md) for the exact contract.
-- Execution is strictly sequential: `json_parser_node` runs steps one at a time and stops at the first failure. There is no parallel step execution today.
+- Execution is strictly sequential: `json_parser_node` runs steps one at a time and stops at the first failure. Steps are never executed in parallel.
 
-## What's actually implemented vs design intent
+## Status reporting
 
-The system's real, currently-implemented state model is simpler than some earlier project documentation described:
+Status is reported at two levels:
 
 - **Per-service response:** there's no status enum on the wire. A timeout or invalid request comes back as `success: false` with a message. `JointMove` and `ExecuteTrajectory` also return a MoveIt `error_code`.
-- **Per-node telemetry:** each node reports one of three states, `STATE_IDLE`, `STATE_BUSY`, `STATE_FAULT` (see [Architecture](architecture.md)). There isn't a richer `PENDING` / `RUNNING` / `COMPLETED` / `ABORTED` state machine implemented anywhere in code today, even though earlier design notes described one. If that richer model becomes real, this page should be updated to match.
+- **Per-node telemetry:** each node reports one of three states, `STATE_IDLE`, `STATE_BUSY`, `STATE_FAULT` (see [Architecture](architecture.md)). There is no further state machine, such as `PENDING`, `RUNNING`, `COMPLETED` or `ABORTED`.
 
 ## Safety layers
 
@@ -32,9 +32,9 @@ The system's real, currently-implemented state model is simpler than some earlie
 
 If a step fails, execution halts immediately rather than continuing partway through a plan, and the failure is visible both in the node's logs and in its telemetry status message.
 
-## Known gap relevant to safety
+## Known limitations
 
-There is currently no layer that evaluates whether a schema-valid, collision-free recipe is semantically dangerous. The bridge also does not restrict which services a websocket client can call (see Input contract). MoveIt's collision checking only prevents the arm physically hitting something; it says nothing about whether a command should have been issued in the first place. This matters more than usual given the project's research focus on how LLMs respond to malicious instructions.
+There is no layer that evaluates whether a schema-valid, collision-free recipe is semantically dangerous. The bridge also does not restrict which services a websocket client can call (see Input contract). MoveIt's collision checking only prevents the arm physically hitting something; it says nothing about whether a command should have been issued in the first place. This matters more than usual given the project's research focus on how LLMs respond to malicious instructions.
 
 ## Failure mode summary
 

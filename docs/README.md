@@ -12,7 +12,7 @@ If you read nothing else, read these two pages:
 - **I'm brand new to this project:** Start with [Overview](overview.md), then [Installation](installation/middleware-and-proxy.md). You do not need prior ROS 2 experience, both pages explain concepts as they come up.
 - **I just want to get it running:** [Installation](installation/middleware-and-proxy.md), then [Quickstart](user-guide/quickstart.md).
 - **I need to add a new object, movement, or recipe:** [Configuration](installation/configuration.md) covers the coordinate dictionary, relative movements, obstacles and recipes.
-- **I'm writing or running tests:** [Testing](technical/testing.md) covers the middleware's test suites and the proxy's LLM-output test suite, and is honest about what neither one currently catches.
+- **I'm writing or running tests:** [Testing](technical/testing.md) covers the middleware's test suites and the proxy's LLM-output test suite, and lists what neither one covers.
 - **Something's broken:** [Troubleshooting](user-guide/troubleshooting.md) is organized by symptom, with the likely cause and the fix, split by which half of the pipeline it's in.
 - **I want to understand how it actually works:** [Architecture](technical/architecture.md) is the deep dive, per-node internals, the full pipeline diagram, every custom service and message type, and the package layout.
 - **I want the formal guarantees and safety model:** [Safety and Contracts](technical/safety-and-contracts.md) covers the execution contract, failure modes, and safety layers this middleware is designed against.
@@ -54,14 +54,10 @@ Pages marked *draft* are placeholders that don't have content yet.
 |---|---|
 | [Architecture](technical/architecture.md) | Full pipeline diagram, per-node internals, custom service/message types, package layout |
 | [Middleware nodes](technical/middleware-nodes.md) | *Draft.* What each node does |
-| [Motion and actions](technical/motion-and-actions/index.md) | How actions become motion. [Pour](technical/motion-and-actions/pour.md), [Push](technical/motion-and-actions/push.md) and [Throw](technical/motion-and-actions/throw.md) show how each composite motion was captured and designed |
+| [Motion and actions](technical/motion-and-actions/index.md) | How actions become motion. [Pour](technical/motion-and-actions/pour.md), [Push](technical/motion-and-actions/push.md) and [Throw](technical/motion-and-actions/throw.md) show how each composite motion works |
 | [Computer vision](technical/computer-vision.md) | *Draft.* How objects are detected and added to the scene |
 | [Safety and contracts](technical/safety-and-contracts.md) | The execution contract, safety layers, failure mode table, and system readiness definition |
 | [Kinova drivers and APIs](technical/kinova-drivers-and-apis.md) | *Draft.* The driver interfaces, their errors, and where to look when a move fails |
 | [Testing](technical/testing.md) | The middleware's recipe test suite, the proxy's LLM-output test suite, a manual smoke test |
 | [Contributing](technical/contributing.md) | *Draft.* Branches, pull requests and the docstring rule |
 | [API reference](technical/api/nodes.md) | Function-level reference generated from the code's own docstrings, for the middleware and the proxy |
-
-## Support
-
-Found something in these docs that's wrong, stale, or confusing? Flag it to the team or open a PR, documentation fixes are cheap and worth making immediately.

@@ -23,10 +23,10 @@ The proxy never calls a ROS 2 service directly. Every request goes out over the 
 
 ## ROS 2 concepts you need before you start
 
-You don't need to be a ROS 2 expert, but these four words will come up constantly, so here's what they mean in plain English:
+Four ROS 2 terms are used throughout this documentation:
 
 - **Node**: a single running program. The middleware ships four of them, plus an optional vision node, see [Overview](../overview.md).
-- **Topic**: a one-way broadcast channel. Publishers shout messages onto a topic; subscribers listen. Nobody waits for a reply. (Used here for the heartbeat/telemetry messages.)
+- **Topic**: a one-way channel. Publishers send messages to a topic and subscribers receive them. The publisher does not wait for a reply. (Used here for the heartbeat/telemetry messages.)
 - **Service**: a request/response call, like a function call over the network. You call it, it does something, it replies. (Used here for almost everything: "give me coordinates for X," "move the arm," "execute this recipe.")
 - **Action**: like a service, but for things that take a while and report progress along the way. For example, "move the arm": MoveIt reports planning and monitoring progress before finally succeeding or failing. Only `hardware_interface_client.py` uses actions directly; everything else in the system only ever sees simple services.
   
@@ -128,7 +128,7 @@ ROS2-middleware/
       actions/                    one module per recipe action + arm_actions.py (shared clients) and motion.py (planning)
       utils/                      robot.py, geometry.py, grasping.py, ros.py
     scripts/run_recipe.py         send a recipe file to /execute_recipe
-    scripts/check_orientations.py check orientation presets on the arm (see testing.md)
+    scripts/check_orientations.py check orientation presets on the arm (see [Testing](testing.md))
     launch/robot.launch.py        the whole stack, including rosbridge_server
     recipes/                      task_recipe.json, test_suite/, test_suite/qa_middleware/
     test/                         unit tests

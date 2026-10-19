@@ -14,7 +14,7 @@
 | RAM | 8GB minimum, 16GB+ recommended | More if you run a larger local LLM through Ollama |
 | Ollama | Latest, only if running a local LLM | Not needed if you're only using a cloud provider (OpenAI, Anthropic, Gemini) |
 
-If you're on Windows or macOS, you'll need a Ubuntu 22.04 VM or WSL2 with Ubuntu 22.04. ROS 2 Humble is not natively supported elsewhere. Instructions to configure workspace with alternative OS is found in [Environment Setup](./non-native-ubuntu.md)
+If you're on Windows or macOS, you'll need a Ubuntu 22.04 VM or WSL2 with Ubuntu 22.04. ROS 2 Humble is not natively supported elsewhere. For other operating systems, see [Non-native Ubuntu](./non-native-ubuntu.md).
 
 ## 1. Install ROS 2 Humble
 

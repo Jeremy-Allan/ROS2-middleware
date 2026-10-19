@@ -4,7 +4,7 @@
 
 This project lets you type a plain English instruction, like "pick up the blue cube and put it on the tray," and have a real (or simulated) Kinova Gen3 Lite robot arm actually do it.
 
-It assumes zero prior ROS 2 experience. Anywhere a ROS 2 concept shows up for the first time, it's explained in plain English before it's used.
+No prior ROS 2 experience is assumed. ROS 2 terms are explained where they first appear.
 
 ## Two repositories, one pipeline
 
@@ -29,16 +29,16 @@ This is split across two separate git repositories, built and run independently,
 - Do any of its own path-planning or collision math. That's entirely delegated to MoveIt 2.
 - Talk to the physical robot directly from the proxy side. Only this middleware talks to the standard Kinova ROS 2 driver (`ros2_kortex`), which in turn talks to the arm.
 
-## The middleware's four nodes, in one sentence each
+## The middleware's four nodes
 
 This repository is built from four ROS 2 programs called nodes, each doing one job and talking to the others over the network:
 
-| Node | Nickname | Job |
-|---|---|---|
-| `hardware_interface_client.py` | The Muscle | The only node that actually talks to the arm and gripper. Sends motion commands, waits for them to finish, reports hardware faults. |
-| `environment_mapping_node.py` | The Database | Holds the "map" of named objects (for example, `blue_cube` maps to a pose and shape), named relative movements, and known obstacles. Answers lookup questions from other nodes. |
-| `json_parser_node.py` | The Brain / Supervisor | Reads a recipe, resolves names via the Database node, and tells the Muscle node what to do, step by step, in order. |
-| `telemetry_node.py` | The Monitor | Listens to heartbeats from all the other nodes, decides if the whole system is READY, BUSY, or FAULT, and can trigger a hardware fault reset. |
+| Node | Job |
+|---|---|
+| `hardware_interface_client.py` | The only node that actually talks to the arm and gripper. Sends motion commands, waits for them to finish, reports hardware faults. |
+| `environment_mapping_node.py` | Holds the "map" of named objects (for example, `blue_cube` maps to a pose and shape), named relative movements, and known obstacles. Answers lookup questions from other nodes. |
+| `json_parser_node.py` | Reads a recipe, resolves names through the environment mapping node, and tells the hardware interface client what to do, step by step, in order. |
+| `telemetry_node.py` | Listens to heartbeats from all the other nodes, decides if the whole system is READY, BUSY, or FAULT, and can trigger a hardware fault reset. |
 
 Object positions come from a hand-maintained dictionary (see [Configuration](installation/configuration.md)). An optional fifth node in the `computer_vision` package (`enable_CV:=true`) can add objects detected by a Kinect camera when `/vision/snapshot` is called.
 
@@ -46,13 +46,13 @@ See [Architecture](technical/architecture.md) for the internals of each node.
 
 ## The proxy and the bridge
 
-The proxy and the middleware are deliberately kept separate, so a bug in the LLM logic can never directly touch the robot:
+The proxy and the middleware are separate programs. The proxy has no ROS 2 installation and reaches the robot only through the websocket bridge:
 
 | Side | What it is | Job |
 |---|---|---|
 | The proxy (embodied-ai-proxy) | No ROS 2 installed or launched | Talks to the LLM provider, builds the prompt, validates the JSON response against the schema, runs the terminal interface, and connects to the middleware's websocket as a client. |
 | The websocket bridge (this repo's launch) | `rosbridge_suite`'s websocket server, started by `robot.launch.py` | Listens on port 9090 and translates incoming JSON requests into ROS 2 service calls against this middleware. The proxy's only way in. |
 
-If you only remember one sentence about this whole project: **your words go to an LLM, the LLM's structured answer goes through a validator and a websocket bridge, and only then does the middleware's Brain drive the Muscle one step at a time while the Monitor watches everyone's pulse.**
+In short: the user's instruction goes to an LLM, the LLM's structured answer passes a validator and the websocket bridge, and the middleware then executes it one step at a time while the telemetry node reports system status.
 
 Next: [Installation](installation/middleware-and-proxy.md)
