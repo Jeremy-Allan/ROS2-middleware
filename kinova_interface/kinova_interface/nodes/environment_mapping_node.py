@@ -329,12 +329,13 @@ class EnvironmentMappingNode(Node):
         return response
 
     def get_robot_parameters_callback(self, request, response):
-        # Service for the LLM Proxy || send list of objects + relative movements + orientation presets
+        # Service for the LLM Proxy || send list of objects + relative movements + orientation presets + held objects
         """Return the environment parameters available to clients.
 
         Used by the LLM proxy to learn what objects, relative movements, and
-        orientation presets exist. Also reports table bounds when a
-        BOX-shaped ``table`` obstacle is configured.
+        orientation presets exist and which objects the gripper currently holds.
+        Also reports table bounds when a BOX-shaped ``table`` obstacle is
+        configured.
 
         Args:
             request (GetRobotParameters.Request): Service request (no fields).
@@ -347,6 +348,7 @@ class EnvironmentMappingNode(Node):
         response.object_list = list(self.static_objects.keys())
         response.movement_names = list(self.relative_movements.keys())
         response.orientation_names = list(self.orientation_presets.keys())
+        response.held_objects = sorted(self.attached_objects)
 
         table = self.obstacles.get('table')
         if table and table.get('shape', {}).get('type') == 'BOX':
