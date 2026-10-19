@@ -1,32 +1,26 @@
 [Docs Home](../../README.md)
 
-# Pour Motion Reference
+# Pour
 
-> Design record. Object names and poses are from when it was captured; the `box` object has since been removed. Current behaviour is in `actions/pour.py` and `actions/pickup.py`.
+`pour` lifts a held object, optionally moves it above a destination, tilts it to pour, then returns it level. It is implemented in `actions/pour.py`.
 
-This records a manually-driven demonstration of the intended `pour` motion,
-captured on real-time fake hardware in RViz (MoveIt's interactive marker/
-Joints tab, `Plan and Execute`), one joint-space snapshot per stage. It
-exists so the eventual `pour` implementation (now `actions/pour.py`) is built
-against a concrete, physically-verified sequence rather than guessed at.
+## Requirements
 
-Captured with the `box` object (`kinova_interface/data/configs/env/workspace_objects.yaml`,
-resting at `x=-0.3255, y=-0.1235, z=0.01`), poured toward `delivery_tray`
-(`x=-0.235, y=-0.425, z=0.001`). Raw CSV: `~/demo_logs/pour_demo_snapshots.csv`
-on the dev VM.
+- The object must already be held. Otherwise the step fails.
+- It must have been grasped from the side (`grasp_style: "side"` in `pickup`), which holds it level. A recipe with a `pour` after a `pickup` forces a side grasp automatically.
 
-## Why the original `pour` failed
+## Sequence
 
-`pickup` leaves grasp orientation completely unconstrained (deliberately -
-constraining it breaks reachability at some approach points). `pour` then
-applies a **relative** +90&deg; pitch delta on top of whatever arbitrary
-orientation the planner happened to land on, which can produce a physically
-extreme, unreachable target pose (observed in testing: a starting orientation
-of `rpy = (-3.09, 2.18, -1.23)` rad led straight to a MoveIt error code
-`99999` on the very first tilt attempt). The fix implied by this demo is to
-stop leaving the grasp orientation to chance in the first place.
+1. **Lift** the object by `lift_height` (default 0.14 m).
+2. **Move above the destination**, if a `destination` or `direction` is given. With neither, the object is poured where it was lifted. The lift and the move keep the gripper's orientation exactly.
+3. **Tilt** by rotating `joint_6` alone by `tilt_angle` (default 135 degrees). The tilt is a joint-space change, so the gripper's orientation is never recomputed.
+4. **Return** `joint_6` to its starting value so the object is level again.
 
-## The five stages
+`pour` stops there, still holding the object above the destination. A separate `dropoff` step places it down and releases it. The parameters are listed in the action contract in [Configuration](../../installation/configuration.md).
+
+## Captured stages
+
+The motion is based on a demonstration driven by hand in RViz on simulated hardware (MoveIt's Joints tab, *Plan and Execute*), with one joint snapshot per stage. Joint values are in degrees.
 
 | # | Label | joint_1 | joint_2 | joint_3 | joint_4 | joint_5 | joint_6 | tool xyz | tool rpy (deg) |
 |---|---|---|---|---|---|---|---|---|---|
@@ -36,100 +30,9 @@ stop leaving the grasp orientation to chance in the first place.
 | 4 | Tilt to pour | 66.45 | 56.55 | -114.2 | -64.46 | -82.23 | 39.54 | (-0.2394, -0.4517, 0.1621) | (-89.14, -46.48, 130.54) |
 | 5 | Return & place | 24.57 | 74.5 | -104.95 | -64.46 | -82.23 | -92.63 | (-0.4774, -0.1754, 0.0436) | (97.28, 2.37, -90.63) |
 
-(Gripper open, dropping the object, was described but not captured - it's
-a separate discrete action, not a joint pose.)
+The positions come from an object that has since been removed from the object dictionary. The pattern of joint changes is what the implementation follows:
 
-### What's invariant vs. what moves, stage to stage
-
-- **1 -> 2 (lift)**: only `joint_2`/`joint_3` (shoulder/elbow) move.
-  `joint_4/5/6` - the wrist, which actually controls tilt - are untouched.
-  Tool pitch barely drifts (-2.05&deg; -> -3.42&deg;). A pure lift.
-- **2 -> 3 (transit)**: `joint_1` swings the base to reposition over the
-  destination; tool z is preserved (0.1539 -> 0.1621). Roll/pitch (the
-  axes that actually tip a held container) stay in-band (~90&deg;/~0&deg;);
-  only yaw changes freely, which is expected and harmless - rotating
-  around the vertical axis doesn't spill contents.
-- **3 -> 4 (tilt)**: only `joint_6` changes (by ~135&deg;), position is
-  *exactly* unchanged. Tool pitch swings from ~2&deg; to -46.48&deg; - the
-  actual pour tip - driven entirely by that one joint.
-- **4 -> 5 (return & place)**: `joint_6` rotates back, tool pitch returns
-  to ~2&deg; (matching stages 1-3), then height drops toward table/resting
-  level at the destination, ready for the gripper to open.
-
-## Why this is implementable
-
-This maps cleanly onto machinery already built and proven this session for
-`throw`: a small joint-space sequence via `call_joint_move_service`
-(`JointMove.srv`), rather than `pour`'s current approach of chaining
-Cartesian relative moves with orientation deltas computed on top of an
-unknown starting pose. Concretely:
-
-1. **Force a known grasp orientation** for anything that's going to be
-   poured - a new orientation preset (e.g. `side_grasp_flat`, roll~90&deg;,
-   pitch~0&deg;) applied during the pickup step, replacing today's
-   unconstrained approach. This is the actual fix for the root cause above:
-   `pour` no longer has to guess what orientation it's starting from.
-2. **Lift and transit** by moving to new (x, y, z) targets while re-applying
-   that *same* orientation preset every time (not a relative delta) - i.e.
-   treat orientation as locked/carried forward, only ever an explicit,
-   deliberate absolute target.
-3. **Tilt** via a pure joint-space delta on the final wrist joint alone
-   (mirroring `throw`'s wind-up/fling pattern), not an
-   IK-solved Cartesian orientation change.
-4. **Return** by reversing that same joint delta, then move down to the
-   destination's resting height (reusing `dropoff`'s height math), then
-   open the gripper.
-
-## Generalizing the "stays upright" philosophy
-
-The core idea - lock orientation across every *position*-changing move,
-and only ever change it via one deliberate, isolated motion - is not
-pour-specific and is worth applying anywhere a filled/spillable object is
-being carried (this is exactly the bug pour had: an orientation change
-leaking in where none was intended). Two things need to hold for it to
-generalize correctly:
-
-- **The forced grasp orientation must be the same canonical preset every
-  time**, regardless of which object or destination is involved. The
-  joint_6-rotation-equals-tip trick only works because the wrist is
-  already sitting in that specific orientation (roll~90&deg;) from the
-  grasp - a different grasp orientation would change which joint (or
-  combination of joints) actually produces a "tip" in the world frame.
-- **Every intermediate move (lift/transit) must re-supply that exact
-  orientation as an explicit target**, not leave it to the planner or
-  apply a relative delta - otherwise the same silent drift that broke the
-  current `pour` can reappear.
-
-Given those two constraints, yes - this pattern should generalize to any
-future "carry something upright" action, not just this specific box/tray
-case.
-
-## Implementation
-
-Implemented in `actions/pour.py`, `actions/pickup.py` and `nodes/hardware_interface_client.py`:
-
-- `pickup` gained `grasp_style: 'side'`, a computed level side grasp. The
-  demo's captured pose was tried first as a literal target and was in
-  collision with the box, because it was only reached after the box was
-  attached. A captured pose shows the shape of a motion and still needs
-  checking. Side grasp candidates now come from the object's shape (BOX
-  and CYLINDER) in `utils/grasping.py`, and pickup plans the whole
-  approach, grasp and lift before moving. A recipe with a later `pour`
-  forces a side grasp automatically.
-- `pour` gained `destination`/`direction`, `lift_height` (default `0.14`,
-  matching the ~0.137m measured here) and `tilt_angle` (default `radians(135)`,
-  matching the captured joint_6 delta). Lift/transit are zero-delta
-  `relative_move` calls (orientation preserved exactly, never recomputed).
-- The tilt/return-to-level itself needed a new capability: `JointMove.srv`
-  gained a `relative` field, and `hardware_interface_client` now caches
-  `/joint_states` so a relative joint move can resolve to
-  `current + delta` server-side - this is what lets the tilt be a pure
-  `joint_6` delta rather than a Cartesian orientation change.
-- `pour` deliberately stops once it's back level - still holding the
-  object, hovering above the destination. Placing it down and releasing
-  is left to a separate `dropoff` step in the recipe, reusing its
-  existing height/release logic rather than duplicating it here.
-
-**Status**: confirmed working end-to-end on fake hardware -
-`recipe_pour.json` (`home` -> `pickup(grasp_style=side)` ->
-`pour(destination=delivery_tray)`) completes successfully.
+- **Lift** changes only `joint_2` and `joint_3`.
+- **Transit** swings `joint_1` to the destination. Roll and pitch stay near 90 and 0 degrees, so the container stays upright. Only yaw changes.
+- **Tilt** changes only `joint_6`, by about 135 degrees. The position does not change.
+- **Return** rotates `joint_6` back, then lowers the object toward the destination.

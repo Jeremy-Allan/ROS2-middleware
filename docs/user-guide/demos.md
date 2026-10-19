@@ -2,7 +2,7 @@
 
 # Video Demos
 
-Short screen recordings of each feature in action, for anyone who'd rather watch than read. Links to be added by the team, placeholders below.
+Short screen recordings of each feature.
 
 | Feature | What it shows | Link |
 |---|---|---|

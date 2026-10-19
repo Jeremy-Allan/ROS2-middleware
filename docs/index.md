@@ -8,9 +8,9 @@ hide:
 <div class="hero" markdown>
 <div class="hero__text" markdown>
 
-# Type a sentence.<br>The arm does it, or says no.
+# LLM-controlled robot arm
 
-A language model writes the plan. This middleware checks it, then moves a Kinova Gen3 Lite arm with ROS 2 and MoveIt.
+Type an instruction in plain English. A language model turns it into a plan, the system validates it, and a Kinova Gen3 Lite arm carries it out. This manual covers setup, use and how it works.
 
 [Quickstart](user-guide/quickstart.md){ .md-button .md-button--primary }
 [Install](installation/middleware-and-proxy.md){ .md-button }
@@ -44,9 +44,9 @@ A language model writes the plan. This middleware checks it, then moves a Kinova
 
 </div>
 
-## From sentence to motion
+## How an instruction becomes motion
 
-![You type a sentence, the model writes a recipe, checks run, ROS 2 runs each step, MoveIt plans and the arm moves](assets/flow.svg){ .flow }
+![An instruction is typed, the model writes a recipe, the recipe is validated, ROS 2 runs each step, and MoveIt plans the arm's movement](assets/flow.svg){ .flow }
 
 ## The ten actions
 
@@ -54,6 +54,6 @@ A language model writes the plan. This middleware checks it, then moves a Kinova
 `home` `move` `relative move` `gripper` `pick up` `drop off` `pour` `push` `thrust` `throw`
 </div>
 
-Anything else the model suggests is rejected before the arm moves.
+The proxy rejects any recipe that uses another action.
 
 <p class="credit">Arm render from Kinova's open Kortex model (Apache-2.0).</p>

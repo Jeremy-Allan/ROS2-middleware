@@ -20,14 +20,14 @@ They mirror the package layout: `test_arm_actions.py` and `test_motion.py` cover
 
 Alongside the automated unit tests, there's a set of hand-crafted recipe files under `kinova_interface/recipes/test_suite/`, run manually against a live launch while you watch the console output and RViz.
 
-Test in simulation first, always.
+Test in simulation before running on the real arm.
 
 | File | What it validates |
 |---|---|
 | `recipe_pickup.json` | `auto` grasps (top for `blue_cube`, side for `water_bottle`), and putting a held object back before the next pickup |
 | `recipe_grasp_styles.json` | Forced `top`/`side` grasps, each object put back after |
 | `recipe_dropoff.json` | Pick up `water_bottle` and stand it on the centre of `delivery_tray` |
-| `recipe_pour.json`, `recipe_push.json`, `recipe_thrust.json`, `recipe_throw.json` | One composite action each (see the `*-motion-reference.md` docs) |
+| `recipe_pour.json`, `recipe_push.json`, `recipe_thrust.json`, `recipe_throw.json` | One composite action each (see the [Pour](motion-and-actions/pour.md), [Push](motion-and-actions/push.md) and [Throw](motion-and-actions/throw.md) pages) |
 | `qa_middleware/*.json` | One recipe per action or failure case, including invalid recipes that should be rejected |
 
 Run them like any other recipe (see [Quickstart](../user-guide/quickstart.md)):
@@ -76,7 +76,7 @@ ros2 run kinova_interface check_orientations.py --ros-args --params-file $SETTIN
 | `FAIL (...)` | Neither planner could get there, with the reason in brackets. Usually just out of reach for that orientation. |
 | `ik ok` / `no IK` | (`--ik-only`) The pose is reachable / not reachable. Nothing moved. |
 
-`FAIL` or `no IK` is normal for some spots: pointing straight down far from the base, for example, may simply be out of reach. That's the map you're after. `BAD` is never normal. The script exits with 0 only if every move was `ok`.
+`FAIL` or `no IK` is normal for some spots: pointing straight down far from the base, for example, may simply be out of reach. That is expected: the results map which orientations are reachable from where. `BAD` is never normal. The script exits with 0 only if every move was `ok`.
 
 **Safety:** On fake hardware this checks planning, IK and the gripper convention, not how accurate the real arm is. On the real arm, run `--ik-only` first, clear the workspace, and keep the speed low.
 
