@@ -61,7 +61,7 @@ That launches the full stack in simulation and waits for a recipe. See [the Quic
 
 ```
 kinova_interface/
-  data/configs/        env/ (objects, movements, orientations), motion_settings.yaml, moveit/joint_limits.yaml
+  data/configs/        env/ (objects, movements, orientations), motion_settings.yaml, moveit/ (joint_limits.yaml, kortex_controllers.yaml)
   kinova_interface/    nodes/, actions/, utils/
   launch/              robot.launch.py
   recipes/             task_recipe.json, test_suite/

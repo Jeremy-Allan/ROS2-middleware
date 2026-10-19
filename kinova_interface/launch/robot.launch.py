@@ -187,7 +187,10 @@ def generate_launch_description():
     robot_ip = LaunchConfiguration('robot_ip')
     use_fake_hardware = LaunchConfiguration('use_fake_hardware')
 
-    # 1. Start the main controller and RViz
+    # 1. Start the main controller and RViz, with our controllers file (adds goal tolerances).
+    controllers_file = os.path.join(
+        get_package_share_directory('kinova_interface'), 'data', 'configs', 'moveit', 'kortex_controllers.yaml'
+    )
     kortex_control_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([
             PathJoinSubstitution([
@@ -202,7 +205,7 @@ def generate_launch_description():
             'robot_type': 'gen3_lite',
             'dof': '6',
             'gripper': 'gen3_lite_2f',
-            'controllers_file': 'ros2_controllers.yaml',
+            'controllers_file': controllers_file,
             'gripper_joint_name': 'right_finger_bottom_joint',
             'robot_hand_controller': 'gen3_lite_2f_gripper_controller'
         }.items()

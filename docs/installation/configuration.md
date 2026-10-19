@@ -91,6 +91,12 @@ Arm moves are planned with Pilz first (PTP for free moves, LIN for straight line
 
 `launch/robot.launch.py` starts `move_group` the same way `kinova_gen3_lite_moveit_config`'s own `move_group.launch.py` does, except that it loads this file instead of that package's `joint_limits.yaml`. It differs in two ways. Acceleration limits are enabled (1.0 rad/s² per joint, which MoveIt already assumed), because Pilz refuses to plan without them. Kinova's `default_velocity_scaling_factor` and `default_acceleration_scaling_factor` (0.1) are not included.
 
+## ros2_control controllers (middleware)
+
+**File:** `kinova_interface/data/configs/moveit/kortex_controllers.yaml`
+
+`launch/robot.launch.py` passes this to `kortex_control.launch.py` instead of Kinova's gen3_lite `ros2_controllers.yaml`. The only difference is goal tolerances on `joint_trajectory_controller`: a move succeeds once every joint is within 0.01 rad of the goal, waiting up to 1 s past the trajectory's end. Kinova's has none, so a move reported success when its time ran out, even if the arm lagged, faulted or the driver dropped the commands. A move that doesn't arrive now fails with `timed out` (MoveIt stops waiting at 1.1 × the trajectory's length + 0.5 s, which comes first for moves under 5 s) or `control failed during execution`.
+
 ## Recipes and the action contract (middleware)
 
 **Files:** `kinova_interface/recipes/task_recipe.json` (the default working recipe) and anything you add alongside it. This is also exactly the format the LLM is instructed to produce, so understanding this contract is understanding what the LLM is actually allowed to say.

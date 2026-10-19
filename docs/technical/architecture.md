@@ -123,6 +123,7 @@ ROS2-middleware/
       env/                        workspace_objects.yaml, movements_and_orientations.yaml
       motion_settings.yaml        hardware and grasping parameters
       moveit/joint_limits.yaml    joint limits loaded by move_group
+      moveit/kortex_controllers.yaml  ros2_control controllers, with goal tolerances
     kinova_interface/
       nodes/                      the four ROS nodes (entry points)
       actions/                    one module per recipe action + arm_actions.py (shared clients) and motion.py (planning)
