@@ -22,7 +22,7 @@ objects:
   blue_cube:
     pose:
       position: {x: 0.45, y: 0.2, z: 0.0035}
-      orientation: {roll: 0.0, pitch: 1.57, yaw: 0.0}
+      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
     shape: {type: BOX, dimensions: [0.107, 0.043, 0.073]}
   
   delivery_tray:

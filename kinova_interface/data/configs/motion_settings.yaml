@@ -19,8 +19,8 @@
     # it applies from the next pickup or dropoff.
     grasping:
       # Planning
-      velocity_scale: 0.5             # arm speed for pickup and dropoff moves, as a fraction of its max (0-1]
-      acceleration_scale: 0.8         # how hard it speeds up and slows down (0-1]; Pilz LIN needs this low to stay within joint limits
+      velocity_scale: 0.3             # arm speed for pickup and dropoff moves, as a fraction of its max (0-1]
+      acceleration_scale: 0.3         # how hard it speeds up and slows down (0-1]; Pilz LIN needs this low to stay within joint limits
       fallback_planning_time: 5.0     # RRT* planning time when Pilz can't plan a move; RRT* always uses all of it
       upright_tolerance: 0.2          # how far the held object may tilt while carried upright (e.g. before a pour); turning is free
       position_tolerance: 0.001       # how close RRT* must get to each pose (Pilz is always exact)

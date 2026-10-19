@@ -41,7 +41,7 @@ class HardwareInterfaceClient(Node):
     and the gripper action client. Arm moves try Pilz PTP first and fall back
     to OMPL RRT* when PTP cannot plan. Each service blocks until its motion
     finishes (or times out), then reports ``success`` and a message. The node
-    watches ``/fault_controller/is_faulted`` and publishes telemetry on
+    watches ``/fault_controller/internal_fault`` and publishes telemetry on
     ``/status/node_report``.
 
     Services (private to the node, e.g. ``~/home_arm``): ``home_arm``, ``move_arm``,
@@ -121,7 +121,7 @@ class HardwareInterfaceClient(Node):
         # Fault Monitoring and Recovery
         self.fault_sub = self.create_subscription(
             Bool,
-            '/fault_controller/is_faulted',
+            '/fault_controller/internal_fault',
             self.fault_callback,
             10,
             callback_group=self.callback_group

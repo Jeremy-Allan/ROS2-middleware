@@ -37,7 +37,7 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 - The only node that *executes* motion. Other code may query MoveIt (IK, FK, state validity, planning scene), but every arm or gripper movement goes through this node.
 - Internally a client of three ROS 2 actions: `move_action` (MoveIt 2's `MoveGroup`, plans and moves in one go, for `move_arm`, `relative_move`, `joint_move` and `home`), `execute_trajectory` (MoveIt 2's `ExecuteTrajectory`, runs a trajectory that pickup or dropoff already planned) and `/gen3_lite_2f_gripper_controller/gripper_cmd` (direct gripper control, bypassing MoveIt entirely).
 - Movement calls block synchronously on a `threading.Event()` until the action's result callback fires, which is what makes each recipe step wait for the robot to actually finish.
-- Subscribes to `/fault_controller/is_faulted` to know instantly if the arm enters a hardware fault state.
+- Subscribes to `/fault_controller/internal_fault` to know instantly if the arm enters a hardware fault state.
 
 **`environment_mapping_node.py`, the read-mostly knowledge base:**
 - Loads `workspace_objects.yaml` (objects and obstacles) and `movements_and_orientations.yaml` (relative movements and orientations) at startup. `workspace_objects.yaml` is re-read on `/reset_environment_scene`. Objects also change at runtime as actions move them and when the vision node pushes detections.
