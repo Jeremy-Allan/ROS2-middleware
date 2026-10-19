@@ -4,10 +4,15 @@ repo_url: https://github.com/Jeremy-Allan/ROS2-middleware
 edit_uri: edit/main/docs/
 
 docs_dir: docs
+exclude_docs: |
+  /README.md
+
+hooks:
+  - hooks/docs_site.py
 
 nav:
   - Home:
-      - Documentation map: README.md
+      - Welcome: index.md
       - Overview: overview.md
   - User Guide:
       - Quickstart: user-guide/quickstart.md
@@ -47,6 +52,11 @@ nav:
 
 theme:
   name: material
+  logo: assets/logo.svg
+  favicon: assets/favicon.svg
+  font:
+    text: Inter
+    code: IBM Plex Mono
   palette:
     - media: "(prefers-color-scheme: light)"
       scheme: default
@@ -60,13 +70,22 @@ theme:
         name: Switch to light mode
   features:
     - navigation.tabs
+    - navigation.tabs.sticky
     - navigation.sections
     - navigation.top
+    - navigation.footer
     - search.suggest
+    - search.highlight
     - content.code.copy
+
+extra_css:
+  - https://fonts.googleapis.com/css2?family=Archivo:wght@700;800&display=swap
+  - stylesheets/extra.css
 
 markdown_extensions:
   - admonition
+  - attr_list
+  - md_in_html
   - pymdownx.highlight
   - pymdownx.superfences:
       custom_fences:
