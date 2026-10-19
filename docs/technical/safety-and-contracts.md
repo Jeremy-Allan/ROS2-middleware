@@ -1,4 +1,4 @@
-[Docs Home](README.md)
+[Docs Home](../README.md)
 
 # Safety and Contracts
 
@@ -12,7 +12,7 @@ This page describes the execution contract, safety layers, and failure model thi
 ## Execution contract
 
 - Every task is decomposed into discrete, ordered steps.
-- Each step must map to one of the ten known action types: `home`, `move_arm`, `relative_move`, `gripper`, `pickup`, `dropoff`, `pour`, `push`, `thrust`, `throw`. See [Configuration](configuration.md) for the exact contract.
+- Each step must map to one of the ten known action types: `home`, `move_arm`, `relative_move`, `gripper`, `pickup`, `dropoff`, `pour`, `push`, `thrust`, `throw`. See [Configuration](../installation/configuration.md) for the exact contract.
 - Execution is strictly sequential: `json_parser_node` runs steps one at a time and stops at the first failure. There is no parallel step execution today.
 
 ## What's actually implemented vs design intent
@@ -59,6 +59,6 @@ The system is only considered operational if all of the following hold:
 - `json_parser_node` can successfully execute a known-good test recipe.
 - `/system/status` reports `SYSTEM_READY`, not `SYSTEM_FAULT`.
 
-If any of these fail, treat the system as non-operational until resolved, see [Troubleshooting](troubleshooting.md).
+If any of these fail, treat the system as non-operational until resolved, see [Troubleshooting](../user-guide/troubleshooting.md).
 
-Next: [Video Demos](demos.md)
+Next: [Video Demos](../user-guide/demos.md)

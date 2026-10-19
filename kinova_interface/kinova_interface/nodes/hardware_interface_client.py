@@ -1,3 +1,10 @@
+"""ROS 2 node that is the only part of the middleware that touches the robot.
+
+Exposes the arm and gripper movement services, dispatches the underlying
+MoveIt and gripper actions, tracks hardware fault state, and reports
+telemetry. Other code may query MoveIt (IK, FK, state validity, planning
+scene) directly, but every actual movement goes through this node.
+"""
 import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
@@ -28,6 +35,18 @@ from kinova_interface.utils.robot import BASE_FRAME, TOOL_FRAME, JOINT_NAMES, BE
 
 
 class HardwareInterfaceClient(Node):
+    """Hardware-facing node (``kinova_hardware_client``) behind the movement services.
+
+    Owns the MoveIt ``move_action`` and ``execute_trajectory`` action clients
+    and the gripper action client. Arm moves try Pilz PTP first and fall back
+    to OMPL RRT* when PTP cannot plan. Each service blocks until its motion
+    finishes (or times out), then reports ``success`` and a message. The node
+    watches ``/fault_controller/is_faulted`` and publishes telemetry on
+    ``/status/node_report``.
+
+    Services (private to the node, e.g. ``~/home_arm``): ``home_arm``, ``move_arm``,
+    ``move_gripper``, ``relative_move``, ``joint_move``, ``execute_trajectory``.
+    """
     PLANNING_GROUP = 'arm'
     SERVER_WAIT_TIMEOUT_SEC = 5.0
 
@@ -46,6 +65,14 @@ class HardwareInterfaceClient(Node):
     RRT_STAR = Planner('ompl', 'RRTstarkConfigDefault', 4, 'OMPL RRT*')
 
     def __init__(self):
+        """Read the hardware settings and set up clients, subscriptions and services.
+
+        Reads the ``hardware`` section of ``motion_settings.yaml`` once (timeouts,
+        planning time, goal tolerance, home joint positions), creates the MoveIt
+        and gripper action clients, the TF buffer, the ``/joint_states`` and fault
+        subscriptions, the controller health timer, the telemetry publisher and
+        the six movement services.
+        """
         super().__init__('kinova_hardware_client')
         self.get_logger().info('Kinova Hardware Client Online - Waiting for Service Requests...')
 
@@ -139,6 +166,11 @@ class HardwareInterfaceClient(Node):
 
     # --- Telemetry Status Publisher ---
     def publish_status(self):
+        """Publish the node's current telemetry status.
+
+        The published status includes the node name, current state, status
+        message, and whether the most recent command was successful.
+        """
         msg = ExtendedStatus()
         msg.node_name = self.get_name()
         msg.state = self.current_state
@@ -147,6 +179,11 @@ class HardwareInterfaceClient(Node):
         self.status_pub.publish(msg)
 
     def _on_joint_state(self, msg):
+        """Cache the latest joint positions from a ``/joint_states`` message.
+
+        Args:
+            msg (JointState): Joint-state message with names and positions.
+        """
         self.latest_joint_positions = dict(zip(msg.name, msg.position))
 
     # --- Fault Controller Health Check & Helper ---
@@ -165,6 +202,15 @@ class HardwareInterfaceClient(Node):
         future.add_done_callback(self.list_controllers_callback)
 
     def list_controllers_callback(self, future):
+        """Process the controller-manager health check response.
+
+        Checks whether ``fault_controller`` is present and active, and
+        raises or clears the fault-controller config warning status
+        accordingly.
+
+        Args:
+            future: Future containing the ``ListControllers`` response.
+        """
         try:
             response = future.result()
             fault_ctrl_active = False
@@ -288,6 +334,16 @@ class HardwareInterfaceClient(Node):
 
     # --- Service Handlers ---
     def handle_home_arm(self, request, response):
+        """Handle a request to move the arm to its predefined home position.
+
+        Args:
+            request (HomeArm.Request): Service request with optional motion
+                parameters.
+            response (HomeArm.Response): Service response to populate.
+
+        Returns:
+            HomeArm.Response: The populated service response.
+        """
         self.get_logger().info("Service Call: Home Arm")
         self.current_state = ExtendedStatus.STATE_BUSY
         self.status_text = "Sending arm to home position"
@@ -385,6 +441,20 @@ class HardwareInterfaceClient(Node):
         return self.finalize_service_status(response)
 
     def handle_move_arm(self, request, response):
+        """Handle a Cartesian arm movement request.
+
+        Pilz PTP is tried first when an orientation is requested (it needs a
+        full pose); position-only goals skip straight to OMPL RRT*, since
+        Pilz needs a full pose to plan against.
+
+        Args:
+            request (MoveArm.Request): Service request with target position,
+                optional orientation, and motion parameters.
+            response (MoveArm.Response): Service response to populate.
+
+        Returns:
+            MoveArm.Response: The populated service response.
+        """
         x = request.target_position.x
         y = request.target_position.y
         z = request.target_position.z
@@ -412,6 +482,22 @@ class HardwareInterfaceClient(Node):
         return self.finalize_service_status(response)
 
     def handle_relative_move(self, request, response):
+        """Handle a relative Cartesian movement request.
+
+        Looks up the tool frame's current pose via TF, adds the requested
+        position and orientation deltas to it, and sends the resulting
+        absolute target to MoveIt. Always keeps (or offsets) the current
+        orientation, so there's no ``has_orientation`` flag here the way
+        there is on :meth:`handle_move_arm`.
+
+        Args:
+            request (RelativeMove.Request): Service request with position and
+                optional orientation deltas, and motion parameters.
+            response (RelativeMove.Response): Service response to populate.
+
+        Returns:
+            RelativeMove.Response: The populated service response.
+        """
         vx = request.vx
         vy = request.vy
         vz = request.vz
@@ -470,6 +556,16 @@ class HardwareInterfaceClient(Node):
         return self.finalize_service_status(response)
 
     def handle_move_gripper(self, request, response):
+        """Service handler: move the gripper and wait for it to finish.
+
+        Args:
+            request (MoveGripper.Request): ``position`` is the gripper command.
+            response (MoveGripper.Response): Filled with ``success`` and ``message``.
+
+        Returns:
+            MoveGripper.Response: ``success`` is False if the gripper action
+            server is unavailable, or the movement fails or times out.
+        """
         pos = request.position
         self.get_logger().info(f"Service Call: Move Gripper to {pos}")
         self.current_state = ExtendedStatus.STATE_BUSY
@@ -578,6 +674,16 @@ class HardwareInterfaceClient(Node):
         return self._dispatch_arm_goal(goal_msg)
 
     def send_home_goal(self, planner, motion_params=None):
+        """Plan and execute a move to the configured home joint positions.
+
+        Args:
+            planner (Planner): Pipeline and planner to use (Pilz PTP or OMPL RRT*).
+            motion_params: Optional velocity and acceleration scaling.
+
+        Returns:
+            bool: True if the goal was dispatched, False if the arm action server
+            is unavailable. The outcome arrives later via the result callback.
+        """
         return self.send_joint_goal(self.home_joint_positions, motion_params=motion_params, planner=planner)
 
     def send_joint_goal(self, joint_positions, planner, motion_params=None):
@@ -618,6 +724,15 @@ class HardwareInterfaceClient(Node):
         return True
 
     def move_gripper(self, position):
+        """Send a target position to the gripper action server.
+
+        Args:
+            position (float): Target gripper position.
+
+        Returns:
+            bool: True if the gripper action server is available and the
+                goal was dispatched, otherwise False.
+        """
         if not self.gripper_client.wait_for_server(timeout_sec=self.SERVER_WAIT_TIMEOUT_SEC):
             self.get_logger().error('Gripper server not available')
             return False
@@ -635,6 +750,15 @@ class HardwareInterfaceClient(Node):
 
     # --- Callbacks ---
     def goal_response_callback(self, future):
+        """Handle MoveIt's accept/reject response to a dispatched arm goal.
+
+        If accepted, registers :meth:`result_callback` for the eventual
+        result. If rejected or an exception occurs, records the failure and
+        releases the movement wait event immediately.
+
+        Args:
+            future: Future containing MoveIt's goal handle.
+        """
         try:
             goal_handle = future.result()
             if not goal_handle.accepted:
@@ -654,10 +778,25 @@ class HardwareInterfaceClient(Node):
             self.arm_movement_finished.set()
 
     def arm_feedback_callback(self, feedback_msg):
+        """Log MoveIt's execution-state feedback for an in-progress arm goal.
+
+        Args:
+            feedback_msg: MoveIt action feedback message.
+        """
         feedback = feedback_msg.feedback
         self.get_logger().debug(f'[Feedback] MoveIt State: {feedback.state}')
 
     def result_callback(self, future):
+        """Record the outcome of an arm goal and release the waiting service call.
+
+        Stores the MoveIt error code, sets the success flag and a readable
+        message, and calls ``handle_moveit_failure`` on a failure. Always
+        returns the node to idle (unless faulted) and sets
+        ``arm_movement_finished``, so a service waiting on the move can continue.
+
+        Args:
+            future: Future holding the arm action's result.
+        """
         try:
             result = future.result().result
             error_code = result.error_code.val
@@ -689,6 +828,15 @@ class HardwareInterfaceClient(Node):
             self.arm_movement_finished.set()
 
     def gripper_response_callback(self, future):
+        """Handle the gripper action server's accept/reject response.
+
+        If accepted, registers :meth:`gripper_result_callback` for the
+        eventual result. If rejected or an exception occurs, records the
+        failure and releases the gripper wait event immediately.
+
+        Args:
+            future: Future containing the gripper action's goal handle.
+        """
         try:
             goal_handle = future.result()
             if not goal_handle.accepted:
@@ -706,11 +854,25 @@ class HardwareInterfaceClient(Node):
             self.gripper_movement_finished.set()
 
     def gripper_feedback_callback(self, feedback_msg):
+        """Log the gripper's current width while a gripper goal is in progress.
+
+        Args:
+            feedback_msg: Gripper action feedback message.
+        """
         feedback = feedback_msg.feedback
         current_width = round(feedback.position, 3)
         self.get_logger().debug(f'[Feedback] Gripper Width: {current_width}')
 
     def gripper_result_callback(self, future):
+        """Process the final result of a dispatched gripper action.
+
+        Treats either reaching the goal or stalling (fingers met resistance,
+        as against a real object) as success, updates the stored result, and
+        releases the gripper wait event.
+
+        Args:
+            future: Future containing the gripper action's result.
+        """
         try:
             result = future.result().result
             self.get_logger().info(
@@ -731,6 +893,14 @@ class HardwareInterfaceClient(Node):
             self.gripper_movement_finished.set()
 
 def main(args=None):
+    """Start the Kinova hardware interface ROS 2 node.
+
+    Initialises rclpy, creates the node, spins it on a multi-threaded
+    executor, and performs node and rclpy shutdown on exit.
+
+    Args:
+        args (list[str], optional): Command-line arguments passed to rclpy.
+    """
     rclpy.init(args=args)
     node = HardwareInterfaceClient()
 

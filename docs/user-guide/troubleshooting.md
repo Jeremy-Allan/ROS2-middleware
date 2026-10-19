@@ -1,4 +1,4 @@
-[Docs Home](README.md)
+[Docs Home](../README.md)
 
 # Troubleshooting
 
@@ -7,7 +7,7 @@
 | Symptom | Likely cause | Fix |
 |---|---|---|
 | `Package 'kinova_interface' not found` | Workspace not sourced, or build failed | Re-run `source ~/workspace/ros2_kortex_ws/install/setup.bash`; check `colcon build` output for errors above the summary line |
-| `Package 'kortex_bringup' not found` / `'kinova_gen3_lite_moveit_config' not found` | You didn't clone `ros2_kortex` into `src/`, or it failed to build | Re-check [Installation](installation.md); run `colcon build` (no `--packages-select`) from the workspace root |
+| `Package 'kortex_bringup' not found` / `'kinova_gen3_lite_moveit_config' not found` | You didn't clone `ros2_kortex` into `src/`, or it failed to build | Re-check [Installation](../installation/middleware-and-proxy.md); run `colcon build` (no `--packages-select`) from the workspace root |
 | Unresolved import errors for `kinova_interfaces.srv`/`.msg` | `kinova_interfaces` wasn't built before `kinova_interface`, or wasn't built at all | `colcon build --packages-select kinova_interfaces` first, then `kinova_interface`, then re-source |
 | `RuntimeError` on launch mentioning `robot_ip` | You set `use_fake_hardware:=false` without `robot_ip:=` | Add `robot_ip:=<your arm's IP>`, this is an intentional safety check, not a bug |
 
@@ -20,7 +20,7 @@
 | `Failed to parse JSON recipe string.` | Recipe JSON sent to `/execute_recipe` is malformed | Validate the JSON |
 | `No executable steps found or recipe failed to load` | Missing top-level `steps` key, or `steps` is empty | Confirm `steps` exists at the top level |
 | Edited a JSON config but nothing changed at runtime | `colcon build` copies configs into `install/`; you edited the `src/` copy after the last build | Rebuild, or use `colcon build --symlink-install` |
-| `Unknown action '<name>'` | The action isn't one of the ten in [Configuration](configuration.md) | Use a listed action |
+| `Unknown action '<name>'` | The action isn't one of the ten in [Configuration](../installation/configuration.md) | Use a listed action |
 
 ## Middleware motion / MoveIt errors
 
@@ -57,4 +57,4 @@ The full list of MoveIt messages is in `utils/robot.py`.
 - **Gripper controller mismatch on fake hardware:** a known bug in `kortex_bringup`'s fake-hardware path can cause it to spawn the wrong gripper controller. If you hit this in simulation only, manually spawn the correct one: `ros2 run controller_manager spawner gen3_lite_2f_gripper_controller`.
 - **`relative_move` fails right after launch:** it looks up the arm's current pose via TF before computing the target. If the TF tree hasn't fully come up yet, this can fail. Wait a few seconds, or run `home` first.
 
-Next: [Architecture](architecture.md)
+Next: [Architecture](../technical/architecture.md)

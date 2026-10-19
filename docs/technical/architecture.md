@@ -1,4 +1,4 @@
-[Docs Home](README.md)
+[Docs Home](../README.md)
 
 # Architecture
 
@@ -17,7 +17,7 @@ flowchart LR
 
 This is the quick-glance version. For the full detailed diagram, node by node with every service call labeled:
 
-![Full architecture diagram, node by node with every service call labeled](diagrams/architecture.png)
+![Full architecture diagram, node by node with every service call labeled](../diagrams/architecture.png)
 
 The proxy never calls a ROS 2 service directly. Every request goes out over the websocket to `rosbridge_server`, which translates it into a real service call against this middleware. Telemetry flows back the same way (the dashed path above), `rosbridge` subscribes to `/system/status` on the proxy's behalf and forwards messages back over the websocket.
 
@@ -25,7 +25,7 @@ The proxy never calls a ROS 2 service directly. Every request goes out over the 
 
 You don't need to be a ROS 2 expert, but these four words will come up constantly, so here's what they mean in plain English:
 
-- **Node**: a single running program. The middleware ships four of them, plus an optional vision node, see [Overview](overview.md).
+- **Node**: a single running program. The middleware ships four of them, plus an optional vision node, see [Overview](../overview.md).
 - **Topic**: a one-way broadcast channel. Publishers shout messages onto a topic; subscribers listen. Nobody waits for a reply. (Used here for the heartbeat/telemetry messages.)
 - **Service**: a request/response call, like a function call over the network. You call it, it does something, it replies. (Used here for almost everything: "give me coordinates for X," "move the arm," "execute this recipe.")
 - **Action**: like a service, but for things that take a while and report progress along the way. For example, "move the arm": MoveIt reports planning and monitoring progress before finally succeeding or failing. Only `hardware_interface_client.py` uses actions directly; everything else in the system only ever sees simple services.
@@ -111,7 +111,7 @@ flowchart TD
     PROXY --> PSRC["backend/, llm-proxy/, tui/, data/config/"]
 ```
 
-See [Installation](installation.md) for how this layout gets built up step by step.
+See [Installation](../installation/middleware-and-proxy.md) for how this layout gets built up step by step.
 
 ## Package layout reference
 

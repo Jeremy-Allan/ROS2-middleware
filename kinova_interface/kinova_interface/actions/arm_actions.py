@@ -1,3 +1,11 @@
+"""Shared context and service-call helpers for every recipe action.
+
+Defines ArmActions, which every action module in this package (basic.py,
+pickup.py, pour.py, ...) receives as its ``ctx`` argument: the hardware and
+environment mapping node's service clients, MoveIt query helpers (IK/FK/
+state validity/ACM), the planar-reach solver, and held-object state.
+"""
+
 import math
 import time
 from functools import partial
@@ -45,6 +53,16 @@ class ArmActions:
     (success, message), for JsonParserNode to dispatch recipe steps against."""
 
     def __init__(self, node):
+        """Create the shared action context for one JsonParserNode.
+
+        Creates every hardware/environment mapping/MoveIt service client
+        the action modules need, subscribes to joint state, and builds the
+        ``handlers`` dict used to dispatch recipe steps.
+
+        Args:
+            node (JsonParserNode): Owning node, used for its callback group
+                and to create clients and the joint-state subscription.
+        """
         self.node = node
         self.get_logger = node.get_logger
 
@@ -143,6 +161,11 @@ class ArmActions:
         return wait_for_future(future, service_name, self.get_logger(), timeout_sec)
 
     def _on_joint_state(self, msg):
+        """Cache the latest joint positions from a ``/joint_states`` message.
+
+        Args:
+            msg (JointState): Joint-state message with names and positions.
+        """
         self.latest_joint_positions = dict(zip(msg.name, msg.position))
 
     def wait_for_joint_crossing(self, joint_name, threshold, starting_value, timeout=5.0, poll_interval=0.005):
@@ -159,7 +182,7 @@ class ArmActions:
         HardwareInterfaceClient.FIRE_AND_FORGET_REJECTION_WINDOW_SEC
         before this code could even start timing, which for a short,
         fast fling could consume the whole motion before any release
-        logic ran at all (see docs/throw-motion-reference.md). Polling
+        logic ran at all (see docs/technical/motion-and-actions/throw.md). Polling
         the genuinely-async fling's real position sidesteps that
         entirely - it doesn't matter how long the fling call took to
         return (see call_joint_move_service_async), because this checks
@@ -210,6 +233,15 @@ class ArmActions:
             return None
 
     def get_relative_movement_vector(self, movement_name):
+        """Query the environment mapping node for a named relative-movement offset.
+
+        Args:
+            movement_name (str): Movement identifier from
+                ``relative_movement.json``.
+
+        Returns:
+            dict or None: ``{'x', 'y', 'z'}`` offset, or None on failure.
+        """
         req = GetRelativeMovement.Request()
         req.move_id = movement_name
 
@@ -222,6 +254,14 @@ class ArmActions:
             return None
 
     def get_orientation_preset(self, preset_name):
+        """Query the environment mapping node for a named orientation preset.
+
+        Args:
+            preset_name (str): Preset name from ``orientation_presets.json``.
+
+        Returns:
+            dict or None: ``{'roll', 'pitch', 'yaw'}``, or None on failure.
+        """
         req = GetOrientationPreset.Request()
         req.preset_name = preset_name
 
@@ -323,7 +363,7 @@ class ArmActions:
         precedence over a blanket default, so setting only the default
         (an earlier version of this method) silently had no effect and
         let a real push fail with INVALID_MOTION_PLAN (see
-        docs/push-motion-reference.md).
+        docs/technical/motion-and-actions/push.md).
 
         Scoped to just this one object, not the whole matrix, so the
         table and every other object are still checked normally in the
@@ -414,7 +454,7 @@ class ArmActions:
 
     # Wrist held level/neutral for a single-plane reach (push, and
     # designed to be reused for thrust) - matches what was actually
-    # demonstrated (see docs/push-motion-reference.md). Combined with a
+    # demonstrated (see docs/technical/motion-and-actions/push.md). Combined with a
     # fixed joint_1 (facing the target), the whole reach stays within one
     # vertical plane - only the shoulder/elbow move.
     _PLANAR_REACH_WRIST = (0.0, 0.0, 0.0)
@@ -430,7 +470,7 @@ class ArmActions:
         target_z), with joint_1 fixed at base_yaw and the wrist fixed
         level (_PLANAR_REACH_WRIST) - the whole reach stays in a single
         vertical plane containing that bearing, matching a manually
-        demonstrated push (see docs/push-motion-reference.md) and
+        demonstrated push (see docs/technical/motion-and-actions/push.md) and
         designed to generalize to 'thrust' too.
 
         Uses Newton-Raphson on (radial distance from the base, height)
@@ -438,7 +478,7 @@ class ArmActions:
         unknowns and a smooth forward-kinematics function, this converges
         to near-exact precision from a reasonable seed - a general IK
         search was tried first and found unreliable for exactly this kind
-        of small planar reach (see docs/push-motion-reference.md for the
+        of small planar reach (see docs/technical/motion-and-actions/push.md for the
         verified failures that ruled it out).
 
         Returns (joint_2, joint_3, achieved_xyz, position_error), or None
@@ -454,6 +494,7 @@ class ArmActions:
         eps = 1e-3
 
         def radius_and_height(s, e):
+            """FK shoulder/elbow angles (s, e) to (radial distance, height), or (None, None) on failure."""
             pos = self.compute_fk([base_yaw, s, e, *self._PLANAR_REACH_WRIST])
             if pos is None:
                 return None, None
@@ -493,6 +534,14 @@ class ArmActions:
         return {'success': response.success, 'message': response.message}
 
     def call_home_service(self, motion_params=None):
+        """Call hardware_interface_client's home-arm service and wait for the result.
+
+        Args:
+            motion_params: Optional MotionParams; defaults to full speed.
+
+        Returns:
+            dict or None: ``{'success', 'message'}``, or None on failure.
+        """
         req = HomeArm.Request()
         req.motion_params = motion_params if motion_params is not None else MotionParams()
         response = call_service(self.home_client, req, '/kinova_hardware_client/home_arm', self.get_logger(), timeout_sec=self.arm_call_timeout)
@@ -500,6 +549,21 @@ class ArmActions:
         return self._service_result(response)
 
     def call_move_service(self, x, y, z, has_orientation=False, roll=0.0, pitch=0.0, yaw=0.0, motion_params=None):
+        """Call hardware_interface_client's Cartesian move service and wait for the result.
+
+        Args:
+            x (float): Target X position in ``BASE_FRAME``.
+            y (float): Target Y position in ``BASE_FRAME``.
+            z (float): Target Z position in ``BASE_FRAME``.
+            has_orientation (bool): Whether to include a fixed orientation.
+            roll (float): Target roll angle in radians.
+            pitch (float): Target pitch angle in radians.
+            yaw (float): Target yaw angle in radians.
+            motion_params: Optional MotionParams; defaults to full speed.
+
+        Returns:
+            dict or None: ``{'success', 'message'}``, or None on failure.
+        """
         req = MoveArm.Request()
         req.target_position.x = x
         req.target_position.y = y
@@ -515,6 +579,20 @@ class ArmActions:
         return self._service_result(response)
 
     def call_relative_move_service(self, vx, vy, vz, roll_delta=0.0, pitch_delta=0.0, yaw_delta=0.0, motion_params=None):
+        """Call hardware_interface_client's relative move service and wait for the result.
+
+        Args:
+            vx (float): X offset from the current tool position.
+            vy (float): Y offset from the current tool position.
+            vz (float): Z offset from the current tool position.
+            roll_delta (float): Roll offset from the current orientation.
+            pitch_delta (float): Pitch offset from the current orientation.
+            yaw_delta (float): Yaw offset from the current orientation.
+            motion_params: Optional MotionParams; defaults to full speed.
+
+        Returns:
+            dict or None: ``{'success', 'message'}``, or None on failure.
+        """
         req = RelativeMove.Request()
         req.vx = vx
         req.vy = vy
@@ -529,6 +607,14 @@ class ArmActions:
         return self._service_result(response)
 
     def call_move_gripper_service(self, position):
+        """Call hardware_interface_client's gripper service and wait for the result.
+
+        Args:
+            position (float): Target gripper position.
+
+        Returns:
+            dict or None: ``{'success', 'message'}``, or None on failure.
+        """
         req = MoveGripper.Request()
         req.position = position
         response = call_service(self.move_gripper_client, req, '/kinova_hardware_client/move_gripper', self.get_logger(), timeout_sec=self.gripper_call_timeout)
@@ -573,7 +659,7 @@ class ArmActions:
         returns at all, so for a short, fast fling, the entire motion
         could finish before any release-timing code even started
         running - the object would still be gripped when the arm had
-        already stopped (see docs/throw-motion-reference.md). Not
+        already stopped (see docs/technical/motion-and-actions/throw.md). Not
         waiting for any response at all means the caller can start
         reacting to the arm's real, live position (see
         wait_for_joint_crossing) immediately after sending the goal,
@@ -632,6 +718,20 @@ class ArmActions:
             return False
 
     def update_object_pose(self, obj_id, x, y, z, orientation=None):
+        """Call the environment mapping node to update an object's stored pose.
+
+        Args:
+            obj_id (str): Identifier of the object to update.
+            x (float): New X position.
+            y (float): New Y position.
+            z (float): New Z position.
+            orientation (dict, optional): New ``{'x', 'y', 'z', 'w'}``
+                quaternion. If omitted, the identity quaternion is sent,
+                which the environment mapping node treats as "keep existing".
+
+        Returns:
+            bool: True if the update succeeded, otherwise False.
+        """
         req = UpdateObjectPose.Request()
         req.object_id = obj_id
         req.pose.position.x = x
@@ -730,6 +830,7 @@ class ArmActions:
         solvable, or None if not even the minimum search distance is
         reachable."""
         def feasible(distance):
+            """True if a single-plane reach to `distance` in `direction` is solvable and collision-free."""
             offset = resolve_direction_offset(origin['x'], origin['y'], direction, distance)
             if offset is None:
                 return False

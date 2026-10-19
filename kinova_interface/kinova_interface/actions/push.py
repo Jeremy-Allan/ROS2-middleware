@@ -1,4 +1,4 @@
-"""'push' recipe action (see docs/push-motion-reference.md)."""
+"""'push' recipe action (see docs/technical/motion-and-actions/push.md)."""
 import math
 from typing import TYPE_CHECKING
 
@@ -15,7 +15,7 @@ if TYPE_CHECKING:
 def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     """Slide an object to a destination by sustained contact, without
     ever grasping or lifting it - captured from a manual RViz
-    demonstration (see docs/push-motion-reference.md): face the
+    demonstration (see docs/technical/motion-and-actions/push.md): face the
     object (joint_1 only), then move only the shoulder/elbow
     (joint_2/joint_3) - the wrist and base stay fixed the whole time,
     so the entire push happens in a single vertical plane, not a
@@ -33,7 +33,7 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     to the object's own bearing; this one only ever considers the
     single, deliberate plane facing the object, matching the manual
     demonstration this was built from (see
-    docs/push-motion-reference.md for the full history, including why
+    docs/technical/motion-and-actions/push.md for the full history, including why
     a general IK/6-DOF search and a plan-only pre-check were both
     tried and ruled out first).
 
@@ -94,10 +94,10 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     # exact registered center, which the pre-check would otherwise
     # (correctly) reject - verified directly that the only contact at
     # that pose is (gripper, target object), nothing else (see
-    # docs/push-motion-reference.md), so exempting just this object
+    # docs/technical/motion-and-actions/push.md), so exempting just this object
     # doesn't hide a real problem with anything else in the scene.
     # This intentionally doesn't try to approach a bigger object's
-    # near face instead - see docs/push-motion-reference.md for why
+    # near face instead - see docs/technical/motion-and-actions/push.md for why
     # that's a known, accepted limitation for now: it may push a
     # larger object slightly off from how a human would naturally
     # grip it, favoring keeping the single-plane motion simple.

@@ -1,3 +1,9 @@
+"""Shared pure math helpers: orientations, frame transforms, and object/collision geometry.
+
+No ROS 2 node or service dependencies, these are plain functions used by
+ArmActions and the recipe action modules.
+"""
+
 import math
 
 import numpy as np

@@ -8,7 +8,7 @@ Moves to a grid of points with every orientation and prints one line per move:
   'BAD 14.3 P' moved, but ended up in the wrong orientation or position
   'FAIL (..)' couldn't get there, with the reason (often just out of reach)
 --ik-only only checks reachability ('ik ok' / 'no IK') and never moves.
-See docs/testing.md for how to read the results.
+See docs/technical/testing.md for how to read the results.
 
 Usage (the middleware must already be running):
     ros2 run kinova_interface check_orientations.py [--ik-only] [--speed 0.2] [--tolerance-deg 6]
@@ -52,6 +52,22 @@ def _orientations():
 
 
 def _check(actions, tf_buffer, x, y, z, target, args):
+    """Check one position and orientation, and describe the result.
+
+    Args:
+        actions (ArmActions): Action context used to call the move services.
+        tf_buffer (Buffer): TF buffer for reading where the gripper ended up.
+        x (float): Target x in ``base_link``, metres.
+        y (float): Target y in ``base_link``, metres.
+        z (float): Target z in ``base_link``, metres.
+        target (Rotation): Orientation to check.
+        args (argparse.Namespace): Parsed options (``ik_only``, ``speed``,
+            ``tolerance_deg``).
+
+    Returns:
+        tuple[str, bool]: The text for the results line, and whether the
+        check passed.
+    """
     if args.ik_only:
         if actions.find_ik_solution(x, y, z, target) is None:
             return 'no IK', False
@@ -75,6 +91,10 @@ def _check(actions, tf_buffer, x, y, z, target, args):
 
 
 def main():
+    """Run the orientation check over the grid and exit with the result.
+
+    Exits 0 only if every position and orientation passed.
+    """
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument('--ik-only', action='store_true', help='only check IK reachability, never move the arm')
     parser.add_argument('--speed', type=float, default=0.2, help='velocity/acceleration scale, 0.0-1.0')

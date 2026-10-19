@@ -44,6 +44,18 @@ TOOL_APPROACH = np.array([0.0, 0.0, 1.0])
 ObjectGrasp = tuple[np.ndarray, np.ndarray, float]
 
 class Waypoint(NamedTuple):
+    """One stop on a pick or place path, for ``tool_frame``.
+
+    Attributes:
+        name (str): Label used in plans and failure messages (e.g. ``pre-grasp``).
+        position (np.ndarray): Target ``tool_frame`` position in ``base_link``.
+        straight (bool): True to reach it in a straight line, False for any
+            collision-free path.
+        gripper (Optional[float]): Gripper position to start this move with, if
+            it changes just before it.
+        upright (bool): True to keep the gripper's tilt the whole way, for
+            carrying something that mustn't tip.
+    """
     name: str
     position: np.ndarray            # tool_frame position
     straight: bool                  # reach it in a straight line, rather than any collision-free path
@@ -53,6 +65,15 @@ class Waypoint(NamedTuple):
 
 @dataclass
 class GraspCandidate:
+    """One way to grab an object: where the gripper goes, and how it points.
+
+    Attributes:
+        style (str): ``'top'`` or ``'side'``.
+        rotation (Rotation): ``tool_frame`` orientation in the base frame.
+        grasp (np.ndarray): ``tool_frame`` position at the grasp.
+        pre_grasp (np.ndarray): Position to come in from before the grasp.
+        lift (np.ndarray): Position to raise the object to after closing.
+    """
     style: str              # 'top' or 'side'
     rotation: Rotation      # tool_frame orientation in the base frame
     grasp: np.ndarray       # tool_frame position at the grasp
@@ -61,17 +82,40 @@ class GraspCandidate:
 
     @property
     def waypoints(self) -> list[Waypoint]:
+        """The moves for this grasp, in order.
+
+        Returns:
+            list[Waypoint]: ``pre-grasp`` (any collision-free path), then ``grasp``
+            and ``lift`` (both straight lines).
+        """
         return [Waypoint('pre-grasp', self.pre_grasp, straight=False),
                 Waypoint('grasp', self.grasp, straight=True),
                 Waypoint('lift', self.lift, straight=True)]
 
 
 def object_centre(pose: dict) -> np.ndarray:
+    """Get an object pose's position as an array.
+
+    Args:
+        pose (dict): Pose with ``position`` holding ``x``, ``y`` and ``z``.
+
+    Returns:
+        np.ndarray: The object's centre as ``[x, y, z]``.
+    """
     position = pose['position']
     return np.array([position['x'], position['y'], position['z']], dtype=float)
 
 
 def object_rotation(pose: dict) -> Rotation:
+    """Get an object pose's orientation as a rotation.
+
+    Args:
+        pose (dict): Pose with ``orientation`` holding quaternion ``x``, ``y``,
+            ``z`` and ``w``.
+
+    Returns:
+        Rotation: The object's orientation.
+    """
     orientation = pose['orientation']
     return Rotation.from_quat([orientation['x'], orientation['y'], orientation['z'], orientation['w']])
 
@@ -91,6 +135,16 @@ def half_extent(shape: dict, rotation: Rotation, axis: int = Z) -> float:
 
 
 def _box_grasps(dimensions: list[float]) -> Iterator[ObjectGrasp]:
+    """Every way to grab a box, in the box's own frame.
+
+    Args:
+        dimensions (list[float]): Box size along its X, Y and Z.
+
+    Yields:
+        tuple: ``(approach, closing, width)`` for each face to come in from,
+        each axis to close across and each side of it. ``width`` is the box
+        size the fingers must span.
+    """
     axes = np.eye(3)  # the box's own X, Y, Z
     for approach_axis in range(3):
         for face in BOTH_WAYS:
@@ -105,6 +159,18 @@ def _box_grasps(dimensions: list[float]) -> Iterator[ObjectGrasp]:
 
 
 def _cylinder_grasps(dimensions: list[float], step_deg: float) -> Iterator[ObjectGrasp]:
+    """Every way to grab a cylinder, in the cylinder's own frame.
+
+    Args:
+        dimensions (list[float]): Cylinder height and radius, indexed by
+            ``SolidPrimitive.CYLINDER_HEIGHT`` and ``CYLINDER_RADIUS``.
+        step_deg (float): Angle between the sampled grasps around the axis.
+
+    Yields:
+        tuple: ``(approach, closing, width)`` for end-on grasps down onto
+        either end, and for grasps from the curved side. ``width`` is always
+        the diameter.
+    """
     diameter = 2 * dimensions[SolidPrimitive.CYLINDER_RADIUS]
     # Sample angles around the cylinder's axis (its own Z)
     for angle in np.radians(np.arange(0.0, 360.0, step_deg)):
@@ -244,6 +310,19 @@ def contains_xy(target_info: dict, x: float, y: float) -> bool:
 
 @dataclass
 class PlaceCandidate:
+    """One way to put the held object down: where the gripper goes, and where the object ends up.
+
+    Attributes:
+        yaw_deg (float): Turn from the pickup yaw, about vertical.
+        rotation (Rotation): ``tool_frame`` orientation, the pickup one turned
+            about vertical.
+        hover (np.ndarray): ``tool_frame`` position above the spot.
+        release (np.ndarray): ``tool_frame`` position when the gripper opens.
+        back_off (np.ndarray): ``tool_frame`` position to retreat to.
+        object_centre (np.ndarray): Where the object's centre ends up.
+        object_rotation (Rotation): The object's orientation once placed.
+        keep_upright (bool): True to carry it to the hover without tipping it.
+    """
     yaw_deg: float              # turn from the pickup yaw
     rotation: Rotation          # tool_frame orientation, the pickup one turned about vertical
     hover: np.ndarray           # tool_frame positions, in order
@@ -258,6 +337,13 @@ class PlaceCandidate:
         # Pickup in reverse: down to the release in a straight line, then back out along the approach.
         # The gripper opens before backing off, so that's planned with it open (an open finger can hit
         # something next to the object).
+        """The moves for this placement, in order.
+
+        Returns:
+            list[Waypoint]: ``hover`` (any path, upright if ``keep_upright``), then
+            ``release`` and ``back-off`` (both straight lines). The back-off starts
+            with the gripper open.
+        """
         return [Waypoint('hover', self.hover, straight=False, upright=self.keep_upright),
                 Waypoint('release', self.release, straight=True),
                 Waypoint('back-off', self.back_off, straight=True, gripper=GRIPPER_OPEN)]

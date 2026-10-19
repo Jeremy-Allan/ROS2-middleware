@@ -1,3 +1,9 @@
+"""ROS 2 node that orchestrates recipe execution.
+
+Loads a recipe (from a file at startup, or dynamically via a service call),
+runs its steps one at a time through ArmActions' registered handlers, and
+reports progress and failures through telemetry and the recipe log.
+"""
 import rclpy
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup, MutuallyExclusiveCallbackGroup
@@ -16,10 +22,24 @@ from kinova_interface.actions.arm_actions import ArmActions
 class JsonParser:
     """Helper class to handle JSON loading."""
     def __init__(self, node_context):
+        """Initialise the parser.
+
+        Args:
+            node_context (Node): ROS 2 node used for logging.
+        """
         self.recipe = None
         self.node = node_context # Reference to the ROS 2 node for logging
 
     def load_recipe_from_file(self, recipe_path):
+        """Load a recipe from a JSON file on disk.
+
+        Args:
+            recipe_path (str): Path to the recipe JSON file.
+
+        Returns:
+            bool: True if the file was read and parsed successfully,
+                otherwise False.
+        """
         try:
             with open(recipe_path, 'r') as f:
                 self.recipe = json.load(f)
@@ -29,6 +49,14 @@ class JsonParser:
             return False
 
     def load_recipe_from_service(self, recipe_str):
+        """Load a recipe from a JSON string, as received by a service call.
+
+        Args:
+            recipe_str (str): JSON-encoded recipe.
+
+        Returns:
+            bool: True if the string was parsed successfully, otherwise False.
+        """
         try:
             self.recipe = json.loads(recipe_str)
             return True
@@ -37,6 +65,12 @@ class JsonParser:
             return False
 
     def get_recipe_steps(self):
+        """Return the currently loaded recipe's steps.
+
+        Returns:
+            list: The recipe's steps, or an empty list if no recipe is
+                loaded.
+        """
         if not self.recipe:
             return []
         return self.recipe.get('steps', [])
@@ -52,6 +86,14 @@ class JsonParserNode(Node):
     STEP_SETTLE_DELAY_SEC = 0.5
 
     def __init__(self):
+        """Create the action context, parser, telemetry and services, and queue any startup recipe.
+
+        Creates ``/execute_recipe`` and ``/reset_environment``. If the ``recipe``
+        parameter names a file (absolute, or relative to the package's
+        ``recipes`` folder), loads it and runs it once from a timer two seconds
+        later. If it can't be loaded, logs an error and the node waits for
+        service calls.
+        """
         super().__init__('json_parser_node')
 
         # Reentrant group for general service clients to allow multiple responses
@@ -104,6 +146,11 @@ class JsonParserNode(Node):
         self.publish_status()
 
     def publish_status(self):
+        """Publish the node's current telemetry status.
+
+        The published status includes the node name, current state, status
+        message, and whether the most recent command was successful.
+        """
         msg = ExtendedStatus()
         msg.node_name = self.get_name()
         msg.state = self.current_state
@@ -244,6 +291,11 @@ class JsonParserNode(Node):
         return True
 
 def main():
+    """Start the JSON parser ROS 2 node.
+
+    Initialises rclpy, creates the node, spins it on a multi-threaded
+    executor, and performs node and rclpy shutdown on exit.
+    """
     rclpy.init()
     node = JsonParserNode()
 

@@ -1,8 +1,8 @@
-[Docs Home](README.md)
+[Docs Home](../README.md)
 
-# Running the System
+# Quickstart
 
-Running the full pipeline needs two terminals: the middleware, then the proxy. If you use a local LLM, `ollama serve` runs in a third (see [Installation](installation.md)).
+Running the full pipeline needs two terminals: the middleware, then the proxy. If you use a local LLM, `ollama serve` runs in a third (see [Installation](../installation/middleware-and-proxy.md)).
 
 ## Terminal 1: start the middleware
 
@@ -36,7 +36,7 @@ To also start the computer vision stack (Kinect driver, vision node and camera c
 ros2 launch kinova_interface robot.launch.py enable_CV:=true
 ```
 
-This starts the vision node, which serves `/vision/snapshot`. Each call to it adds the detected objects to the scene. See the [computer_vision README](../computer_vision/README.md).
+This starts the vision node, which serves `/vision/snapshot`. Each call to it adds the detected objects to the scene. See the [computer_vision README](https://github.com/Jeremy-Allan/ROS2-middleware/blob/main/computer_vision/README.md).
 
 Leave this terminal running.
 
@@ -112,4 +112,4 @@ ros2 service list
 
 `Ctrl+C` each terminal. Stopping the proxy first avoids reconnect messages in its UI.
 
-Next: [Configuration](configuration.md)
+Next: [Configuration](../installation/configuration.md)

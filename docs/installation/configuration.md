@@ -1,4 +1,4 @@
-[Docs Home](README.md)
+[Docs Home](../README.md)
 
 # Configuration
 
@@ -124,10 +124,10 @@ Steps execute strictly in array order, one at a time, and execution stops immedi
 | `"gripper"` | `"position": <number>` | (none) | Sends the gripper to that position |
 | `"pickup"` | `"target": "<object_name>"` | `grasp_style` (`auto`, `top`, `side`) | Puts back any other held object first, plans the whole approach, grasp and lift before moving, then closes the gripper and attaches the object. `auto` picks top or side from the object's shape. A later `pour` or `thrust` forces a side grasp, and a conflicting `grasp_style` fails the step |
 | `"dropoff"` | (none) | `target`, `destination`, `direction` + `distance`, `place_offset` | Places the held object with the grasp it was picked up with: hover above the spot, straight down to just above the surface, open, then back away along the approach. The spot is the centre of `destination`'s top, or where the object was picked up if there's no `destination`. See below. |
-| `"pour"` | (none) | `target` (defaults to the held object), `destination`, `direction`, `distance`, `lift_height`, `tilt_angle`, `duration`, `speed` | Lifts the held object, optionally moves above a destination/direction, tilts `joint_6` to pour, then returns level. See [pour-motion-reference](pour-motion-reference.md) |
-| `"push"` | `"target": "<object_name>"` | `destination` or `direction` (one required), `distance`, `close_position`, `speed` | Slides an object by sustained contact in a single vertical plane. See [push-motion-reference](push-motion-reference.md) |
+| `"pour"` | (none) | `target` (defaults to the held object), `destination`, `direction`, `distance`, `lift_height`, `tilt_angle`, `duration`, `speed` | Lifts the held object, optionally moves above a destination/direction, tilts `joint_6` to pour, then returns level. See [pour-motion-reference](../technical/motion-and-actions/pour.md) |
+| `"push"` | `"target": "<object_name>"` | `destination` or `direction` (one required), `distance`, `close_position`, `speed` | Slides an object by sustained contact in a single vertical plane. See [push-motion-reference](../technical/motion-and-actions/push.md) |
 | `"thrust"` | (none) | `target` (defaults to the held object), `destination` or `direction` (one required), `distance`, `lift_height`, `speed` | Raises the held object, faces the destination and extends toward it |
-| `"throw"` | (none) | `target` (defaults to the held object), `destination` or `direction` (one required), `distance`, `open_position`, `speed` | Winds up and flings the held object, releasing on a live `joint_5` trigger. See [throw-motion-reference](throw-motion-reference.md) |
+| `"throw"` | (none) | `target` (defaults to the held object), `destination` or `direction` (one required), `distance`, `open_position`, `speed` | Winds up and flings the held object, releasing on a live `joint_5` trigger. See [throw-motion-reference](../technical/motion-and-actions/throw.md) |
 
 **`orientation` (optional, `move_arm`):** a preset name from `movements_and_orientations.yaml`'s `orientations`, resolved via `/get_orientation_preset`, never raw angles, that's a deliberate anti-hallucination choice so the LLM never has to produce numeric roll/pitch/yaw itself. It's the absolute target orientation. If omitted, the move happens with no orientation constraint and MoveIt picks whatever orientation it wants. `relative_move` is a pure translation and ignores `orientation` (with a warning in the log).
 
@@ -139,4 +139,4 @@ Steps execute strictly in array order, one at a time, and execution stops immedi
 
 The LLM provider, system prompt and output schema live in the proxy repo under `data/config/`. See its [README](https://github.com/paul-isit/embodied-ai-proxy#configuring-the-llm).
 
-Next: [Testing](testing.md)
+Next: [Testing](../technical/testing.md)

@@ -874,7 +874,7 @@ def test_set_collision_allowed_adds_new_object_row_and_column(actions):
     explicit row/column for a not-yet-known object, allowed against every
     existing link - not just a 'default' fallback entry (verified not to
     override MoveIt's own auto-populated explicit disallow entries - see
-    docs/push-motion-reference.md)."""
+    docs/technical/motion-and-actions/push.md)."""
 
     actions.get_planning_scene_client.wait_for_service = MagicMock(return_value=True)
     gps_response = _mock_planning_scene_response(
@@ -1326,7 +1326,7 @@ def test_thrust_raises_spins_and_extends(actions):
     direction (joint_1 only, shoulder/elbow held from the raise), then
     extend toward the destination (shoulder/elbow only, seeded at the
     spin position) - reusing the exact same single-plane mechanism as
-    push (see docs/push-motion-reference.md)."""
+    push (see docs/technical/motion-and-actions/push.md)."""
 
     actions.held_object = "red_cube"
     origin_x, origin_y, origin_z = 0.3, 0.1, 0.02
@@ -1796,7 +1796,7 @@ def test_push_allows_target_object_contact_before_checking(actions):
     isn't rejected as if it were an unrelated collision. Verified this
     matters for real: a plain box, much bigger than the small test
     block this was first built against, needs exactly this (see
-    docs/push-motion-reference.md)."""
+    docs/technical/motion-and-actions/push.md)."""
 
     target_info = {
         "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},

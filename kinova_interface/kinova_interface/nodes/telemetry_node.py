@@ -1,3 +1,11 @@
+"""ROS 2 node that aggregates per-node telemetry into one system status.
+
+Subscribes to every node's heartbeat, publishes a worst-case-wins aggregate
+every 0.5s, hosts the fault-reset service, and automatically reconfigures
+and reactivates the hardware fault controller if it detects the driver's
+known startup race condition.
+"""
+
 import rclpy
 from rclpy.node import Node
 from rclpy.duration import Duration
@@ -12,7 +20,20 @@ import threading
 from controller_manager_msgs.srv import ConfigureController, SwitchController
 
 class TelemetryNode(Node):
+    """Aggregates per-node telemetry and hosts fault-reset/self-healing.
+
+    Pure aggregation: this node doesn't move the robot or hold any
+    environment state, it only watches the other nodes' heartbeats and
+    reports a worst-case-wins summary.
+    """
+
     def __init__(self):
+        """Initialise the telemetry node.
+
+        Creates the heartbeat subscriber, the aggregated-status publisher
+        and its 0.5s timer, the ``/system/reset_fault`` service, and the
+        controller-manager clients used for fault-controller self-healing.
+        """
         super().__init__('telemetry_node')
         
         # Subscriber for individual node reports
@@ -68,6 +89,15 @@ class TelemetryNode(Node):
         self.get_logger().info("Telemetry & Diagnostics Node Online - Monitoring system status...")
 
     def handle_reset_fault(self, request, response):
+        """Forward a ``/system/reset_fault`` request to the real Kortex driver.
+
+        Args:
+            request (Trigger.Request): Empty trigger request.
+            response (Trigger.Response): Service response to populate.
+
+        Returns:
+            Trigger.Response: The populated service response.
+        """
         self.get_logger().info("External fault reset requested via Telemetry Node. Forwarding to hardware driver...")
         
         if not self.reset_client.wait_for_service(timeout_sec=2.0):
@@ -118,6 +148,13 @@ class TelemetryNode(Node):
         threading.Thread(target=self._activate_fault_controller_thread, daemon=True).start()
 
     def _activate_fault_controller_thread(self):
+        """Configure and activate fault_controller on a background thread.
+
+        Runs the two controller_manager calls (configure, then switch to
+        active) synchronously on its own thread so this doesn't block the
+        node's executor, and clears ``activating_fault_controller`` when
+        done (on success, failure, or a caught exception).
+        """
         try:
             self.get_logger().info("Self-healing: Waiting for /controller_manager services...")
             
@@ -223,6 +260,14 @@ class TelemetryNode(Node):
         self.pub.publish(summary)
 
 def main(args=None):
+    """Start the telemetry ROS 2 node.
+
+    Initialises rclpy, creates the node, spins it on a multi-threaded
+    executor, and performs node and rclpy shutdown on exit.
+
+    Args:
+        args (list[str], optional): Command-line arguments passed to rclpy.
+    """
     rclpy.init(args=args)
     node = TelemetryNode()
     executor = MultiThreadedExecutor(num_threads=10) # TODO (pulkit): remove hardcoded thread count

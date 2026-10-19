@@ -1,0 +1,102 @@
+site_name: Kinova Middleware Manual
+site_description: User manual and API reference for the Kinova Gen3 Lite ROS 2 middleware and its paired LLM proxy.
+repo_url: https://github.com/Jeremy-Allan/ROS2-middleware
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+nav:
+  - Home:
+      - Documentation map: README.md
+      - Overview: overview.md
+  - User Guide:
+      - Quickstart: user-guide/quickstart.md
+      - Command reference: user-guide/command-reference.md
+      - Troubleshooting: user-guide/troubleshooting.md
+      - Demos: user-guide/demos.md
+  - Installation:
+      - Requirements: installation/requirements.md
+      - Non-native Ubuntu: installation/non-native-ubuntu.md
+      - Kinova drivers: installation/kinova-drivers.md
+      - Middleware and proxy: installation/middleware-and-proxy.md
+      - Camera and calibration: installation/camera-and-calibration.md
+      - Simulation vs real arm: installation/simulation-vs-real.md
+      - Configuration: installation/configuration.md
+  - Technical:
+      - Architecture: technical/architecture.md
+      - Middleware nodes: technical/middleware-nodes.md
+      - Motion and actions:
+          - Overview: technical/motion-and-actions/index.md
+          - Pour: technical/motion-and-actions/pour.md
+          - Push: technical/motion-and-actions/push.md
+          - Throw: technical/motion-and-actions/throw.md
+      - Proxy (from the proxy repo): technical/proxy/readme.md
+      - Computer vision: technical/computer-vision.md
+      - Safety and contracts: technical/safety-and-contracts.md
+      - Kinova drivers and APIs: technical/kinova-drivers-and-apis.md
+      - Testing: technical/testing.md
+      - Contributing: technical/contributing.md
+      - API reference:
+          - Middleware nodes: technical/api/nodes.md
+          - Middleware actions: technical/api/actions.md
+          - Middleware utils: technical/api/utils.md
+          - Proxy backend: technical/proxy/api/backend.md
+          - Proxy LLM proxy: technical/proxy/api/llm-proxy.md
+          - Proxy TUI: technical/proxy/api/tui.md
+          - Proxy shared: technical/proxy/api/shared.md
+
+theme:
+  name: material
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - search.suggest
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - tables
+  - toc:
+      permalink: true
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          # The outer kinova_interface/ is the ROS 2 package directory; the
+          # inner kinova_interface/kinova_interface/ is the actual Python
+          # package (has __init__.py). Putting the OUTER dir on the path is
+          # what makes "kinova_interface.nodes.xyz" resolvable, putting the
+          # inner one on the path instead resolves "nodes.xyz" with no
+          # top-level package name, which mkdocstrings can't match against
+          # "kinova_interface.nodes.xyz" in the docs/technical/api/*.md pages.
+          # griffe reads this via static analysis, it does not import or
+          # execute the code, so this works in CI without ROS 2 or any of
+          # kinova_interface's own runtime dependencies (rclpy, MoveIt
+          # messages, etc.) installed.
+          paths: [kinova_interface]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            heading_level: 2
+            merge_init_into_class: true

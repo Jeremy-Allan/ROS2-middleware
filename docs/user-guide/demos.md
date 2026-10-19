@@ -1,4 +1,4 @@
-[Docs Home](README.md)
+[Docs Home](../README.md)
 
 # Video Demos
 
@@ -13,4 +13,4 @@ Short screen recordings of each feature in action, for anyone who'd rather watch
 | Editing the coordinate dictionary | Adding a new named object and asking for it in plain English | (add link) |
 | Physical hardware run | Same command running on the real Gen3 Lite arm | (add link) |
 
-[Docs Home](README.md)
+[Docs Home](../README.md)
