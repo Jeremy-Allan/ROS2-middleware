@@ -97,7 +97,10 @@ to about ±154 degrees), so the code uses the mirrored shape: `joint_2` and
 FK confirms it's an exact mirror: same heights, x negated, so the gripper
 winds up behind the base and finishes on the target's side, within about
 3 degrees of `joint_1`'s bearing. `joint_5` sweeps exactly as before, so
-the release trigger (`THROW_RELEASE_JOINT5`) is unchanged.
+the mirror alone didn't change the release trigger (`THROW_RELEASE_JOINT5`).
+Testing afterwards still found the release a little late, so it was moved
+from -35 to -25 degrees (from ~75% to ~66% of the way through `joint_5`'s
+sweep from wind-up to fling end).
 
 ## Flinging through other objects
 

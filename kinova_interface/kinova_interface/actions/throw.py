@@ -29,10 +29,11 @@ THROW_FLING_POSE = [math.radians(v) for v in [-32.63, 34.26, -99.29, -63.25, 0.0
 # manual demo (see docs/technical/motion-and-actions/throw.md), but in-person
 # testing on the real arm found that released too late - visibly near
 # the very end of the fling rather than clearly mid-swing - so this has
-# been nudged earlier to -35.0 deg (~75% through the joint_5 sweep from
-# wind-up to fling-end, vs. ~82% before). Still empirical, not computed -
-# further tuning may still be needed on real hardware.
-THROW_RELEASE_JOINT5 = math.radians(-35.0)
+# been nudged earlier twice: to -35.0 deg (~75% through the joint_5 sweep
+# from wind-up to fling-end, vs. ~82%), then, still a bit late after the
+# swing was mirrored to face the target, to -25.0 deg (~66%). Still
+# empirical, not computed - further tuning may still be needed.
+THROW_RELEASE_JOINT5 = math.radians(-25.0)
 # Extra time allowed on top of the fling's own planned duration, for
 # controller dispatch/startup jitter between firing execution and the
 # arm actually beginning to move.
