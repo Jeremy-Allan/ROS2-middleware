@@ -1,6 +1,6 @@
 # Middleware nodes
 
-The `kinova_interface` package provides four nodes. Message and service definitions are in [ROS interfaces](ros-interfaces.md).
+The `kinova_interface` package contains four nodes. See [ROS interfaces](ros-interfaces.md) for interface definitions.
 
 ![Services and actions between the nodes: rosbridge_server calls json_parser_node, which calls environment_mapping_node, kinova_hardware_client and MoveIt 2. kinova_hardware_client calls MoveIt 2 and the gripper controller.](../assets/diagrams/node-services.svg)
 
@@ -25,13 +25,11 @@ Receives a recipe, runs its steps in order and reports the result.
 
 **Behaviour**
 
-- Runs one recipe at a time. A recipe needs a non-empty `steps` list. `recipe_name` is optional.
-- Each step is `{"action": ..., "parameters": {...}}`. `description` is optional and is logged. Other keys, such as `step_id`, are ignored.
-- Stops at the first step that fails and returns `Recipe failed at step N (action): reason`. An action name that is not one of the ten returns `Unknown action '<name>'`.
-- Waits 0.5 s between steps.
-- Keeps the name of the held object. `pickup` sets it. `dropoff` and `throw` clear it.
-- Gives each action the steps that follow it, so `pickup` can choose a grasp that suits a later `pour` or `thrust`.
-- Writes one `[recipe_log]` line per step to the node log, with the action, its parameters and the result.
+- Executes one recipe at a time, stopping on the first failed step.
+- Steps use `{"action": ..., "parameters": {...}}`. Optional `description` is logged; unknown keys are ignored.
+- Waits 0.5 s between steps and logs each result as `[recipe_log]`.
+- Tracks held objects: `pickup` sets the object; `dropoff` and `throw` clear it.
+- Passes subsequent steps to actions for grasp planning, including `pour` and `thrust`.
 
 ## environment_mapping_node
 
@@ -39,20 +37,20 @@ Holds the object dictionary, the obstacles, the named movements and the named or
 
 **Services**
 
-| Service | Type | Description |
+| Service | Type | Purpose |
 |---|---|---|
-| `/get_coordinates` | `GetObjectCoordinates` | Position of an object. |
-| `/get_object_info` | `GetObjectInfo` | Pose and shape of an object. |
-| `/get_relative_movement` | `GetRelativeMovement` | Offset of a named movement. |
-| `/get_orientation_preset` | `GetOrientationPreset` | Roll, pitch and yaw of a named orientation. |
-| `/get_robot_parameters` | `GetRobotParameters` | Object, movement and orientation names, table bounds and held objects. The proxy reads this before every command. |
-| `/get_scene_objects` | `GetSceneObjects` | All objects and the attached ones, as JSON. |
-| `/update_scene_objects` | `UpdateSceneObjects` | Adds, updates or removes objects in bulk. The vision node uses it. |
-| `/update_object_pose` | `UpdateObjectPose` | Changes the stored pose of an object. |
-| `/attach_object` | `AttachObject` | Attaches an object to the gripper in the planning scene. |
-| `/detach_object` | `DetachObject` | Detaches an object and leaves it in the scene. |
-| `/remove_object` | `RemoveObject` | Deletes an object from the scene and the dictionary. The object must not be attached. |
-| `/reset_environment_scene` | `std_srvs/Trigger` | Reloads the objects and obstacles from `workspace_objects.yaml` and republishes the scene. |
+| `/get_coordinates` | `GetObjectCoordinates` | Object position |
+| `/get_object_info` | `GetObjectInfo` | Object pose and shape |
+| `/get_relative_movement` | `GetRelativeMovement` | Named movement offset |
+| `/get_orientation_preset` | `GetOrientationPreset` | Named orientation |
+| `/get_robot_parameters` | `GetRobotParameters` | Available objects, presets and workspace bounds |
+| `/get_scene_objects` | `GetSceneObjects` | Scene objects and attachments |
+| `/update_scene_objects` | `UpdateSceneObjects` | Bulk scene updates |
+| `/update_object_pose` | `UpdateObjectPose` | Dictionary pose update |
+| `/attach_object` | `AttachObject` | Attach object |
+| `/detach_object` | `DetachObject` | Detach object |
+| `/remove_object` | `RemoveObject` | Remove unattached object |
+| `/reset_environment_scene` | `std_srvs/Trigger` | Restore configured scene |
 
 **Parameters**
 
@@ -62,13 +60,12 @@ Holds the object dictionary, the obstacles, the named movements and the named or
 
 **Behaviour**
 
-- Reads both files once at start-up. A missing file, an invalid file or an object without a valid orientation stops the node.
-- Accepts an orientation as `roll`, `pitch` and `yaw`, or as a quaternion `x`, `y`, `z`, `w`. It stores a quaternion.
-- Supports `BOX`, `CYLINDER`, `CONE` and `SPHERE` shapes. An unknown shape type becomes a box with a warning. A wrong number of dimensions is replaced by default dimensions with a warning.
-- Waits up to 15 s for `/apply_planning_scene`, waits one more second, then adds every obstacle and object to the planning scene.
-- `/update_object_pose` changes the dictionary only. It does not move the object in the planning scene.
-- `/update_scene_objects` skips attached objects. With `remove_missing` set, it removes only objects that were not loaded from the file, which are the objects added by vision.
-- `/reset_environment_scene` removes any attachment and restores the file contents.
+- Loads workspace objects, obstacles and movement presets at startup. Invalid configuration prevents startup.
+- Supports Euler or quaternion orientations and `BOX`, `CYLINDER`, `CONE` and `SPHERE` shapes. Invalid shape types or dimensions fall back to defaults with warnings.
+- Waits up to 15 s for MoveIt's planning scene service before publishing objects.
+- `/update_object_pose` modifies the dictionary only, not the planning scene.
+- Bulk updates skip attached objects; `remove_missing` only removes dynamically added objects.
+- Scene reset clears attachments and reloads the configured objects and obstacles.
 
 ## kinova_hardware_client
 
@@ -85,26 +82,24 @@ The only node that sends motion commands to the arm and gripper. The node is nam
 | `/kinova_hardware_client/execute_trajectory` | `ExecuteTrajectory` | Runs a trajectory that was planned elsewhere. |
 | `/kinova_hardware_client/move_gripper` | `MoveGripper` | Moves the gripper to a position. |
 
-**Parameters** (all required, from the `hardware` section of `motion_settings.yaml`)
+**Parameters**
 
-| Parameter | Default | Description |
-|---|---|---|
-| `hardware.action_timeout` | `30.0` | Seconds an arm move may take before it counts as failed. |
-| `hardware.gripper_timeout` | `10.0` | Seconds a gripper move may take. |
-| `hardware.planning_time` | `10.0` | Planning time for each goal sent to MoveIt. |
-| `hardware.goal_tolerance` | `0.01` | Radius, in metres, of the position goal. |
-| `hardware.home_joint_positions` | `[0.0, 0.0, 1.5708, 1.5708, 1.5708, 0.0]` | Joint 1 to 6 for home. |
-| `hardware.home_joint_tolerance` | `0.01` | Tolerance of each joint at home and for joint moves, in radians. |
+Configured through the `hardware` section of `motion_settings.yaml`. See [Configuration](../installation/configuration.md) for defaults and descriptions.
 
+Key parameters include:
+
+- `hardware.action_timeout`, `hardware.gripper_timeout`
+- `hardware.planning_time`, `hardware.goal_tolerance`
+- `hardware.home_joint_positions`, `hardware.home_joint_tolerance`
+  
 **Behaviour**
 
-- Each service returns when the motion has finished, failed or timed out. It reports `success` and a message.
-- Arm moves go to MoveIt's `move_action`. The node tries Pilz PTP first. If MoveIt reports a failure before any motion (planning failed, no IK solution, invalid motion plan or invalid goal constraints), it tries OMPL RRT\*. A `move_arm` request without an orientation goes to RRT\* directly, because Pilz needs a full pose.
-- A successful message ends with the planner used, for example `Movement complete (planned with Pilz PTP)`.
-- Speed comes from `motion_params`. A value of `0.0` leaves the speed unset: Pilz runs at full speed and OMPL uses MoveIt's default scaling. Values outside 0 to 1 are clamped.
-- The gripper goal succeeds when the gripper reaches the position or stalls on an object.
-- `joint_move` with `wait_for_completion` false returns after at most 0.5 s. It reports a failure that happens in that time and otherwise reports that the goal was accepted.
-- Subscribes to `/fault_controller/is_faulted`. While the robot is faulted the node reports the fault state. Every 3 s it checks that `fault_controller` is active and reports `SYSTEM CONFIG WARNING: fault_controller is NOT active` when it is not.
+- Motion services report completion, failure or timeout.
+- Arm moves use MoveIt 2, attempting Pilz PTP before OMPL RRT* when planning fails before execution. Position-only moves use RRT* directly.
+- `motion_params` controls speed. A value of `0.0` uses planner defaults; other values are clamped to 0–1.
+- Gripper movement succeeds when the target position is reached or the gripper stalls on an object.
+- `joint_move` with `wait_for_completion=false` returns after goal acceptance (within 0.5 s), without waiting for completion.
+- Monitors `/fault_controller/is_faulted` and checks controller activation every 3 s.
 
 ## telemetry_node
 
@@ -112,18 +107,11 @@ Collects the node heartbeats into one system status.
 
 ![Status flow: three nodes publish heartbeats to telemetry_node, which publishes the system status and talks to the fault controller.](../assets/diagrams/status-flow.svg)
 
-**Interfaces**
-
-| Name | Type | Description |
-|---|---|---|
-| `/status/node_report` | `ExtendedStatus` (subscribed) | Heartbeat from each node. |
-| `/system/status` | `SystemSummary` (published) | Aggregate status, every 0.5 s. |
-| `/system/reset_fault` | `std_srvs/Trigger` | Forwards to the driver's `/fault_controller/reset_fault`. |
+**Interfaces:** Subscribes to `/status/node_report`, publishes `/system/status` every 0.5 s and provides `/system/reset_fault`.
 
 **Behaviour**
 
-- The system state is `SYSTEM_FAULT` if any node reports `STATE_FAULT`, otherwise `SYSTEM_BUSY` if any node reports `STATE_BUSY`, otherwise `SYSTEM_READY`.
-- A node with no heartbeat for more than 1.5 s counts as faulted. Its message starts with `CRITICAL: Node heartbeat timed out`.
-- Before any heartbeat arrives the state is `SYSTEM_FAULT`.
-- When `kinova_hardware_client` reports an inactive `fault_controller`, the node configures and activates it through the controller manager.
-- `/system/reset_fault` waits 2 s for the driver service. If the service is missing it returns `Hardware driver service not ready.`
+- Publishes `SYSTEM_FAULT`, `SYSTEM_BUSY` or `SYSTEM_READY` based on node states.
+- Missing heartbeats (>1.5 s), including before initial reporting, cause `SYSTEM_FAULT`.
+- Automatically configures and activates an inactive `fault_controller`.
+- `/system/reset_fault` forwards fault resets to the driver, returning an error if unavailable after 2 s.
