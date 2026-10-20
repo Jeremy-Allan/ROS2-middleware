@@ -1,4 +1,4 @@
-# Kinova Gen3 Lite ROS 2 Middleware.
+# Kinova Gen3 Lite ROS 2 Middleware
 
 ![Ubuntu 22.04](https://img.shields.io/badge/Ubuntu-22.04-E95420?style=flat-square&logo=ubuntu&logoColor=white)
 ![ROS 2 Humble](https://img.shields.io/badge/ROS%202-Humble-22314E?style=flat-square&logo=ros&logoColor=white)
