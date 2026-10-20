@@ -1,13 +1,11 @@
 # Contributing
 
-This page describes how changes are made to the repository: branches, pull requests, documentation and docstrings.
-
 ## Workflow
 
 1. Create a branch from `main` for each change. Name it `feature/<name>`, `fix/<name>` or `docs/<name>`.
 2. Open a pull request against `main`. Describe what changed and why.
 3. A reviewer approves the pull request before it is merged. The author does not merge it.
-4. Keep each pull request to one change. A restructure of the documentation and a change to the behaviour of a node are separate pull requests.
+4. Keep each pull request focused on one change. Submit documentation restructures and node behaviour changes separately.
 
 Run the [unit tests](testing.md#unit-tests) before opening a pull request. Do not edit or commit `build/`, `install/` or `log/`. They are generated and ignored by git.
 
