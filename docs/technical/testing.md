@@ -1,6 +1,6 @@
 # Testing
 
-The middleware has unit tests, test recipes and a script that checks the gripper orientations. None of them needs the proxy. The proxy has its own tests, described in its [README](https://github.com/paul-isit/embodied-ai-proxy#evaluating-an-llm-with-test-suites).
+The middleware provides unit tests, test recipes and gripper orientation checks, all independent of the proxy. See the proxy [README](https://github.com/paul-isit/embodied-ai-proxy#evaluating-an-llm-with-test-suites) for its tests.
 
 !!! warning
     The test recipes and the orientation check move the arm. Run them in simulation first. On a real arm, clear the workspace before each run.
@@ -21,9 +21,7 @@ python3 -m pytest test -q
 
 To run one file, give its path, for example `python3 -m pytest test/test_motion.py -v`.
 
-The tests use the generated code of `kinova_interfaces`. After a change to a `.srv` or `.msg` file, build the package again. With an old build, tests fail with errors such as `'GetRobotParameters_Response' object has no attribute 'held_objects'`.
-
-The fixture `ros_context` in `conftest.py` starts `rclpy` with the parameters of `motion_settings.yaml`, as the launch file does.
+Rebuild `kinova_interfaces` after modifying `.srv` or `.msg` files to avoid failures caused by outdated generated interfaces.
 
 | File | Covers |
 |---|---|
@@ -55,29 +53,28 @@ Or run a recipe file against a middleware that is already running:
 ros2 run kinova_interface run_recipe.py <path-to-recipe.json>
 ```
 
-A successful recipe logs `--- All Tasks Completed ---`. `run_recipe.py` prints `success=` and `message=`, for example `message=Recipe executed successfully.`, and exits with 0 when the recipe succeeds.
+Successful execution logs `--- All Tasks Completed ---`. `run_recipe.py` reports `success` and `message`, exiting with code 0 on success.
 
 ### test_suite
 
-| Recipe | Steps |
+| Recipe | Purpose |
 |---|---|
-| `recipe_pickup.json` | Picks up `blue_cube` and then `water_bottle` with the default grasp. The second pickup puts the cube back first. Then puts the bottle back. |
-| `recipe_grasp_styles.json` | Picks up two objects with the grasp style that `auto` does not choose, and puts each back. |
-| `recipe_dropoff.json` | Picks up `water_bottle` and stands it on the centre of `delivery_tray`. |
-| `recipe_pour.json` | Picks up `water_bottle` with a side grasp and pours toward `delivery_tray`. |
-| `recipe_push.json` | Pushes `water_bottle` forward without grasping it. |
-| `recipe_throw.json` | Picks up `water_bottle` and throws it forward. |
-| `recipe_thrust.json` | Picks up `water_bottle` with a side grasp and thrusts it forward. |
+| `recipe_pickup.json` | Multiple pickups and returns |
+| `recipe_grasp_styles.json` | Alternative grasp styles |
+| `recipe_dropoff.json` | Object placement |
+| `recipe_pour.json` | Pouring |
+| `recipe_push.json` | Pushing |
+| `recipe_throw.json` | Throwing |
+| `recipe_thrust.json` | Thrusting |
 
 ### qa_middleware
 
 | Group | Recipes |
 |---|---|
-| Home and gripper | `recipe_home_only.json`. `recipe_gripper_open.json` sets the gripper position to 0.0 and `recipe_gripper_close.json` sets it to 1.0. |
-| Moves | `recipe_single_move.json` moves to `water_bottle`. `recipe_relative_up.json`, `recipe_relative_forward.json`, `recipe_relative_retreat.json` and `recipe_relative_down_left_right.json` use the named vectors of `movements_and_orientations.yaml`. |
-| Pick and place | `recipe_pickup_isolated.json` is one pickup. `recipe_pick_and_place_blue_cube.json` and `recipe_pick_and_place_water_bottle.json` pick and place one object on `delivery_tray`. `recipe_multi_object.json` places the cube and then the bottle on the tray. |
-| Variations of composite actions | `recipe_pour_in_place.json` pours without `destination` or `direction`. `recipe_throw_held_object.json` throws without `target`. |
-| Invalid input | See the next table. |
+| Home and gripper | `recipe_home_only.json`, `recipe_gripper_open.json`, `recipe_gripper_close.json` |
+| Moves | `recipe_single_move.json`, `recipe_relative_up.json`, `recipe_relative_forward.json`, `recipe_relative_retreat.json`, `recipe_relative_down_left_right.json` |
+| Pick and place | `recipe_pickup_isolated.json`, `recipe_pick_and_place_blue_cube.json`, `recipe_pick_and_place_water_bottle.json`, `recipe_multi_object.json` |
+| Composite variations | `recipe_pour_in_place.json`, `recipe_throw_held_object.json` |
 
 | Recipe | Input | `message` of `run_recipe.py` |
 |---|---|---|
@@ -90,7 +87,7 @@ A successful recipe logs `--- All Tasks Completed ---`. `run_recipe.py` prints `
 
 `check_orientations.py` checks that each orientation preset points the gripper where it should, and shows which positions each orientation can reach. Use it after a change to `movements_and_orientations.yaml` or to the gripper convention, and when the table or the robot moves. The convention is that the fingers point along +Z of `tool_frame` and close along its X axis.
 
-The script uses the move service of the middleware, so the middleware must be running. It moves the arm to the 9 points of a grid at z = 0.10 m in `base_link`, with x of 0.25, 0.35 and 0.45 m and y of -0.2, 0.0 and 0.2 m. At each point it tries 7 orientations: `top_down`, `top_down_90` and `side_level` at the headings -90, -45, 0, 45 and 90 degrees. After each move it reads the pose of `tool_frame` from TF and compares it with the request. The arm goes home before each orientation and after the last. To change the grid, edit `GRID_X`, `GRID_Y` and `GRID_Z` in the script.
+The middleware must be running. The script checks seven orientations across a configurable 3×3 grid in `base_link`, using IK or physical movements with TF pose verification. Modify `GRID_X`, `GRID_Y` and `GRID_Z` in the script to change the grid.
 
 ```bash
 SETTINGS=$(ros2 pkg prefix kinova_interface)/share/kinova_interface/data/configs/motion_settings.yaml
@@ -106,21 +103,12 @@ The first command only checks that an IK solution exists and does not move the a
 | `--speed` | `0.2` | Velocity and acceleration scale of the moves, 0.0 to 1.0. |
 | `--tolerance-deg` | `6.0` | Largest angle between the requested and the reached orientation that counts as reached. |
 
-The script prints one line for each pose.
-
-```text
-       top_down at (0.25, -0.20, 0.10): ok 0.8 P
-    top_down_90 at (0.45, +0.20, 0.10): ok 2.1 R
- side_level@-90 at (0.25, -0.20, 0.10): FAIL (<message>)
-```
-
 | Result | Meaning |
 |---|---|
-| `ok <angle> P` | The arm reached the pose. `<angle>` is the angle between the requested and the reached orientation, in degrees. Pilz PTP planned the move. |
-| `ok <angle> R` | The arm reached the pose. The OMPL RRT\* fallback planned the move. |
-| `BAD <angle> P` or `R` | The move succeeded, but the angle is above `--tolerance-deg` or the position is more than 0.02 m from the request. Check the preset and the gripper convention. |
-| `FAIL (<message>)` | The move failed. The message is the one of the `move_arm` service. |
-| `ik ok` or `no IK` | With `--ik-only`: an IK solution exists or does not exist. |
+| `ok <angle> P/R` | Pose reached using Pilz PTP (`P`) or OMPL RRT* (`R`). Angle is the orientation error in degrees. |
+| `BAD <angle> P/R` | Orientation error exceeds `--tolerance-deg` or position error exceeds 0.02 m. |
+| `FAIL (<message>)` | Movement failed; displays the service error. |
+| `ik ok` / `no IK` | IK solution available / unavailable. |
 
 `FAIL` and `no IK` are expected for poses that the arm cannot reach, for example pointing straight down far from the base. `BAD` is not. The script exits with 0 only when every pose is `ok` or `ik ok`.
 
