@@ -61,7 +61,3 @@ Pages marked *draft* are placeholders that don't have content yet.
 | [Testing](technical/testing.md) | The middleware's recipe test suite, the proxy's LLM-output test suite, a manual smoke test |
 | [Contributing](technical/contributing.md) | *Draft.* Branches, pull requests and the docstring rule |
 | [API reference](technical/api/nodes.md) | Function-level reference generated from the code's own docstrings, for the middleware and the proxy |
-
-## Support
-
-Found something in these docs that's wrong, stale, or confusing? Flag it to the team or open a PR, documentation fixes are cheap and worth making immediately.
