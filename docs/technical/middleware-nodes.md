@@ -35,7 +35,7 @@ Receives a recipe, runs its steps in order and reports the result.
 
 ## environment_mapping_node
 
-Holds the object dictionary, the obstacles, the named movements and the named orientations. It copies the objects and obstacles into MoveIt's planning scene.
+Maintains objects, obstacles, named movements and orientation presets, synchronising objects and obstacles with MoveIt's planning scene.
 
 **Services**
 
@@ -72,7 +72,7 @@ Holds the object dictionary, the obstacles, the named movements and the named or
 
 ## kinova_hardware_client
 
-The only node that sends motion commands to the arm and gripper. The node is named `kinova_hardware_client`, and its services use that name as a prefix.
+The sole middleware node sending arm and gripper motion commands. Its services use the /kinova_hardware_client/ prefix.
 
 **Services**
 
@@ -123,7 +123,6 @@ Collects the node heartbeats into one system status.
 **Behaviour**
 
 - The system state is `SYSTEM_FAULT` if any node reports `STATE_FAULT`, otherwise `SYSTEM_BUSY` if any node reports `STATE_BUSY`, otherwise `SYSTEM_READY`.
-- A node with no heartbeat for more than 1.5 s counts as faulted. Its message starts with `CRITICAL: Node heartbeat timed out`.
-- Before any heartbeat arrives the state is `SYSTEM_FAULT`.
+- Missing heartbeats for over 1.5 s trigger a fault with CRITICAL: Node heartbeat timed out. The system remains SYSTEM_FAULT until its first heartbeat.
 - When `kinova_hardware_client` reports an inactive `fault_controller`, the node configures and activates it through the controller manager.
 - `/system/reset_fault` waits 2 s for the driver service. If the service is missing it returns `Hardware driver service not ready.`
