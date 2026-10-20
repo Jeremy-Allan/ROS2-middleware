@@ -1,6 +1,6 @@
 # Actions
 
-One module per recipe action, plus `arm_actions.py`'s shared `ArmActions` context that every action function receives as `ctx`.
+The modules of the ten recipe actions, the planning helper `motion` and the shared `ArmActions` context that every action function receives as `ctx`.
 
 ::: kinova_interface.actions.arm_actions
 

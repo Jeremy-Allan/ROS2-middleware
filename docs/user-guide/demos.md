@@ -1,16 +1,27 @@
-[Docs Home](../README.md)
+# Demos
 
-# Video Demos
+The `recipes` folder of `kinova_interface` has recipes that demonstrate the actions. Run one against a running middleware, in simulation or with the arm. See [Recipes](recipes.md#run-a-recipe) for the commands.
 
-Short screen recordings of each feature in action, for anyone who'd rather watch than read. Links to be added by the team, placeholders below.
+| Recipe | What it does |
+|---|---|
+| `test_suite/recipe_pickup.json` | Picks up `blue_cube` with a top grasp. Picks up `water_bottle` with a side grasp, which puts the cube back first. Puts the bottle back. |
+| `test_suite/recipe_dropoff.json` | Picks up `water_bottle` and stands it on the centre of `delivery_tray`. |
+| `test_suite/recipe_pour.json` | Picks up `water_bottle` with a side grasp, carries it over `delivery_tray`, tilts it, holds the tilt and returns it level. |
+| `test_suite/recipe_push.json` | Slides `water_bottle` forward without grasping it. |
+| `test_suite/recipe_thrust.json` | Picks up `water_bottle` with a side grasp, raises it and extends the arm forward. |
+| `test_suite/recipe_throw.json` | Picks up `water_bottle` and throws it forward. |
+| `orientation_and_speed_demo.json` | Opens the gripper, moves to `blue_cube` pointing straight down at 30 % speed, lifts and returns home at 50 % speed. |
 
-| Feature | What it shows | Link |
-|---|---|---|
-| Full pipeline, natural language to motion | The middleware and proxy running, a typed command resulting in real arm movement | (add link) |
-| Running a pick-and-place recipe directly | `recipe_dropoff.json` (pickup then dropoff) end to end, no LLM involved | (add link) |
-| Switching LLM providers | Editing the proxy's `data/config/config.json` from Ollama to a cloud provider | (add link) |
-| Telemetry and fault recovery | Simulated fault, `/system/status` flips to FAULT, `/system/reset_fault` clears it | (add link) |
-| Editing the coordinate dictionary | Adding a new named object and asking for it in plain English | (add link) |
-| Physical hardware run | Same command running on the real Gen3 Lite arm | (add link) |
+For example:
 
-[Docs Home](../README.md)
+```bash
+ros2 launch kinova_interface robot.launch.py recipe:=test_suite/recipe_pour.json
+```
+
+`recipe_push.json` moves `water_bottle`, and `recipe_throw.json` removes it from the scene. Restore the objects before the next recipe. See [Reset the scene](recipes.md#reset-the-scene). `recipe_push.json` ends with the gripper at the place where the bottle stood, so run `home` before the reset.
+
+The proxy runs the same actions from a sentence. Start the proxy as in the [Quickstart](quickstart.md#send-a-command-through-the-proxy) and type, for example:
+
+```text
+Pick up the water bottle and pour it over the delivery tray.
+```

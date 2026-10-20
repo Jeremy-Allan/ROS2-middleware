@@ -4,6 +4,8 @@ repo_url: https://github.com/Jeremy-Allan/ROS2-middleware
 edit_uri: edit/main/docs/
 
 docs_dir: docs
+exclude_docs: |
+  assets/diagrams/src/
 
 nav:
   - Home:
@@ -12,6 +14,7 @@ nav:
   - User Guide:
       - Quickstart: user-guide/quickstart.md
       - Command reference: user-guide/command-reference.md
+      - Recipes: user-guide/recipes.md
       - Troubleshooting: user-guide/troubleshooting.md
       - Demos: user-guide/demos.md
   - Installation:
@@ -25,10 +28,12 @@ nav:
   - Technical:
       - Architecture: technical/architecture.md
       - Middleware nodes: technical/middleware-nodes.md
+      - ROS interfaces: technical/ros-interfaces.md
       - Motion and actions:
           - Overview: technical/motion-and-actions/index.md
+          - Pickup and dropoff: technical/motion-and-actions/pickup-and-dropoff.md
           - Pour: technical/motion-and-actions/pour.md
-          - Push: technical/motion-and-actions/push.md
+          - Push and thrust: technical/motion-and-actions/push.md
           - Throw: technical/motion-and-actions/throw.md
       - Proxy (from the proxy repo): technical/proxy/readme.md
       - Computer vision: technical/computer-vision.md

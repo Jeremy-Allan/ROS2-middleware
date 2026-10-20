@@ -1,141 +1,47 @@
-[Docs Home](../../README.md)
+# Throw
 
-# Throw Motion Reference
+`throw` swings the held object and opens the gripper partway through one continuous motion. The code is in `actions/throw.py`.
 
-This records a manually-driven demonstration of the redesigned `throw`
-motion, captured the same way as `pour`/`push`: joint-space snapshots via
-RViz's MotionPlanning Joints tab and `Plan and Execute`, on fake hardware.
+## Requirements
 
-## Why the previous design was replaced
+- An object must be held. `target` defaults to the held object.
+- The step needs `destination` or `direction`. They set only the direction the arm faces. The swing has a fixed shape and does not scale with distance.
 
-The original `throw` computed its wind-up/fling as offsets from `home`'s
-own pose (`wind_up_angle`/`fling_angle` applied to `home`'s elbow, with a
-small shoulder "rock"). That was a reasonable way to get the mechanism
-working the first time, but `home` was never actually load-bearing for
-the design - it was just a convenient, known starting shape while the
-single-plane approach itself was being worked out. Once that was
-understood, the ask was to skip `home` entirely and go straight to a
-directly-demonstrated wind-up shape - simpler, and it also surfaced a
-real bug in the release timing that the `home`-relative version had been
-masking.
+## Sequence
 
-## The four stages
+```mermaid
+flowchart TD
+    a["Rotate joint 1 to face the target"] --> b["Move to the wind-up pose"]
+    b --> c["Plan the fling and check that it crosses the release angle"]
+    c --> d["Start the fling without waiting for it to finish"]
+    d --> e["Watch joint 5 and open the gripper when it crosses -35°"]
+    e --> f["Detach the object and move it along a short arc"]
+    f --> g["Remove the object from the scene"]
+```
 
-| # | Label | joint_1 | joint_2 | joint_3 | joint_4 | joint_5 | joint_6 |
-|---|---|---|---|---|---|---|---|
-| 1 | Wind-up | -0.0 | -22.84 | 56.01 | 80.71 | 50.6 | 0.0 |
-| 2 | Fling begins | -0.0 | -4.35 | 17.95 | 80.71 | 50.6 | 0.0 |
-| 3 | Release point | 0.56 | 5.44 | -4.89 | 80.71 | **-42.7** | 0.0 |
-| 4 | End pose (already released) | 0.56 | 32.63 | -34.26 | 80.71 | -63.25 | 0.0 |
+1. **Rotate.** Joint 1 turns to `atan2(y, x)` of the target point. The other joints stay where `pickup` left them.
+2. **Wind up.** The arm moves to the wind-up pose.
+3. **Plan the fling.** The fling is planned before it starts, with Pilz PTP and then RRT\* as fallback. The action fails if the planned motion never crosses the release angle.
+4. **Fling.** The fling runs as one motion to the end pose. The action does not wait for it to finish.
+5. **Release.** The action reads the live position of joint 5. When it crosses -35.0°, the gripper opens to `open_position`, 0.0 by default. If joint 5 does not cross within the planned duration plus 3 s, the step fails with `Timed out waiting for the release point`.
+6. **Landing.** The object is detached and its stored position moves along a short arc to the target point at its original height. The arc takes 0.6 s in 8 steps and rises to 15% of the horizontal distance. This is a visual aid. Physics is not simulated.
+7. **Removal.** The object is removed from the planning scene and the object dictionary, so that it does not block later moves. `/reset_environment` restores it.
 
-**What's invariant vs. what moves**: `joint_1` (base facing) and `joint_4`/
-`joint_6` are fixed across the entire throw. `joint_2`/`joint_3`
-(shoulder/elbow) sweep smoothly and continuously across all four stages -
-a single, uninterrupted motion from wind-up straight through to the end
-pose. `joint_5` (wrist) is the odd one out: it barely moves at all through
-"fling begins", then swings hard (~93 degrees) between "fling begins" and
-"release point", continuing further afterward - a wrist-snap concentrated
-right at the release moment, not a uniform sweep. That makes `joint_5`
-the natural signal for "we've reached the release point": nothing else
-about its motion is ambiguous the way the elbow's continuous sweep would
-be if used as a release trigger.
+## Poses
 
-Confirmed directly with the user: this is **one continuous swing** from
-wind-up straight to the end pose (stage 4), not a sequence of separate
-waypoints - "fling begins" (stage 2) is a reference point showing the
-motion's direction early on, not a stop along the way. The gripper opens
-the instant `joint_5` crosses the stage-3 value during that single swing.
+The joint values are fixed. Only joint 1 changes between throws.
 
-## The real bug this surfaced: release timing
+| Joint | Wind-up | End of fling |
+|---|---|---|
+| 1 | `atan2(y, x)` of the target | same |
+| 2 | -22.84° | 32.63° |
+| 3 | 56.01° | -34.26° |
+| 4 | 80.71° | 80.71° |
+| 5 | 50.6° | -63.25° |
+| 6 | 0.0° | 0.0° |
 
-The previous release mechanism was a computed `time.sleep()`, scaled to
-an estimated fling duration. That's what silently broke: the fire-and-
-forget fling call (`call_joint_move_service(..., wait_for_completion=False)`)
-still blocks the *client* for up to
-`HardwareInterfaceClient.FIRE_AND_FORGET_REJECTION_WINDOW_SEC` (0.5s) -
-the server's own bounded wait to catch a fast rejection before replying.
-With the old, larger 225-degree wind-up this was a small fraction of the
-whole motion and went unnoticed; with a shorter, more direct wind-up like
-this one, the entire fling could finish *during* that 0.5s block, before
-any release-timing code had even started running - the gripper would
-only open once the arm had already stopped, exactly the symptom
-reported ("no velocity... releasing while the arm is in motion isn't
-happening").
+Joint 5 swings from 50.6° to -63.25°. The release angle of -35.0° is about three quarters of the way through that swing.
 
-### The fix
+## Speed
 
-- `call_joint_move_service_async` - a new method that fires the fling and
-  returns the raw future immediately, waiting for **nothing** at all (not
-  even the bounded fire-and-forget window `call_joint_move_service`
-  still waits for). This is what actually unblocks the client in time.
-- `wait_for_joint_crossing(joint_name, threshold, starting_value)` - a
-  closed-loop release trigger. `actions/arm_actions.py` now subscribes to
-  `/joint_states` (mirroring `hardware_interface_client`'s own pattern)
-  and polls the arm's **real, live** `joint_5` value, returning the
-  moment it actually crosses the release threshold. This ties release
-  timing to where the arm truly is, not to an estimate of how long a
-  motion *should* take - which is a fundamentally more robust fix than
-  computing a better delay, given the previous, simpler delay had
-  already gone through one round of tuning and still failed.
-
-## Direction fix: the swing is mirrored
-
-As demonstrated, this swing throws *away* from the way `joint_1` faces:
-with `joint_1` at 0 (facing +X), the gripper winds up in front at
-x = +0.53 m and finishes behind the base at x = -0.55 m (MoveIt FK). Since
-`throw` sets `joint_1` to the target's bearing, every throw went roughly
-180 degrees away from its target. Turning `joint_1` round by 180 degrees
-instead isn't possible for targets in front of the arm (joint_1 is limited
-to about ±154 degrees), so the code uses the mirrored shape: `joint_2` and
-`joint_3` negated, `joint_4` - 180 degrees, `joint_5`/`joint_6` unchanged.
-
-| # | Label | joint_2 | joint_3 | joint_4 | joint_5 | joint_6 |
-|---|---|---|---|---|---|---|
-| 1 | Wind-up | 22.84 | -56.01 | -99.29 | 50.6 | 0.0 |
-| 4 | End pose | -32.63 | 34.26 | -99.29 | -63.25 | 0.0 |
-
-FK confirms it's an exact mirror: same heights, x negated, so the gripper
-winds up behind the base and finishes on the target's side, within about
-3 degrees of `joint_1`'s bearing. `joint_5` sweeps exactly as before, so
-the mirror alone didn't change the release trigger (`THROW_RELEASE_JOINT5`).
-Testing afterwards still found the release a little late, so it was moved
-from -35 to -25 degrees (from ~75% to ~66% of the way through `joint_5`'s
-sweep from wind-up to fling end).
-
-## Flinging through other objects
-
-Like `push` and `thrust`, the fling goes straight through any object in
-its way instead of planning around it or failing: every object except the
-held one (and the vision node's `table_fit`) is exempt from collision
-checking, and the held object may touch them too
-(`ArmActions.passing_through`; MoveIt checks an attached object as part
-of the robot). That covers planning the fling through to the end of the
-swing: the fling runs asynchronously, so throw waits for it to finish
-before restoring collision checking, rather than restoring it mid-swing
-and having MoveIt abort the rest. It then retreats to the pose it rotated
-to before winding up, still exempt, so the arm isn't left inside anything
-the swing went through. The rotate and wind-up still avoid
-everything, and the table and walls are always checked. Objects that get
-hit don't move in the planning scene, since there's no physics.
-
-## Implementation
-
-- `THROW_WINDUP_POSE`/`THROW_FLING_POSE` - fixed `joint_2..6` shapes
-  from stages 1 and 4 above, mirrored (see the direction fix above). Only `joint_1` varies per
-  throw (the facing direction), exactly like `push`/`thrust`'s single
-  fixed shapes.
-- **Rotate** (new first step): joint_1 only, to `atan2(release_y, release_x)`
-  - current shoulder/elbow/wrist (read from `latest_joint_positions`,
-    wherever `pickup` left them) held exactly as they are. This replaces
-    routing through a fixed `face_pose` derived from `home`.
-- **Wind-up**: a normal blocking joint move straight to `THROW_WINDUP_POSE`
-  (joint_1 = the same face yaw).
-- **Fling**: `call_joint_move_service_async` straight to `THROW_FLING_POSE`
-  - fired, not waited on.
-- **Release**: `wait_for_joint_crossing('joint_5', THROW_RELEASE_JOINT5, windup_joint5)`
-  - the moment it returns, the gripper opens immediately.
-
-`wind_up_angle`/`fling_angle`/`joint_2_rock_angle`/`release_delay` are all
-gone - there's nothing left to tune per-call for the shape of the swing
-itself; `distance`/`destination`/`direction` still control which way it
-faces, the same as `push`/`thrust`.
+`speed` scales the rotation and the wind-up. The fling runs at 1.0 unless `speed` is set.

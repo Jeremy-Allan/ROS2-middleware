@@ -1,115 +1,118 @@
-[Docs Home](../README.md)
-
 # Quickstart
 
-Running the full pipeline needs two terminals: the middleware, then the proxy. If you use a local LLM, `ollama serve` runs in a third (see [Installation](../installation/middleware-and-proxy.md)).
+This page starts the middleware in simulation, runs a recipe and sends a command through the proxy. Install the software first. See [Middleware and proxy](../installation/middleware-and-proxy.md).
 
-## Terminal 1: start the middleware
+## Start the middleware
 
-By default ROS 2 writes logs to a hidden folder (`~/.ros/log`). Redirecting them somewhere visible first is recommended, not required:
+1. In the first terminal, load the workspace and start the launch file:
+
+    ```bash
+    source /opt/ros/humble/setup.bash
+    source ~/workspace/ros2_kortex_ws/install/setup.bash
+    ros2 launch kinova_interface robot.launch.py
+    ```
+
+    The launch file starts the Kinova driver with simulated hardware, MoveIt 2, RViz and the four middleware nodes. After `json_parser_node` starts, it also starts `rosbridge_websocket` on port 9090. RViz shows the arm.
+
+    Leave the terminal open.
+
+2. In a second terminal, load the workspace and read the system status:
+
+    ```bash
+    source /opt/ros/humble/setup.bash
+    source ~/workspace/ros2_kortex_ws/install/setup.bash
+    ros2 topic echo /system/status --once
+    ```
+
+    The system is ready when `summary_state` is `0`:
+
+    ```text
+    summary_state: 0
+    individual_states:
+    - node_name: json_parser_node
+      state: 0
+      status_message: JSON Parser Online & Ready
+      last_command_valid: true
+    - node_name: environment_mapping_node
+      state: 0
+      status_message: Environment Mapper Active
+      last_command_valid: true
+    - node_name: kinova_hardware_client
+      state: 0
+      status_message: Hardware Interface Client Ready
+      last_command_valid: true
+    ---
+    ```
+
+## Run a recipe
+
+In the second terminal, run a recipe that picks up the water bottle and puts it on the tray:
 
 ```bash
-export ROS_LOG_DIR=$(pwd)/middleware_logs
+ros2 run kinova_interface run_recipe.py ~/workspace/ros2_kortex_ws/src/ROS2-middleware/kinova_interface/recipes/test_suite/recipe_dropoff.json
 ```
 
-Then, source and launch:
+The arm moves in RViz. The command returns after the last step:
 
-```bash
-source /opt/ros/humble/setup.bash
-source ~/workspace/ros2_kortex_ws/install/setup.bash
-ros2 launch kinova_interface robot.launch.py
+```text
+Executing <path>/recipe_dropoff.json ...
+success=True
+message=Recipe executed successfully.
 ```
 
-This single command starts all four middleware nodes plus the Kinova driver stack plus MoveIt 2 plus RViz (the 3D visualizer), all wired together. Once the `json_parser_node` process starts, the launch also starts `rosbridge_server`, the websocket the proxy connects to, on `ws://localhost:9090` (change it with `bridge_port:=<port>`). By default it boots in simulation (`use_fake_hardware:=true`), no physical robot required.
+A failed recipe prints `success=False` and a message that names the step. See [Recipes](recipes.md) and [Troubleshooting](troubleshooting.md).
 
-To run against the real arm instead, once you've verified everything in simulation first:
+## Send a command through the proxy
+
+1. In a third terminal, start the proxy:
+
+    ```bash
+    cd ~/workspace/embodied-ai-proxy
+    ./run.sh
+    ```
+
+    The script starts the LLM proxy and the backend in the background and opens the terminal UI. The language model must be reachable. See [Set up a language model](../installation/middleware-and-proxy.md#set-up-a-language-model).
+
+2. Type a command in the terminal UI and press Enter:
+
+    ```text
+    Pick up the blue cube and put it on the delivery tray.
+    ```
+
+    The UI shows the recipe and the result. Type `/help` for the commands of the UI.
+
+The proxy reads the objects from the middleware, builds a prompt, asks the language model for a recipe, checks it and sends it to the middleware. See [Architecture](../technical/architecture.md#request-flow).
+
+## Use the real arm
+
+Start the launch file with the address of the arm:
 
 ```bash
 ros2 launch kinova_interface robot.launch.py use_fake_hardware:=false robot_ip:=192.168.1.10
 ```
 
-Replace `192.168.1.10` with your arm's actual IP. You must provide `robot_ip` explicitly whenever `use_fake_hardware:=false`; the launch file has a built-in safety check that refuses to launch anything if you forget it, specifically to stop you from accidentally connecting to hardware with a default or wrong IP.
+See [Simulation vs real arm](../installation/simulation-vs-real.md) before the first run.
 
-To also start the computer vision stack (Kinect driver, vision node and camera calibration transform), add `enable_CV:=true` (default `false`):
+## Use the camera
+
+Start the launch file with `enable_CV:=true`:
 
 ```bash
 ros2 launch kinova_interface robot.launch.py enable_CV:=true
 ```
 
-This starts the vision node, which serves `/vision/snapshot`. Each call to it adds the detected objects to the scene. See the [computer_vision README](https://github.com/Jeremy-Allan/ROS2-middleware/blob/main/computer_vision/README.md).
+The `/scan` command of the terminal UI takes a snapshot and adds the detected objects. See [Camera and calibration](../installation/camera-and-calibration.md).
 
-Leave this terminal running.
+## Watch the system
 
-## Terminal 2: start the proxy and give it a command
+| Command | Shows |
+|---|---|
+| `ros2 topic echo /system/status` | The state of the system and of each node: ready, busy or fault. |
+| `ros2 topic echo /status/node_report` | The heartbeat of each node. |
+| `ros2 node list` | The running nodes. |
 
-```bash
-cd ~/workspace/embodied-ai-proxy
-./run.sh
-```
+The sidebar of the terminal UI shows the same status.
 
-This starts the LLM proxy and backend in the background and opens the terminal UI. Type a command like `pick up the blue cube and place it on the delivery tray` and press enter. Type `/help` for the UI's commands.
+## Stop
 
-The proxy fetches the known objects from the middleware, builds a prompt, sends it to the configured LLM, validates the JSON, and forwards the recipe to the middleware. The UI shows the recipe and whether it succeeded once execution finishes.
-
-## Running the middleware alone, without the proxy
-
-Useful for testing or debugging just the robot side, without involving an LLM at all. With the middleware already running (Terminal 1 above), you can execute a specific recipe file automatically from launch:
-
-```bash
-ros2 launch kinova_interface robot.launch.py recipe:=task_recipe.json
-```
-
-The `recipe:=` argument is a path relative to the installed `recipes/` folder, or an absolute path. Two seconds after `json_parser_node` starts, it loads that file and runs it automatically.
-
-Or, with the stack already running and no `recipe:=` given, trigger a recipe from a second terminal without restarting anything, using the same `/execute_recipe` service the proxy itself calls:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/workspace/ros2_kortex_ws/install/setup.bash
-
-ros2 run kinova_interface run_recipe.py ~/workspace/ros2_kortex_ws/src/ROS2-middleware/kinova_interface/recipes/test_suite/recipe_pickup.json
-```
-
-It prints `success=...` and `message=...`; on failure the message names the failing step, its action and why it failed (for example `Recipe failed at step 2 (pickup): Could not resolve pickup target 'red_cube'`).
-
-The service returns once the whole recipe has finished executing, it blocks for the full sequence, not just the first step. For a long recipe this call can take a while to return; that's expected, not a hang.
-
-Extra logging controls for the middleware launch, all default to `false`:
-
-```bash
-# Debug-level logs for just the middleware's four nodes
-ros2 launch kinova_interface robot.launch.py debug_mode:=true
-
-# Debug-level logs for absolutely everything, including low-level ROS 2 internals
-ros2 launch kinova_interface robot.launch.py core_debug:=true
-
-# Stop suppressing noisy third-party library logs
-ros2 launch kinova_interface robot.launch.py enable_individual_logs:=true
-```
-
-## Watching the system while it runs
-
-The proxy's sidebar shows live middleware telemetry automatically once connected. To watch it directly from a terminal instead:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/workspace/ros2_kortex_ws/install/setup.bash
-
-# Live aggregated system health (READY / BUSY / FAULT)
-ros2 topic echo /system/status
-
-# Raw individual node heartbeats
-ros2 topic echo /status/node_report
-
-# Every node currently running
-ros2 node list
-
-# Every active service
-ros2 service list
-```
-
-## Shutting down
-
-`Ctrl+C` each terminal. Stopping the proxy first avoids reconnect messages in its UI.
-
-Next: [Configuration](../installation/configuration.md)
+Press `Ctrl+C` in each terminal. Stop the proxy first. The proxy then does not try to reconnect to a bridge that is gone.

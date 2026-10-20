@@ -1,150 +1,112 @@
-[Docs Home](../README.md)
+# Middleware and proxy
 
-# Install the middleware and proxy
+This page installs the middleware in the ROS 2 workspace of the [Kinova drivers](kinova-drivers.md), and builds the proxy.
 
-## What you need on your machine
+## Prerequisites
 
-| Requirement | Version | Why |
-|---|---|---|
-| Operating System | Ubuntu 22.04 LTS | ROS 2 Humble targets this release |
-| ROS 2 distribution | Humble Hawksbill | This is the ROS 2 version both repositories are written against |
-| Python | 3.10+ | Ships with Ubuntu 22.04; used by ROS 2 Humble and the middleware |
-| Go | 1.26.5+ | Builds the proxy |
-| colcon | (installed with ROS 2 dev tools) | The build tool used to compile/install ROS 2 packages |
-| RAM | 8GB minimum, 16GB+ recommended | More if you run a larger local LLM through Ollama |
-| Ollama | Latest, only if running a local LLM | Not needed if you're only using a cloud provider (OpenAI, Anthropic, Gemini) |
+- The Kinova packages are built in `~/workspace/ros2_kortex_ws`. See [Kinova drivers](kinova-drivers.md).
+- Go 1.26.5 or later, to build the proxy. See the [Go installation guide](https://go.dev/doc/install).
 
-If you're on Windows or macOS, you'll need a Ubuntu 22.04 VM or WSL2 with Ubuntu 22.04. ROS 2 Humble is not natively supported elsewhere. Instructions to configure workspace with alternative OS is found in [Environment Setup](./non-native-ubuntu.md)
+## Install the middleware
 
-## 1. Install ROS 2 Humble
+1. Clone the repository into the workspace:
 
-If you don't already have ROS 2 Humble installed, follow the official installation guide for your [Ubuntu Setup](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html)
+    ```bash
+    cd ~/workspace/ros2_kortex_ws/src
+    git clone https://github.com/Jeremy-Allan/ROS2-middleware.git
+    ```
 
-After installing, every new terminal you use for this project needs the ROS 2 environment loaded:
+    The repository holds three packages:
 
-```bash
-source /opt/ros/humble/setup.bash
-```
+    | Package | Contents |
+    |---|---|
+    | `kinova_interface` | The four nodes, the actions, the launch file, the configuration and the recipes. |
+    | `kinova_interfaces` | The custom services and messages. |
+    | `computer_vision` | The optional vision node. |
 
-Verify that ROS Humble has been installed:
+2. Install the dependencies. This includes `rosbridge_server`. `rosdep` prints an error for `ament_python`. `-r` lets it continue, and the error has no effect.
 
-```bash
-echo $ROS_DISTRO
-# it should say `humble`
-```
-![ROS 2 Humble Verification](../diagrams/ros_humble_verify.png)
+    ```bash
+    cd ~/workspace/ros2_kortex_ws
+    rosdep install --from-paths src --ignore-src -r -y
+    ```
 
-Tip: add this line to your `~/.bashrc` so you don't have to type it in every terminal.
+3. Build the workspace. Use the same options as for the Kinova packages.
 
-```bash
-echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
-```
+    ```bash
+    colcon build --symlink-install --cmake-args -DCMAKE_BUILD_TYPE=Release --parallel-workers 3
+    ```
 
-## 2. Set up your ROS 2 workspace and clone this repo
+    `--symlink-install` links the installed configuration and recipe files to the source files. A change to an existing file in `kinova_interface/data` or `kinova_interface/recipes` applies at the next launch. A new file needs a build. Without `--symlink-install`, build the workspace again after each change.
 
-A ROS 2 "workspace" is just a folder with a specific structure that `colcon` knows how to build. Create one and put all the required source packages inside `src/`:
+4. Load the workspace in every terminal that uses it:
 
-```bash
-mkdir -p ~/workspace/ros2_kortex_ws/src
-cd ~/workspace/ros2_kortex_ws/src
+    ```bash
+    source /opt/ros/humble/setup.bash
+    source ~/workspace/ros2_kortex_ws/install/setup.bash
+    ```
 
-# The official Kinova driver + MoveIt config packages
-git clone -b humble https://github.com/Kinovarobotics/ros2_kortex.git
+5. Check the installation:
 
-# This middleware repository
-git clone https://github.com/Jeremy-Allan/ROS2-middleware.git
-```
-You can access the official [ROS 2 Kortex Repository](https://github.com/Kinovarobotics/ros2_kortex) here. After completing these steps, the expected project structure is as follows:
+    ```bash
+    ros2 interface show kinova_interfaces/srv/ExecuteRecipe
+    ```
 
-```bash
-├── /workspace
-    ├── /embodied-ai-proxy        (cloned in step 6)
-    └── /ros2_kortex_ws
-        └── /src
-           ├── /ROS2-middleware
-           └── /ros2_kortex
-```
+    The output is the definition of the service:
 
-This repo has three packages: `kinova_interface` (the Python nodes, launch file, recipes, config), `kinova_interfaces` (the custom service/message type definitions) and `computer_vision` (the optional Kinect vision node).
+    ```text
+    string recipe_json
+    ---
+    bool success
+    string message
+    ```
 
-> Note the naming: `kinova_interface` (singular, the nodes) and `kinova_interfaces` (plural, the custom `.srv`/`.msg` type definitions) are two separate ROS 2 packages that live side by side in this one Git repository. Don't confuse them: the launch file, entry points, and every `import` in the Python code depend on getting the singular/plural right.
+The build of `kinova_interfaces` generates the Python code that the nodes import. After a change to a `.srv` or `.msg` file, build the workspace again.
 
-## 3. Install ROS 2 dependencies with rosdep
+## Install the proxy
 
-From the root of your workspace, let ROS 2's dependency resolver install anything missing (MoveIt 2, `ros2_control`, `tf2_ros`, etc.):
-
-```bash
-cd ~/workspace/ros2_kortex_ws
-sudo rosdep init      # only needed once per machine, ever
-rosdep update
-rosdep install --from-paths src --ignore-src -r -y
-```
-
-## 4. Build the workspace
-
-```bash
-cd ~/workspace/ros2_kortex_ws
-# if this is the very first build of the whole workspace run just colcon build
-colcon build
-# after that, only rebuild the packages you changed
-colcon build --packages-select kinova_interface kinova_interfaces
-```
-
-`kinova_interfaces` must build successfully before `kinova_interface`, because the Python nodes import the custom service/message types it generates (`HomeArm`, `MoveArm`, `ExtendedStatus`, etc.). Colcon handles this ordering automatically as long as both packages are in `src/`.
-
-## 5. Source the workspace
-
-Every terminal you use to run or interact with the middleware needs:
-
-```bash
-source /opt/ros/humble/setup.bash
-source ~/workspace/ros2_kortex_ws/install/setup.bash
-```
-
-"Sourcing" loads environment variables that tell your shell where to find the compiled packages, message types, and executables. If you skip this, you'll get "package not found" or "unknown message type" errors.
-
-## 6. Clone and set up the proxy
-
-The proxy is a separate Go project with no ROS 2 dependency. It does not live inside `ros2_kortex_ws`:
+The proxy is a Go program with no dependency on ROS 2. It does not belong in the ROS 2 workspace.
 
 ```bash
 cd ~/workspace
 git clone https://github.com/paul-isit/embodied-ai-proxy.git
 cd embodied-ai-proxy
-```
-
-Build it (needs Go 1.26.5+):
-
-```bash
 ./run.sh --build-only
 ```
 
-`rosbridge_server`, which the proxy connects to, is installed by the rosdep step above and started by the middleware launch.
+The directories are:
 
-## 7. Set up an LLM provider
-
-The proxy needs a large language model to talk to. The default configuration expects a local Ollama model, which is free and needs no API key, but you can point it at OpenAI, Anthropic, or Gemini instead. Provider configuration is covered in the [proxy README](https://github.com/paul-isit/embodied-ai-proxy#configuring-the-llm). The short version for the free local path:
-
-```bash
-ollama run gemma3:1b
+```text
+~/workspace
+├── embodied-ai-proxy
+└── ros2_kortex_ws
+    └── src
+        ├── ROS2-middleware
+        └── ros2_kortex
 ```
 
-Once it's running, exit the chat session by typing `/bye`. Then host it so the proxy can reach it:
+## Set up a language model
 
-```bash
-OLLAMA_HOST=0.0.0.0 ollama serve
-```
+The proxy reads the provider from `data/config/config.json` in its repository. The default is the Ollama model `gemma3:1b` at `http://localhost:11434`. To use it:
 
-Leave that terminal running. Verify it's reachable:
+1. Install [Ollama](https://ollama.com) and download the model:
 
-```bash
-curl http://localhost:11434
-```
+    ```bash
+    ollama pull gemma3:1b
+    ```
 
-It should respond `Ollama is running`.
+2. Check that the server answers:
+
+    ```bash
+    curl http://localhost:11434
+    ```
+
+    The answer is `Ollama is running`.
+
+To use Google Gemini, OpenAI or Anthropic, set the provider, the model and the API key in `config.json`. See the [proxy README](https://github.com/paul-isit/embodied-ai-proxy#configuring-the-llm).
 
 ## Optional: computer vision
 
-`enable_CV:=true` needs a Kinect v2 and these packages, which rosdep does not install: `kinect2_bridge`, `aruco_opencv` and `easy_handeye2`. The vision node also needs `pip install ultralytics` for YOLO. Build it with `colcon build --packages-select computer_vision`.
+`enable_CV:=true` needs more software. See [Camera and calibration](camera-and-calibration.md).
 
-Next: [Quickstart](../user-guide/quickstart.md)
+Next: [Quickstart](../user-guide/quickstart.md).
