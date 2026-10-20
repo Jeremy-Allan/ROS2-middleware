@@ -44,6 +44,9 @@ def actions(ros_context):
     host_node.cb_group = ReentrantCallbackGroup()
 
     arm_actions = ArmActions(host_node)
+    # push lists the scene's objects; default to none so push tests only
+    # see their target unless they say otherwise
+    arm_actions.get_object_names = MagicMock(return_value=[])
 
     yield arm_actions
     host_node.destroy_node()
@@ -1755,7 +1758,7 @@ def test_push_faces_object_and_extends_shoulder_elbow_only(actions):
     """push should face the object (joint_1 = its bearing from the arm),
     solve a planar reach (solve_planar_reach) for both the contact pose
     and the extended end pose, verify both collision-free
-    (check_joint_state_validity), then approach/close/extend - all while
+    (check_joint_state_validity), then approach/extend - all while
     contact with the object is temporarily permitted."""
 
     target_info = {
@@ -2121,14 +2124,11 @@ def test_push_allows_and_reverts_table_contact_around_the_extend(actions):
     assert actions.motion.allowed == [("push_block", ["table"], True), ("push_block", ["table"], False)]
 
 
-def test_push_attaches_after_closing_and_detaches_before_retreating(actions):
-    """The object should be attached right after the gripper closes on
-    it (so its position in the planning scene tracks the real arm
-    motion through the extend, like pickup/dropoff/throw), and detached
-    again - mirroring dropoff/throw's open -> detach -> update-pose
-    ordering - before the arm retreats, so retreating moves through
-    space the object has genuinely vacated rather than through its
-    still-registered pre-push position."""
+def test_push_keeps_the_gripper_open_and_attaches_at_contact(actions):
+    """The gripper opens once before the approach and never closes. The
+    object is attached (scene only) once the gripper reaches it, so its
+    position in the planning scene tracks the extend, and detached again
+    (detach -> update-pose) before the arm retreats."""
 
     target_info = {
         "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
@@ -2151,56 +2151,101 @@ def test_push_attaches_after_closing_and_detaches_before_retreating(actions):
     actions.update_object_pose = MagicMock(side_effect=lambda *a: call_order.append("update_pose") or True)
     actions.motion = FakeMotion(supports=["table"])
 
-    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward", "close_position": 0.75})
 
     assert success is True
-    actions.attach_object.assert_called_once_with("push_block")
-    actions.detach_object.assert_called_once_with("push_block")
-
-    # open, approach, close, attach, extend, open, detach, update_pose, retreat
+    # open, approach, attach, extend, detach, update_pose, retreat - never closes
     assert call_order == [
-        "gripper:0.0", "joint_move", "gripper:0.75", "attach", "joint_move",
-        "gripper:0.0", "detach", "update_pose", "joint_move",
+        "gripper:0.0", "joint_move", "attach", "joint_move", "detach", "update_pose", "joint_move",
     ]
 
     joint_calls = actions.call_joint_move_service.call_args_list
-    approach_joints = joint_calls[0][0][0]
-    retreat_joints = joint_calls[-1][0][0]
-    assert retreat_joints == approach_joints  # retreats to the contact pose
+    assert joint_calls[-1][0][0] == joint_calls[0][0][0]  # retreats to the contact pose
 
-    # retreat happens before the collision allowance is reverted
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[-1][0] == ("push_block", False)
 
 
-def test_push_fails_if_retreat_gripper_open_fails(actions):
-    """If the post-push gripper-open fails, push should report the
-    failure (while still having completed the push itself) rather than
-    silently continuing with the gripper still closed on the object."""
+def test_push_allows_collisions_with_every_other_object_and_restores_them(actions):
+    """Push carries on through anything in its way: every object (bar the
+    vision node's table_fit) is exempt from collision checking from before
+    the pose checks until after the retreat. Obstacles like the table
+    aren't objects, so they're never touched."""
 
     target_info = {
         "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
     }
     actions.get_object_info = MagicMock(return_value=target_info)
-    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.get_object_names = MagicMock(return_value=["tea_pot", "push_block", "table_fit", "delivery_tray"])
+    call_order = []
+    actions.solve_planar_reach = MagicMock(
+        side_effect=lambda *a, **k: call_order.append("solve") or (-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
     actions.check_joint_state_validity = MagicMock(return_value=True)
-    actions.set_collision_allowed = MagicMock(return_value=True)
-    actions.call_move_gripper_service = MagicMock(
-        side_effect=[{"success": True}, {"success": True}, {"success": False, "message": "gripper fault"}]
-    )
-    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions.set_collision_allowed = MagicMock(
+        side_effect=lambda name, allowed: call_order.append(f"{name}:{allowed}") or True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(
+        side_effect=lambda *a, **k: call_order.append("joint_move") or {"success": True})
     actions.attach_object = MagicMock(return_value=True)
     actions.detach_object = MagicMock(return_value=True)
+    actions.update_object_pose = MagicMock(return_value=True)
     actions.motion = FakeMotion(supports=["table"])
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.2)
+
+    success, _ = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert success is True
+    allowed = ["push_block:True", "tea_pot:True", "delivery_tray:True"]
+    restored = ["push_block:False", "tea_pot:False", "delivery_tray:False"]
+    assert call_order[:3] == allowed
+    assert call_order[3] == "solve"  # before any pose is solved or checked
+    assert call_order[-3:] == restored
+    assert "table_fit:True" not in call_order
+
+
+def test_push_reverts_only_what_it_allowed_if_an_allowance_fails(actions):
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.get_object_names = MagicMock(return_value=["push_block", "tea_pot", "delivery_tray"])
+    actions.set_collision_allowed = MagicMock(side_effect=lambda name, allowed: not (name == "tea_pot" and allowed))
+    actions.call_joint_move_service = MagicMock()
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert (success, message) == (False, "Failed to allow contact with 'tea_pot' for push")
+    assert [c[0] for c in actions.set_collision_allowed.call_args_list] == [
+        ("push_block", True), ("tea_pot", True), ("push_block", False)]
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_push_fails_if_it_cant_list_the_scene_objects(actions):
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    })
+    actions.get_object_names = MagicMock(return_value=None)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock()
 
     success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
     assert success is False
-    assert "gripper fault" in message
-    actions.detach_object.assert_not_called()
-    allow_calls = actions.set_collision_allowed.call_args_list
-    assert allow_calls[-1][0] == ("push_block", False)
+    assert "Couldn't list the scene's objects" in message
+    actions.set_collision_allowed.assert_not_called()
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_get_object_names_lists_the_robot_parameters_objects(actions):
+    response = SimpleNamespace(object_list=["water_bottle", "tea_pot"])
+    with patch("kinova_interface.actions.arm_actions.call_service", return_value=response) as call:
+        assert ArmActions.get_object_names(actions) == ["water_bottle", "tea_pot"]
+    assert call.call_args[0][2] == "/get_robot_parameters"
+    with patch("kinova_interface.actions.arm_actions.call_service", return_value=None):
+        assert ArmActions.get_object_names(actions) is None
 
 
 def test_push_fails_if_retreat_move_fails(actions):

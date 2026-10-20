@@ -119,16 +119,21 @@ search:
   motion happens.
 - **Collision handling**: `set_collision_allowed(object_id, allowed)` - a
   scoped update to the planning scene's allowed collision matrix (ACM),
-  permitting (then reverting) contact between just the pushed object and
-  everything else, for the duration of the push. Always reverted in a
-  `finally` block, even on failure.
+  permitting (then reverting) contact between an object and everything
+  else. Push applies it to the pushed object *and every other object* in
+  the scene (from `/get_robot_parameters`, minus the vision node's
+  `table_fit`) for the duration of the push, so it carries straight on
+  through anything in its way instead of planning around it or failing.
+  Obstacles (`table`, walls) aren't objects and stay collision-checked.
+  Always reverted in a `finally` block, even on failure. See
+  "Open gripper" below.
 
   This needed a second fix after the single-plane solve above still
   failed for real, mid-extend, with `INVALID_MOTION_PLAN`: interpolating
   the joint-space path from the (verified, collision-free) contact state
   to the (also verified) extend state, `/check_state_validity` showed
   the *start* of that path genuinely in contact with the pushed object
-  (correct - the gripper is closed on it) even with
+  (correct - the gripper was closed on it at the time) even with
   `set_collision_allowed(object_id, True)` already applied. The original
   implementation only set the ACM's `default_entry` fallback for the
   object; MoveIt auto-populates *explicit* disallow entries for a
@@ -167,6 +172,22 @@ bigger object may get pushed slightly off from how a human would
 naturally grip it (by its center rather than a computed near-face point)
 in exchange for keeping the single-plane motion exactly as simple as
 it already is.
+
+## Open gripper
+
+Push used to close the gripper to `close_position` (default 0.75) at the
+contact pose, to act as a flat pushing surface. It now stays open for the
+whole push: opened once before the approach and never closed. The pushed
+object is still attached at contact, but only in the planning scene, so
+it moves with the gripper in RViz; nothing physically grips it.
+`close_position` is no longer used.
+
+At the same time, push stopped avoiding other objects: every object in
+the scene is exempt from collision checking for the whole push (see
+Collision handling above), so the arm pushes straight through anything
+in its way. On the real arm those objects get knocked; in the planning
+scene they stay where they were, since there's no physics - only the
+target's pose is updated.
 
 ## Reused by `thrust`
 

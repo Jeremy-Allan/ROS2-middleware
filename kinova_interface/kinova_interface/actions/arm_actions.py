@@ -18,6 +18,7 @@ from moveit_msgs.srv import GetPositionIK, ApplyPlanningScene, GetPositionFK, Ge
 from moveit_msgs.msg import RobotState, PlanningScene, AllowedCollisionMatrix, AllowedCollisionEntry, PlanningSceneComponents
 
 from kinova_interfaces.srv import (
+    GetRobotParameters,
     GetObjectCoordinates,
     GetRelativeMovement,
     GetObjectInfo,
@@ -80,6 +81,7 @@ class ArmActions:
         self.relative_client = node.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=cb_group)
         self.info_client = node.create_client(GetObjectInfo, '/get_object_info', callback_group=cb_group)
         self.orientation_client = node.create_client(GetOrientationPreset, '/get_orientation_preset', callback_group=cb_group)
+        self.parameters_client = node.create_client(GetRobotParameters, '/get_robot_parameters', callback_group=cb_group)
 
         # Service clients for attach/detach/update-pose, provided by the environment mapping node
         self.attach_client = node.create_client(AttachObject, '/attach_object', callback_group=cb_group)
@@ -231,6 +233,14 @@ class ArmActions:
         else:
             self.get_logger().error(f"Failed to get object info for {target_name}: {response.message if response else 'no response'}")
             return None
+
+    def get_object_names(self):
+        """Names of every object recipes can name (not obstacles like the table), or None if unavailable."""
+        response = call_service(self.parameters_client, GetRobotParameters.Request(), '/get_robot_parameters',
+                                self.get_logger())
+        if response is None:
+            return None
+        return list(response.object_list)
 
     def get_relative_movement_vector(self, movement_name):
         """Query the environment mapping node for a named relative-movement offset.
