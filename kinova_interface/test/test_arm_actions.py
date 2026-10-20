@@ -1439,6 +1439,60 @@ def test_thrust_backward_faces_the_far_side_of_the_base(actions):
     assert spin_call[0][0][0] == pytest.approx(math.atan2(-0.1, 0.3))
 
 
+def _thrust_scene(actions, names):
+    """A held red_cube at (0.45, 0, 0.02) with every planning step mocked to succeed,
+    recording the order of collision exemptions, reach searches and moves."""
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.45, "y": 0.0, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.get_object_names = MagicMock(return_value=names)
+    order = []
+    actions.set_collision_allowed = MagicMock(side_effect=lambda name, allowed: order.append(f"{name}:{allowed}") or True)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions._find_max_planar_reach_distance = MagicMock(side_effect=lambda *a, **k: order.append("search") or 0.3)
+    actions.call_joint_move_service = MagicMock(side_effect=lambda *a, **k: order.append("move") or {"success": True})
+    return order
+
+
+def test_thrust_stabs_through_other_objects_but_winds_up_around_them(actions):
+    """Other objects are exempt from collision checking for the reach search
+    and the extend, so the stab can hit what it's aimed at - but not for the
+    pull-back or spin, and never the held object itself or table_fit."""
+    order = _thrust_scene(actions, ["red_cube", "tea_pot", "table_fit", "delivery_tray"])
+
+    success, _ = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert success is True
+    exempt = ["tea_pot:True", "delivery_tray:True"]
+    restore = ["tea_pot:False", "delivery_tray:False"]
+    assert order == [*exempt, "search", *restore,  # reach search ignores objects
+                     "move", "move",               # pull back, spin: normal checking
+                     *exempt, "move", *restore]    # the stab ignores objects
+
+
+def test_thrust_restores_collision_checking_if_the_stab_fails(actions):
+    order = _thrust_scene(actions, ["red_cube", "tea_pot"])
+    actions.call_joint_move_service = MagicMock(side_effect=lambda *a, **k: order.append("move") or (
+        {"success": False, "message": "MoveIt failed"} if order.count("move") == 3 else {"success": True}))
+
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Failed to thrust 'red_cube' to its destination: MoveIt failed")
+    assert order[-2:] == ["move", "tea_pot:False"]
+
+
+def test_thrust_fails_if_it_cant_list_the_scene_objects(actions):
+    order = _thrust_scene(actions, None)
+
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Couldn't list the scene's objects to thrust 'red_cube' through them")
+    assert order == []  # nothing exempted, nothing moved
+
+
 def test_thrust_without_target_defaults_to_held_object(actions):
     """'thrust it'/'thrust' with no target given should refer to whatever's
     actually held, not fail just because 'target' was omitted."""
@@ -2289,6 +2343,25 @@ def test_push_fails_if_it_cant_list_the_scene_objects(actions):
     assert "Couldn't list the scene's objects" in message
     actions.set_collision_allowed.assert_not_called()
     actions.call_joint_move_service.assert_not_called()
+
+
+def test_exemptible_objects_leaves_out_the_vision_table(actions):
+    actions.get_object_names = MagicMock(return_value=["water_bottle", "table_fit", "tea_pot"])
+    assert actions.exemptible_objects() == ["water_bottle", "tea_pot"]
+    actions.get_object_names = MagicMock(return_value=None)
+    assert actions.exemptible_objects() is None
+
+
+def test_exempt_from_collisions_stops_at_the_first_failure_and_restores_exactly_what_it_exempted(actions):
+    actions.set_collision_allowed = MagicMock(side_effect=lambda name, allowed: not (name == "b" and allowed))
+    exempted = []
+
+    assert actions.exempt_from_collisions(["a", "b", "c"], exempted) == "b"
+    assert exempted == ["a"]
+    actions.restore_collisions(exempted)
+
+    assert [c[0] for c in actions.set_collision_allowed.call_args_list] == [("a", True), ("b", True), ("a", False)]
+    assert exempted == []
 
 
 def test_get_object_names_lists_the_robot_parameters_objects(actions):

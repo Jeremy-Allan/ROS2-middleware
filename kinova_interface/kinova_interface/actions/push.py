@@ -7,10 +7,6 @@ from kinova_interface.utils.geometry import DIRECTION_ROTATIONS, resolve_directi
 from kinova_interface.utils.grasping import half_extent_along, object_rotation
 from kinova_interface.utils.robot import GRIPPER_OPEN
 
-# Objects push never exempts from collision checking: the vision node's
-# fitted table plane is registered as an object, but it's the table.
-PUSH_KEEPS_CHECKING = {'table_fit'}
-
 # Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
 # because arm_actions imports this module and that would be circular.
 if TYPE_CHECKING:
@@ -58,7 +54,7 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     object from the move in to contact until after the retreat (and
     briefly while the contact/extend poses are checked beforehand), and
     always reverted in a 'finally' block even if the push fails partway
-    through. Obstacles (the table, walls) and PUSH_KEEPS_CHECKING are
+    through. Obstacles (the table, walls) and ArmActions.NEVER_EXEMPT are
     still checked. Other objects aren't moved in the planning scene -
     there's no physics - only the target is.
 
@@ -132,15 +128,15 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     # that's a known, accepted limitation for now: it may push a
     # larger object slightly off from how a human would naturally
     # grip it, favoring keeping the single-plane motion simple.
-    object_names = ctx.get_object_names()
+    object_names = ctx.exemptible_objects()
     if object_names is None:
         return False, f"Couldn't list the scene's objects to push '{target_name}' through them"
-    others = [name for name in object_names if name != target_name and name not in PUSH_KEEPS_CHECKING]
+    others = [name for name in object_names if name != target_name]
 
     exempt = [target_name, *others]
     allowed = []
     try:
-        failed = _allow_collisions(ctx, exempt, allowed)
+        failed = ctx.exempt_from_collisions(exempt, allowed)
         if failed:
             return False, f"Failed to allow contact with '{failed}' for push"
 
@@ -194,7 +190,7 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         if not ctx.check_joint_state_validity(extend_joints):
             return False, f"Push end pose for '{target_name}' is in collision"
     finally:
-        _revert_collisions(ctx, allowed)
+        ctx.restore_collisions(allowed)
 
     motion_params = ctx.build_motion_params(params.get('speed'))
 
@@ -207,7 +203,7 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         return False, f"Failed to line up behind '{target_name}' for push: {r['message']}"
 
     try:
-        failed = _allow_collisions(ctx, exempt, allowed)
+        failed = ctx.exempt_from_collisions(exempt, allowed)
         if failed:
             return False, f"Failed to allow contact with '{failed}' for push"
 
@@ -265,25 +261,8 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         if not r['success']:
             return False, f"Pushed '{target_name}' but failed to retreat afterward: {r['message']}"
     finally:
-        _revert_collisions(ctx, allowed)
+        ctx.restore_collisions(allowed)
 
     where = f"to '{destination_name}'" if destination_name else f"{direction}"
     return True, f"Pushed '{target_name}' {where}"
 
-
-def _allow_collisions(ctx: 'ArmActions', names: list[str], allowed: list[str]):
-    """Exempt each object from collision checking, recording it in `allowed`
-    so the caller can revert exactly those. Returns the first name that
-    couldn't be exempted, or None."""
-    for name in names:
-        if not ctx.set_collision_allowed(name, True):
-            return name
-        allowed.append(name)
-    return None
-
-
-def _revert_collisions(ctx: 'ArmActions', allowed: list[str]):
-    """Restore collision checking for everything _allow_collisions exempted."""
-    for name in allowed:
-        ctx.set_collision_allowed(name, False)
-    allowed.clear()

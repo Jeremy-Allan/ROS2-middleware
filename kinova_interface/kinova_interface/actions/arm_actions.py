@@ -242,6 +242,35 @@ class ArmActions:
             return None
         return list(response.object_list)
 
+    # Objects that are never exempted from collision checking: the vision
+    # node's fitted table plane is registered as an object, but it's the table.
+    NEVER_EXEMPT = {'table_fit'}
+
+    def exemptible_objects(self):
+        """Objects push/thrust may pass straight through: every object except
+        NEVER_EXEMPT (obstacles like the table aren't objects). None if the
+        object list is unavailable."""
+        names = self.get_object_names()
+        if names is None:
+            return None
+        return [name for name in names if name not in self.NEVER_EXEMPT]
+
+    def exempt_from_collisions(self, names, exempted):
+        """Exempt each object from collision checking (set_collision_allowed),
+        recording it in `exempted` so restore_collisions can revert exactly
+        those. Returns the first name that couldn't be exempted, or None."""
+        for name in names:
+            if not self.set_collision_allowed(name, True):
+                return name
+            exempted.append(name)
+        return None
+
+    def restore_collisions(self, exempted):
+        """Restore collision checking for everything exempt_from_collisions exempted."""
+        for name in exempted:
+            self.set_collision_allowed(name, False)
+        exempted.clear()
+
     def get_relative_movement_vector(self, movement_name):
         """Query the environment mapping node for a named relative-movement offset.
 

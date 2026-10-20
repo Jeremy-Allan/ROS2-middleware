@@ -222,7 +222,13 @@ extend (shoulder/elbow only, seeded at the spin position) as far as the
 arm can reach along that bearing. A `destination` only sets the bearing,
 so the stab doesn't stop at it; the pull-back guarantees a real stroke
 even when the destination is no further from the base than the object
-started. An explicit `distance` (with `direction`) is still honoured. Since the object is
+started. An explicit `distance` (with `direction`) is still honoured.
+Like push, the stab goes straight through other objects so it can
+actually hit what it's aimed at: every object except the held one (and
+`table_fit`) is exempt from collision checking for the reach search and
+the extend (`ArmActions.exempt_from_collisions`), restored afterwards
+even on failure. The pull-back and spin still avoid everything, and the
+table and walls are always checked. Since the object is
 attached by that point (from `pickup`), it's excluded from collision
 checking against the gripper automatically - unlike `push`, `thrust`
 needs no `set_collision_allowed` at all.
