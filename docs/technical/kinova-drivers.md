@@ -393,7 +393,3 @@ kortex_bringup/launch/kortex_control.launch.py
 kortex_description/arms/gen3_lite/6dof/config/ros2_controllers.yaml
 kortex_moveit_config/kinova_gen3_lite_moveit_config/config/ros2_controllers.yaml
 ```
-
-Additional observations about the Gen3 Lite MoveIt fault-controller spawner and installed PickNik controller packages are based on the supplied grep output and local ROS 2 commands.
-
-**Verification status:** Source implementation reviewed; controller YAML reviewed; PickNik package installation confirmed; physical operation and active ROS 2 interfaces not verified in this review.
