@@ -12,7 +12,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 from kinova_interface.actions.arm_actions import ArmActions
 from kinova_interface.actions.motion import MotionUnavailable
-from kinova_interface.actions import pour, throw
+from kinova_interface.actions import pour, throw, thrust
 from kinova_interface.utils import geometry
 
 from kinova_interfaces.srv import (
@@ -1320,13 +1320,11 @@ def test_thrust_requires_destination_or_direction(actions):
     assert success is False
 
 
-def test_thrust_raises_spins_and_extends(actions):
-    """thrust should raise straight up (facing wherever the object was
-    originally resting, wrist reset to level), spin to face the thrust
-    direction (joint_1 only, shoulder/elbow held from the raise), then
-    extend toward the destination (shoulder/elbow only, seeded at the
-    spin position) - reusing the exact same single-plane mechanism as
-    push (see docs/technical/motion-and-actions/push.md)."""
+def test_thrust_pulls_back_spins_and_extends_to_the_reach_limit(actions):
+    """thrust should raise the object and draw it in toward the base along
+    its own bearing (wrist level), spin to face the destination (joint_1
+    only), then extend along that bearing as far as the arm can reach -
+    past the destination, not stopping at it."""
 
     actions.held_object = "red_cube"
     origin_x, origin_y, origin_z = 0.3, 0.1, 0.02
@@ -1345,29 +1343,97 @@ def test_thrust_raises_spins_and_extends(actions):
     face_yaw = math.atan2(origin_y, origin_x)
     thrust_yaw = math.atan2(0.4, -0.2)
     raise_z = origin_z + pour.POUR_DEFAULT_LIFT_HEIGHT
+    pull = thrust.THRUST_PULLBACK_RADIUS
 
     def solve_side_effect(base_yaw, x, y, z, seed_shoulder=None, seed_elbow=None):
         if seed_shoulder is None:
             assert base_yaw == pytest.approx(face_yaw)
-            assert (x, y, z) == pytest.approx((origin_x, origin_y, raise_z))
+            assert (x, y, z) == pytest.approx((pull * math.cos(face_yaw), pull * math.sin(face_yaw), raise_z))
             return (-0.1, 1.8, (x, y, z), 0.0)
         assert base_yaw == pytest.approx(thrust_yaw)
-        assert seed_shoulder == pytest.approx(-0.1)
-        assert seed_elbow == pytest.approx(1.8)
+        assert (seed_shoulder, seed_elbow) == pytest.approx((-0.1, 1.8))
+        assert math.hypot(x, y) == pytest.approx(pull + 0.35)  # reach limit, beyond the destination's 0.45 m
+        assert math.atan2(y, x) == pytest.approx(thrust_yaw)
         return (-0.4, 1.5, (x, y, z), 0.0)
 
     actions.solve_planar_reach = MagicMock(side_effect=solve_side_effect)
     actions.check_joint_state_validity = MagicMock(return_value=True)
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.35)
 
     success, message = actions.handlers['thrust']({"target": "red_cube", "destination": "target_spot"})
 
     assert success is True
-    raise_call, spin_call, extend_call = actions.call_joint_move_service.call_args_list
+    reference, direction, height, *_ = actions._find_max_planar_reach_distance.call_args[0]
+    assert (reference['x'], reference['y']) == pytest.approx((pull * math.cos(thrust_yaw), pull * math.sin(thrust_yaw)))
+    assert direction == "forward" and height == pytest.approx(raise_z)
+    assert actions._find_max_planar_reach_distance.call_args[1]['fixed_yaw'] == pytest.approx(thrust_yaw)
 
+    raise_call, spin_call, extend_call = actions.call_joint_move_service.call_args_list
     assert raise_call[0][0] == [pytest.approx(face_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
     assert spin_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
     assert extend_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.4), pytest.approx(1.5), 0.0, 0.0, 0.0]
+
+
+def test_thrust_steps_the_pull_back_outward_if_the_closest_pose_is_blocked(actions):
+    """If the pull-back pose at THRUST_PULLBACK_RADIUS is in collision, try
+    further out in THRUST_PULLBACK_STEP steps, never past the object itself."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.45, "y": 0.0, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(side_effect=[False, True, True, True])  # 0.30 blocked
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.3)
+
+    success, _ = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert success is True
+    pullback_radii = [call[0][1] for call in actions.solve_planar_reach.call_args_list[:2]]
+    assert pullback_radii == pytest.approx([thrust.THRUST_PULLBACK_RADIUS,
+                                            thrust.THRUST_PULLBACK_RADIUS + thrust.THRUST_PULLBACK_STEP])
+
+
+def test_thrust_fails_if_no_pull_back_pose_up_to_the_object_is_clear(actions):
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.4, "y": 0.0, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=False)
+    actions.call_joint_move_service = MagicMock()
+
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Could not solve a pulled-back raise for 'red_cube'")
+    pullback_radii = [call[0][1] for call in actions.solve_planar_reach.call_args_list]
+    assert pullback_radii == pytest.approx([0.30, 0.35, 0.40])  # stops at the object's own 0.4 m
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_thrust_backward_faces_the_far_side_of_the_base(actions):
+    """'backward' turns the object's own bearing by 180 degrees (wrapped to
+    +-pi for joint_1), rather than shortening a reach along it."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": -0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.3)
+
+    success, _ = actions.handlers['thrust']({"target": "red_cube", "direction": "backward"})
+
+    assert success is True
+    spin_call = actions.call_joint_move_service.call_args_list[1]
+    assert spin_call[0][0][0] == pytest.approx(math.atan2(-0.1, 0.3))
 
 
 def test_thrust_without_target_defaults_to_held_object(actions):
@@ -1627,12 +1693,11 @@ def test_thrust_uses_dynamic_distance_when_none_given(actions):
 
     assert success is True
     actions._find_max_planar_reach_distance.assert_called_once()
-    # 'forward' extends straight along the object's own bearing from the
-    # arm's base, so the resolved release point should sit 0.22m further
-    # out along the same (origin_x, origin_y) direction.
-    call_args = actions._find_max_planar_reach_distance.call_args[0]
-    assert call_args[0] == {"x": origin_x, "y": origin_y, "z": origin_z}
-    assert call_args[1] == "forward"
+    # searched outward along the object's own bearing, from the pull-back point
+    call_args = actions._find_max_planar_reach_distance.call_args
+    assert call_args[0][0] == pytest.approx({"x": thrust.THRUST_PULLBACK_RADIUS, "y": 0.0})
+    assert call_args[0][1] == "forward"
+    assert call_args[1]['fixed_yaw'] == pytest.approx(0.0)
 
 
 def test_thrust_honors_explicit_distance_without_dynamic_search(actions):

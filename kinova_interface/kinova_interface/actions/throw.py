@@ -12,14 +12,16 @@ if TYPE_CHECKING:
     from kinova_interface.actions.arm_actions import ArmActions
 
 
-# A captured, fixed joint_2..6 shape (see docs/technical/motion-and-actions/throw.md)
-# for a real, manually-demonstrated wind-up - not derived from home by
-# a wind-up angle like an earlier version of this; joint_1 (base
-# facing) is the only thing that varies per throw.
-THROW_WINDUP_POSE = [math.radians(v) for v in [-22.84, 56.01, 80.71, 50.6, 0.0]]
+# A fixed joint_2..6 wind-up shape from a manual demonstration (see
+# docs/technical/motion-and-actions/throw.md); joint_1 (base facing) is
+# the only thing that varies per throw. Mirrored from the demo (joint_2/3
+# negated, joint_4 - 180 deg): as captured, the swing went over the top
+# and away from the direction joint_1 faces, throwing away from the target.
+THROW_WINDUP_POSE = [math.radians(v) for v in [22.84, -56.01, -99.29, 50.6, 0.0]]
 # The fling's own end pose - a single continuous swing straight from
-# the wind-up to here, joint_1 fixed the whole way.
-THROW_FLING_POSE = [math.radians(v) for v in [32.63, -34.26, 80.71, -63.25, 0.0]]
+# the wind-up to here, joint_1 fixed the whole way, ending on the
+# target's side of the base.
+THROW_FLING_POSE = [math.radians(v) for v in [-32.63, 34.26, -99.29, -63.25, 0.0]]
 # joint_5 barely moves during the early part of the fling, then swings
 # hard right at the release moment - this is where the gripper should
 # open. -42.7 deg was the value directly captured from the original
