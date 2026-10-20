@@ -123,7 +123,9 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     object but the held one is exempt from collision checking (and the held
     object may touch them too, ArmActions.passing_through) from planning
     the fling until it has finished - throw waits for the swing to finish
-    before restoring it, so MoveIt doesn't abort the rest of the swing.
+    before restoring it, so MoveIt doesn't abort the rest of the swing, then
+    retreats to the pose it rotated to before winding up (still exempt), so
+    the arm isn't left inside anything once collision checking is back.
     The rotate and wind-up still avoid everything, and the table and walls
     are always checked.
 
@@ -270,6 +272,14 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         if wait_for_future(fling_future, 'throw fling', ctx.get_logger(),
                            timeout_sec=plan.duration + RELEASE_TIMEOUT_MARGIN_SEC) is None:
             ctx.get_logger().warn(f"Throw fling of '{target_name}' didn't report finishing")
+
+        # 5. Retreat to the pose it rotated to before winding up (reached with
+        # normal collision checking, so clear), while still exempt, so the
+        # arm isn't left inside anything the swing went through once
+        # collision checking is restored.
+        r = ctx.call_joint_move_service(rotate_joints, motion_params=motion_params)
+        if not r['success']:
+            return False, f"Threw '{target_name}' but failed to retreat afterward: {r['message']}"
 
     where = f"toward '{destination_name}'" if destination_name else direction
     return True, f"Threw '{target_name}' {where}"

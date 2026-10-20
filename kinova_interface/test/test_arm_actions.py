@@ -1372,10 +1372,11 @@ def test_thrust_pulls_back_spins_and_extends_to_the_reach_limit(actions):
     assert direction == "forward" and height == pytest.approx(raise_z)
     assert actions._find_max_planar_reach_distance.call_args[1]['fixed_yaw'] == pytest.approx(thrust_yaw)
 
-    raise_call, spin_call, extend_call = actions.call_joint_move_service.call_args_list
+    raise_call, spin_call, extend_call, retreat_call = actions.call_joint_move_service.call_args_list
     assert raise_call[0][0] == [pytest.approx(face_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
     assert spin_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
     assert extend_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.4), pytest.approx(1.5), 0.0, 0.0, 0.0]
+    assert retreat_call[0][0] == spin_call[0][0]  # backs out along the same line
 
 
 def test_thrust_steps_the_pull_back_outward_if_the_closest_pose_is_blocked(actions):
@@ -1473,9 +1474,9 @@ def test_thrust_stabs_through_other_objects_but_winds_up_around_them(actions):
     assert success is True
     open_up = ["tea_pot:True", "delivery_tray:True", "red_cube~tea_pot+delivery_tray:True"]
     close = ["red_cube~tea_pot+delivery_tray:False", "tea_pot:False", "delivery_tray:False"]
-    assert order == [*open_up, "search", *close,  # reach search ignores objects
-                     "move", "move",              # pull back, spin: normal checking
-                     *open_up, "move", *close]    # the stab ignores objects
+    assert order == [*open_up, "search", *close,        # reach search ignores objects
+                     "move", "move",                    # pull back, spin: normal checking
+                     *open_up, "move", "move", *close]  # stab and retreat ignore objects
 
 
 def test_thrust_restores_collision_checking_if_the_stab_fails(actions):
@@ -2746,8 +2747,11 @@ def test_throw_flings_through_other_objects_but_winds_up_around_them(actions):
         "move", "move",                                    # rotate, wind-up: normal checking
         "tea_pot:True", "red_cube~tea_pot:True",           # exempt for the fling
         "plan fling", "fling", "removed", "fling finished",
-        "red_cube~tea_pot:False", "tea_pot:False",         # only once the swing has finished
+        "move",                                            # retreat, still exempt
+        "red_cube~tea_pot:False", "tea_pot:False",         # only once clear
     ]
+    retreat = actions.call_joint_move_service.call_args_list[-1][0][0]
+    assert retreat == actions.call_joint_move_service.call_args_list[0][0][0]  # back to the rotate pose
 
 
 def test_throw_restores_collision_checking_if_the_fling_cant_be_planned(actions):
@@ -3218,3 +3222,14 @@ def test_every_moveit_error_code_has_a_name():
              if k.isupper() and isinstance(getattr(MoveItErrorCodes, k), int)} - {MoveItErrorCodes.SUCCESS}
     assert set(MOVEIT_ERRORS) == codes
     assert moveit_error(-999) == 'unknown MoveIt error code -999'
+
+
+def test_thrust_fails_if_the_retreat_fails_but_still_restores_collision_checking(actions):
+    order = _thrust_scene(actions, ["red_cube", "tea_pot"])
+    actions.call_joint_move_service = MagicMock(side_effect=lambda *a, **k: order.append("move") or (
+        {"success": False, "message": "MoveIt failed"} if order.count("move") == 4 else {"success": True}))
+
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Thrust 'red_cube' but failed to retreat afterward: MoveIt failed")
+    assert order[-2:] == ["red_cube~tea_pot:False", "tea_pot:False"]

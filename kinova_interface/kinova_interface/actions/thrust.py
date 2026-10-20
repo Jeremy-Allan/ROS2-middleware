@@ -48,7 +48,10 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
        every object but the held one is exempt from collision checking
        for it (ArmActions.exempt_from_collisions), and the held object may
        touch them too (motion.allow_contact), all restored afterwards even
-       on failure. The held object itself stays checked against the table. The pull-back and spin still avoid everything;
+       on failure. The held object itself stays checked against the table.
+    4. Retreat back along the same line to the spin pose, still exempt,
+       so the arm isn't left inside whatever it stabbed; collision
+       checking is only restored once it's clear. The pull-back and spin still avoid everything;
        the table and walls are always checked. Objects that get hit
        don't move in the planning scene - there's no physics.
 
@@ -165,6 +168,13 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         r = ctx.call_joint_move_service(extend_joints, motion_params=motion_params)
         if not r['success']:
             return False, f"Failed to thrust '{target_name}' to its destination: {r['message']}"
+
+        # 4. Retreat back along the same line to the spin pose (checked clear
+        # before any exemptions), while still exempt, so the arm isn't left
+        # inside whatever it stabbed once collision checking is restored.
+        r = ctx.call_joint_move_service(spin_joints, motion_params=motion_params)
+        if not r['success']:
+            return False, f"Thrust '{target_name}' but failed to retreat afterward: {r['message']}"
 
     where = f"toward '{destination_name}'" if destination_name else direction
     return True, f"Thrust '{target_name}' {where}"

@@ -109,7 +109,9 @@ checking, and the held object may touch them too
 of the robot). That covers planning the fling through to the end of the
 swing: the fling runs asynchronously, so throw waits for it to finish
 before restoring collision checking, rather than restoring it mid-swing
-and having MoveIt abort the rest. The rotate and wind-up still avoid
+and having MoveIt abort the rest. It then retreats to the pose it rotated
+to before winding up, still exempt, so the arm isn't left inside anything
+the swing went through. The rotate and wind-up still avoid
 everything, and the table and walls are always checked. Objects that get
 hit don't move in the planning scene, since there's no physics.
 

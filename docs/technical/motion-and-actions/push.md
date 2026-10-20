@@ -230,7 +230,9 @@ the extend (`ArmActions.exempt_from_collisions`), and the held object is
 allowed to touch them too (`motion.allow_contact`: MoveIt checks an
 attached object as part of the robot, so exempting the others alone left
 the held object colliding with the target), all restored afterwards even
-on failure. The pull-back and spin still avoid everything, and the
+on failure. After the stab it retreats back along the same line to the
+pose it struck from, while still exempt, so the arm isn't left inside
+whatever it stabbed once collision checking is restored. The pull-back and spin still avoid everything, and the
 table and walls are always checked. Since the object is
 attached by that point (from `pickup`), it's excluded from collision
 checking against the gripper automatically - unlike `push`, `thrust`
