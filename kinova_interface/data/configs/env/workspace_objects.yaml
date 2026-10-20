@@ -24,12 +24,36 @@ objects:
       position: {x: 0.45, y: 0.2, z: 0.0035}
       orientation: {roll: 0.0, pitch: 1.57, yaw: 0.0}
     shape: {type: BOX, dimensions: [0.107, 0.043, 0.073]}
+
+  tea_cup:
+    pose:
+      position: {x: 0.45, y: -0.20, z: -0.0125}
+      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+    shape: {type: CYLINDER, dimensions: [0.037, 0.0185]}
+
+  # tea_cup_B:
+  #   pose:
+  #     position: {x: 0.37, y: -0.20, z: -0.0125}
+  #     orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+  #   shape: {type: CYLINDER, dimensions: [0.037, 0.0185]}
   
   delivery_tray:
     pose:
       position: {x: -0.235, y: -0.425, z: -0.028}
       orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
     shape: {type: BOX, dimensions: [0.235, 0.168, 0.025]}
+  
+  coaster:
+    pose:
+      position: {x: -0.235, y: -0.225, z: -0.0475}
+      orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+    shape: {type: CYLINDER, dimensions: [0.005, 0.0375]}
+
+  # coaster_B:
+  #   pose:
+  #     position: {x: -0.135, y: -0.225, z: -0.0725}
+  #     orientation: {roll: 0.0, pitch: 0.0, yaw: 0.0}
+  #   shape: {type: CYLINDER, dimensions: [0.005, 0.0375]}
 
 obstacles:
   small_wall:
