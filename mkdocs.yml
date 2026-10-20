@@ -29,8 +29,9 @@ nav:
       - ROS interfaces: technical/ros-interfaces.md
       - Motion and actions:
           - Overview: technical/motion-and-actions/index.md
+          - Pickup and dropoff: technical/motion-and-actions/pickup-and-dropoff.md
           - Pour: technical/motion-and-actions/pour.md
-          - Push: technical/motion-and-actions/push.md
+          - Push and thrust: technical/motion-and-actions/push.md
           - Throw: technical/motion-and-actions/throw.md
       - Proxy (from the proxy repo): technical/proxy/readme.md
       - Computer vision: technical/computer-vision.md

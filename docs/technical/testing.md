@@ -1,98 +1,129 @@
-[Docs Home](../README.md)
-
 # Testing
 
-Testing is split the same way the system is: the middleware has unit tests and test recipes, and the proxy has its own LLM evaluation suite. Neither currently exercises the other, so passing both is not the same as proving the full pipeline works end to end, see the last section below.
+The middleware has unit tests, test recipes and a script that checks the gripper orientations. None of them needs the proxy. The proxy has its own tests, described in its [README](https://github.com/paul-isit/embodied-ai-proxy#evaluating-an-llm-with-test-suites).
 
-## The middleware's unit tests
+!!! warning
+    The test recipes and the orientation check move the arm. Run them in simulation first. On a real arm, clear the workspace before each run.
 
-The unit tests mock every ROS service and action, so they need neither MoveIt nor the robot. From the workspace root, after `colcon build`:
+## Unit tests
+
+The unit tests replace MoveIt, the controllers and the other nodes with mocks. They need ROS 2 and a built workspace. They do not need a running middleware or an arm.
+
+Build the workspace, then run the tests from the `kinova_interface` package:
 
 ```bash
+cd ~/workspace/ros2_kortex_ws
+colcon build --packages-select kinova_interface kinova_interfaces
 source install/setup.bash
 cd src/ROS2-middleware/kinova_interface
 python3 -m pytest test -q
 ```
 
-They mirror the package layout: `test_arm_actions.py` and `test_motion.py` cover `actions/`, there is one file per node, and `test_utils_*.py` cover `utils/`.
+To run one file, give its path, for example `python3 -m pytest test/test_motion.py -v`.
 
-## The middleware's test recipes
+The tests use the generated code of `kinova_interfaces`. After a change to a `.srv` or `.msg` file, build the package again. With an old build, tests fail with errors such as `'GetRobotParameters_Response' object has no attribute 'held_objects'`.
 
-Alongside the automated unit tests, there's a set of hand-crafted recipe files under `kinova_interface/recipes/test_suite/`, run manually against a live launch while you watch the console output and RViz.
+The fixture `ros_context` in `conftest.py` starts `rclpy` with the parameters of `motion_settings.yaml`, as the launch file does.
 
-Test in simulation first, always.
-
-| File | What it validates |
+| File | Covers |
 |---|---|
-| `recipe_pickup.json` | `auto` grasps (top for `blue_cube`, side for `water_bottle`), and putting a held object back before the next pickup |
-| `recipe_grasp_styles.json` | Forced `top`/`side` grasps, each object put back after |
-| `recipe_dropoff.json` | Pick up `water_bottle` and stand it on the centre of `delivery_tray` |
-| `recipe_pour.json`, `recipe_push.json`, `recipe_thrust.json`, `recipe_throw.json` | One composite action each (see the `*-motion-reference.md` docs) |
-| `qa_middleware/*.json` | One recipe per action or failure case, including invalid recipes that should be rejected |
+| `test_arm_actions.py` | `ArmActions` and the ten actions in `actions/`. |
+| `test_motion.py` | `actions/motion.py`: planning chains, planner fallback, straight-line moves and execution. |
+| `test_utils_grasping.py` | `utils/grasping.py`: grasp and placement candidates and their ranking. |
+| `test_utils_geometry.py` | `utils/geometry.py`, including the orientation presets. |
+| `test_utils_ros.py` | `utils/ros.py`. |
+| `test_json_parser_node.py` | `json_parser_node`: recipe loading, step dispatch and status. |
+| `test_environment_mapping_node.py` | `environment_mapping_node`: objects, scene updates, attach and detach. |
+| `test_hardware_interface_client.py` | `kinova_hardware_client`: services, goals, faults and status. |
+| `test_telemetry_node.py` | `telemetry_node`: status aggregation and fault controller recovery. |
 
-Run them like any other recipe (see [Quickstart](../user-guide/quickstart.md)):
+The `computer_vision` package has no tests.
+
+## Test recipes
+
+`recipes/test_suite/` has one recipe for each of the composite actions. `recipes/test_suite/qa_middleware/` has the same seven recipes and 18 more. Both folders are installed with the package.
+
+Start the middleware with a recipe. The path is relative to the installed `recipes` folder, and the recipe runs once, two seconds after start-up:
 
 ```bash
 ros2 launch kinova_interface robot.launch.py recipe:=test_suite/recipe_pickup.json
 ```
 
-Watch for `[Step N] <description>` lines and a final `--- All Tasks Completed ---` message.
+Or run a recipe file against a middleware that is already running:
 
-## Checking gripper orientations
+```bash
+ros2 run kinova_interface run_recipe.py <path-to-recipe.json>
+```
 
-**What it's for:** When a recipe asks for an orientation like `top_down`, you want to know two things: does the gripper really end up pointing that way, and from which spots on the table can it get there at all? `scripts/check_orientations.py` answers both in one run. Use it when:
+A successful recipe logs `--- All Tasks Completed ---`. `run_recipe.py` prints `success=` and `message=`, for example `message=Recipe executed successfully.`, and exits with 0 when the recipe succeeds.
 
-- you change the orientations in `movements_and_orientations.yaml`, or the gripper convention behind it (fingers point along `tool_frame` +Z, close along X). If the presets or the convention are wrong, every move shows `BAD`.
-- you move to a new table or robot setup and want to see which orientations still reach which positions.
-- you're choosing grasp orientations for an object and need to know what's reachable where it sits.
+### test_suite
 
-The unit test `test_orientation_presets_match_their_axes` only checks the maths. This script checks what the arm actually does.
+| Recipe | Steps |
+|---|---|
+| `recipe_pickup.json` | Picks up `blue_cube` and then `water_bottle` with the default grasp. The second pickup puts the cube back first. Then puts the bottle back. |
+| `recipe_grasp_styles.json` | Picks up two objects with the grasp style that `auto` does not choose, and puts each back. |
+| `recipe_dropoff.json` | Picks up `water_bottle` and stands it on the centre of `delivery_tray`. |
+| `recipe_pour.json` | Picks up `water_bottle` with a side grasp and pours toward `delivery_tray`. |
+| `recipe_push.json` | Pushes `water_bottle` forward without grasping it. |
+| `recipe_throw.json` | Picks up `water_bottle` and throws it forward. |
+| `recipe_thrust.json` | Picks up `water_bottle` with a side grasp and thrusts it forward. |
 
-**What it does:** It sends the arm to a 3 x 3 grid of points at z = 0.10 in `base_link` (15 cm above the table). At each point it tries every orientation: `top_down`, `top_down_90`, and `side_level` facing five headings (-90, -45, 0, 45 and 90 degrees). After each move it reads where `tool_frame` really ended up (from TF) and compares it with what was asked for. It goes home before starting each orientation. To change the grid, edit `GRID_X`, `GRID_Y` and `GRID_Z` at the top of the script.
+### qa_middleware
 
-**Running it:** Start the middleware first (no recipe needed), then:
+| Group | Recipes |
+|---|---|
+| Home and gripper | `recipe_home_only.json`. `recipe_gripper_open.json` sets the gripper position to 0.0 and `recipe_gripper_close.json` sets it to 1.0. |
+| Moves | `recipe_single_move.json` moves to `water_bottle`. `recipe_relative_up.json`, `recipe_relative_forward.json`, `recipe_relative_retreat.json` and `recipe_relative_down_left_right.json` use the named vectors of `movements_and_orientations.yaml`. |
+| Pick and place | `recipe_pickup_isolated.json` is one pickup. `recipe_pick_and_place_blue_cube.json` and `recipe_pick_and_place_water_bottle.json` pick and place one object on `delivery_tray`. `recipe_multi_object.json` places the cube and then the bottle on the tray. |
+| Variations of composite actions | `recipe_pour_in_place.json` pours without `destination` or `direction`. `recipe_throw_held_object.json` throws without `target`. |
+| Invalid input | See the next table. |
+
+| Recipe | Input | `message` of `run_recipe.py` |
+|---|---|---|
+| `recipe_invalid_empty_steps.json` | A recipe without steps. | `No executable steps in recipe` |
+| `recipe_invalid_unsupported_action.json` | The action `fly`. | `Recipe failed at step 1 (fly): Unknown action 'fly'` |
+| `recipe_invalid_unknown_object.json` | A pickup of `nonexistent_object`. | `Recipe failed at step 1 (pickup): Could not resolve pickup target 'nonexistent_object'` |
+| `recipe_invalid_gripper_range.json` | A gripper position of 1.5. | `Recipe executed successfully.` The middleware does not check the range of the position. The proxy schema accepts 0.0 to 1.0. |
+
+## Orientation check
+
+`check_orientations.py` checks that each orientation preset points the gripper where it should, and shows which positions each orientation can reach. Use it after a change to `movements_and_orientations.yaml` or to the gripper convention, and when the table or the robot moves. The convention is that the fingers point along +Z of `tool_frame` and close along its X axis.
+
+The script uses the move service of the middleware, so the middleware must be running. It moves the arm to the 9 points of a grid at z = 0.10 m in `base_link`, with x of 0.25, 0.35 and 0.45 m and y of -0.2, 0.0 and 0.2 m. At each point it tries 7 orientations: `top_down`, `top_down_90` and `side_level` at the headings -90, -45, 0, 45 and 90 degrees. After each move it reads the pose of `tool_frame` from TF and compares it with the request. The arm goes home before each orientation and after the last. To change the grid, edit `GRID_X`, `GRID_Y` and `GRID_Z` in the script.
 
 ```bash
 SETTINGS=$(ros2 pkg prefix kinova_interface)/share/kinova_interface/data/configs/motion_settings.yaml
-ros2 run kinova_interface check_orientations.py --ik-only --ros-args --params-file $SETTINGS   # only checks reachability, never moves
-ros2 run kinova_interface check_orientations.py --ros-args --params-file $SETTINGS             # moves the arm
+ros2 run kinova_interface check_orientations.py --ik-only --ros-args --params-file $SETTINGS
+ros2 run kinova_interface check_orientations.py --ros-args --params-file $SETTINGS
 ```
 
-`--speed` (default 0.2) sets the move speed. `--tolerance-deg` (default 6) sets how far off an orientation can be and still count as reached.
+The first command only checks that an IK solution exists and does not move the arm. The second command moves the arm.
 
-**Reading the output:** One line per move:
+| Option | Default | Description |
+|---|---|---|
+| `--ik-only` | off | Check the reachability of each pose and do not move. |
+| `--speed` | `0.2` | Velocity and acceleration scale of the moves, 0.0 to 1.0. |
+| `--tolerance-deg` | `6.0` | Largest angle between the requested and the reached orientation that counts as reached. |
 
+The script prints one line for each pose.
+
+```text
+       top_down at (0.25, -0.20, 0.10): ok 0.8 P
+    top_down_90 at (0.45, +0.20, 0.10): ok 2.1 R
+ side_level@-90 at (0.25, -0.20, 0.10): FAIL (<message>)
 ```
-       top_down at (0.35, +0.20, 0.10): ok 0.8 P
-    top_down_90 at (0.45, -0.20, 0.10): ok 2.1 R
- side_level@-90 at (0.25, -0.20, 0.10): FAIL (<planner error>)
-```
 
-| You see | It means |
+| Result | Meaning |
 |---|---|
-| `ok 0.8 P` | Got there. The orientation was 0.8 degrees off what was asked for. Pilz PTP planned it. |
-| `ok 2.1 R` | Got there, but Pilz couldn't plan it, so the RRT* fallback did. Common near obstacles or awkward poses. |
-| `BAD 14.3 P` | The move "succeeded" but the gripper ended up 14.3 degrees off, or more than 2 cm from the point. Something is wrong with the preset or the convention. |
-| `FAIL (...)` | Neither planner could get there, with the reason in brackets. Usually just out of reach for that orientation. |
-| `ik ok` / `no IK` | (`--ik-only`) The pose is reachable / not reachable. Nothing moved. |
+| `ok <angle> P` | The arm reached the pose. `<angle>` is the angle between the requested and the reached orientation, in degrees. Pilz PTP planned the move. |
+| `ok <angle> R` | The arm reached the pose. The OMPL RRT\* fallback planned the move. |
+| `BAD <angle> P` or `R` | The move succeeded, but the angle is above `--tolerance-deg` or the position is more than 0.02 m from the request. Check the preset and the gripper convention. |
+| `FAIL (<message>)` | The move failed. The message is the one of the `move_arm` service. |
+| `ik ok` or `no IK` | With `--ik-only`: an IK solution exists or does not exist. |
 
-`FAIL` or `no IK` is normal for some spots: pointing straight down far from the base, for example, may simply be out of reach. That's the map you're after. `BAD` is never normal. The script exits with 0 only if every move was `ok`.
+`FAIL` and `no IK` are expected for poses that the arm cannot reach, for example pointing straight down far from the base. `BAD` is not. The script exits with 0 only when every pose is `ok` or `ik ok`.
 
-**Safety:** On fake hardware this checks planning, IK and the gripper convention, not how accurate the real arm is. On the real arm, run `--ik-only` first, clear the workspace, and keep the speed low.
+## Full pipeline
 
-## A basic manual smoke test for the middleware alone
-
-1. Launch with no recipe: `ros2 launch kinova_interface robot.launch.py`. RViz opens, all four nodes log ready with no errors.
-2. `ros2 topic echo /system/status` shows `summary_state: 0` (READY) once everything's settled.
-3. Run `recipe_pickup.json`: arm visibly moves in RViz, terminal ends with `--- All Tasks Completed ---`.
-4. Run a recipe with a deliberately bad object name: recipe aborts cleanly, no crash, `/system/status` doesn't get stuck in FAULT.
-
-## Testing the proxy's LLM output
-
-The proxy has its own evaluation suite: see "Evaluating an LLM with Test Suites" in its [README](https://github.com/paul-isit/embodied-ai-proxy#evaluating-an-llm-with-test-suites). It checks the LLM's recipes without touching ROS 2.
-
-## Testing the full pipeline end to end
-
-There is currently no automated test for this. The practical way to check it: start the middleware and proxy as in [Quickstart](../user-guide/quickstart.md), type a real command into the proxy, and compare the recipe shown in the UI against what you'd expect, then confirm the arm actually did it in RViz or on the physical robot.
-
-Next: [Troubleshooting](../user-guide/troubleshooting.md)
+There is no automated test for the path from the proxy to the arm. To check it, follow the [Quickstart](../user-guide/quickstart.md), type a command in the terminal UI, compare the recipe it shows with the command, and check the motion of the arm.
