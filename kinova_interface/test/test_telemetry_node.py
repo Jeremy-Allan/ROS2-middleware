@@ -41,11 +41,7 @@ def test_node_initialises(node):
     assert node.reset_client is not None
     assert node.reset_service is not None
 
-    assert node.configure_ctrl_client is not None
-    assert node.switch_ctrl_client is not None
-
     assert node.tracked_nodes == {}
-    assert node.activating_fault_controller is False
 
 
 # handle_reset_fault()
@@ -150,119 +146,6 @@ def test_report_callback_fault_state(node):
     assert node.tracked_nodes["test_node"]["msg"].state == (
         ExtendedStatus.STATE_FAULT
     )
-
-# activate_fault_controller()
-def test_activate_fault_controller(node):
-    """Test that activate_fault_controller starts the worker thread."""
-
-    with patch(
-        "kinova_interface.nodes.telemetry_node.threading.Thread"
-    ) as mock_thread:
-
-        node.activate_fault_controller()
-
-        mock_thread.assert_called_once()
-
-        mock_thread.return_value.start.assert_called_once()
-
-
-def test_report_callback_triggers_fault_controller(node):
-    """Test that the special hardware fault message triggers self-healing."""
-
-    node.activate_fault_controller = MagicMock()
-
-    msg = ExtendedStatus()
-    msg.node_name = "kinova_hardware_client"
-    msg.state = ExtendedStatus.STATE_FAULT
-    msg.status_message = "fault_controller is NOT active"
-
-    node.report_callback(msg)
-
-    assert node.activating_fault_controller is True
-    node.activate_fault_controller.assert_called_once()
-
-
-def test_report_callback_does_not_trigger_fault_controller_twice(node):
-    """Self-healing should not be triggered while already activating."""
-
-    node.activating_fault_controller = True
-    node.activate_fault_controller = MagicMock()
-
-    msg = ExtendedStatus()
-    msg.node_name = "kinova_hardware_client"
-    msg.state = ExtendedStatus.STATE_FAULT
-    msg.status_message = "fault_controller is NOT active"
-
-    node.report_callback(msg)
-
-    node.activate_fault_controller.assert_not_called()
-
-
-# _activate_fault_controller_thread()
-def test_activate_fault_controller_thread_success(node):
-    """Test successful controller configuration and activation."""
-
-    # Configure service
-    node.configure_ctrl_client.wait_for_service = MagicMock(
-        return_value=True
-    )
-
-    config_response = MagicMock()
-    config_response.ok = True
-
-    config_future = MagicMock()
-    config_future.result.return_value = config_response
-
-    def config_done_callback(callback):
-        callback(config_future)
-
-    config_future.add_done_callback.side_effect = config_done_callback
-
-    node.configure_ctrl_client.call_async = MagicMock(
-        return_value=config_future
-    )
-
-    # Switch service
-    node.switch_ctrl_client.wait_for_service = MagicMock(
-        return_value=True
-    )
-
-    switch_response = MagicMock()
-    switch_response.ok = True
-
-    switch_future = MagicMock()
-    switch_future.result.return_value = switch_response
-
-    def switch_done_callback(callback):
-        callback(switch_future)
-
-    switch_future.add_done_callback.side_effect = switch_done_callback
-
-    node.switch_ctrl_client.call_async = MagicMock(
-        return_value=switch_future
-    )
-
-    node._activate_fault_controller_thread()
-
-    # Both services should have been called
-    node.configure_ctrl_client.call_async.assert_called_once()
-    node.switch_ctrl_client.call_async.assert_called_once()
-
-    # Activation should be finished
-    assert node.activating_fault_controller is False
-
-
-def test_activate_fault_controller_thread_config_service_unavailable(node):
-    """Test self-healing when configure service is unavailable."""
-
-    node.configure_ctrl_client.wait_for_service = MagicMock(
-        return_value=False
-    )
-
-    node._activate_fault_controller_thread()
-
-    assert node.activating_fault_controller is False
-
 
 # aggregate_and_publish()
 def test_aggregate_no_nodes(node):

@@ -56,7 +56,6 @@ You don't need to be a ROS 2 expert, but these four words will come up constantl
 **`telemetry_node.py`, pure aggregation:**
 - Subscribes to `/status/node_report`, publishes an aggregated `/system/status` every 0.5s using a worst-case-wins rule across all tracked nodes.
 - Hosts `/system/reset_fault`, forwarding to the real Kortex driver's own reset service.
-- Automatically reconfigures and reactivates the hardware fault controller in the background if it detects the known driver startup race condition (the physical driver takes several seconds to establish its connection, which otherwise leaves `fault_controller` stuck unconfigured).
 
 ## Proxy internals
 

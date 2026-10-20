@@ -39,7 +39,7 @@ The full list of MoveIt messages is in `utils/robot.py`.
 |---|---|---|
 | `/system/status` stuck at FAULT | A real hardware fault, or a node's heartbeat went stale for more than 1.5s | Check `ros2 topic echo /status/node_report` to see which node and why |
 | Physical robot triggered a protective stop | A real hardware condition on the arm | `ros2 service call /system/reset_fault std_srvs/srv/Trigger {}` |
-| `fault_controller is NOT active` warning | On real hardware, the driver takes a few seconds to establish its connection before this controller can configure | Usually self-healing within a few seconds; if it persists beyond 15 to 20 seconds, check the driver's own logs |
+| `fault_controller is NOT active` warning | The fault controller didn't start on real hardware, so hardware faults aren't detected | Check the driver's logs, then configure and activate it: `ros2 service call /controller_manager/configure_controller controller_manager_msgs/srv/ConfigureController "{name: fault_controller}"` and `ros2 service call /controller_manager/switch_controller controller_manager_msgs/srv/SwitchController "{activate_controllers: [fault_controller], strictness: 2}"` |
 
 ## Proxy connection and LLM errors
 
