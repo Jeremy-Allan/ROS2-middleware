@@ -2,13 +2,11 @@
 
 # Overview
 
-This project lets you type a plain English instruction, like "pick up the blue cube and put it on the tray," and have a real (or simulated) Kinova Gen3 Lite robot arm actually do it.
-
-It assumes zero prior ROS 2 experience. Anywhere a ROS 2 concept shows up for the first time, it's explained in plain English before it's used.
+This project lets you type a plain English instruction, like "pick up the blue cube and put it on the tray," and have a real (or simulated) Kinova Gen3 Lite robot arm actually do it. It assumes zero prior ROS 2 experience. 
 
 ## Two repositories, one pipeline
 
-This is split across two separate git repositories, built and run independently, but they only make sense together:
+This is split across two separate git repositories:
 
 - `Jeremy-Allan/ROS2-middleware` (this repo): the ROS 2 side. Four nodes that turn a structured recipe into real robot motion using MoveIt 2.
 - `paul-isit/embodied-ai-proxy`: the LLM side. A set of Go services and a terminal UI that take a natural language command, send it to a configurable LLM, validate the LLM's JSON output, and forward it to this middleware over a websocket bridge.
