@@ -1,6 +1,6 @@
 # ROS interfaces
 
-Reference for middleware messages, services, topics and external ROS 2 interfaces.
+This page lists the interfaces of the middleware: the services and messages defined in `kinova_interfaces`, and the topics, actions and external services the nodes use.
 
 ## Messages
 
@@ -20,7 +20,9 @@ Most services return `success` (bool) and `message` (string). Rows note the exce
 |---|---|---|
 | `ExecuteRecipe` | `recipe_json` (string) | `message` |
 
-### Hardware (`kinova_hardware_client`)
+### Hardware
+
+These services are served by `kinova_hardware_client`.
 
 | Service | Request | Response |
 |---|---|---|
@@ -31,7 +33,9 @@ Most services return `success` (bool) and `message` (string). Rows note the exce
 | `ExecuteTrajectory` | `trajectory` (`moveit_msgs/RobotTrajectory`) | `error_code` |
 | `MoveGripper` | `position` (float64) | |
 
-### Environment (`environment_mapping_node`)
+### Environment
+
+These services are served by `environment_mapping_node`.
 
 | Service | Request | Response |
 |---|---|---|
@@ -45,7 +49,7 @@ Most services return `success` (bool) and `message` (string). Rows note the exce
 | `UpdateObjectPose` | `object_id`, `pose` | |
 | `AttachObject`, `DetachObject`, `RemoveObject` | `object_id` | |
 
-`GetSceneObjects` returns an `objects` map containing poses and shapes, plus an `attached` list. `UpdateSceneObjects` accepts the same objects map. Poses contain position (`x`, `y`, `z`) and orientation (Euler angles or quaternion); output uses quaternions.
+`GetSceneObjects` returns `{"objects": {"<id>": {"pose": ..., "shape": ...}}, "attached": ["<id>"]}`. `UpdateSceneObjects` expects `{"objects": {"<id>": {"pose": ..., "shape": ...}}}`. A pose has `position` (`x`, `y`, `z`) and `orientation`. Input accepts the orientation as `roll`, `pitch`, `yaw` or as a quaternion `x`, `y`, `z`, `w`. Output uses a quaternion.
 
 ### Vision
 
