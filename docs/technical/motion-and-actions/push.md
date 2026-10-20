@@ -226,8 +226,11 @@ started. An explicit `distance` (with `direction`) is still honoured.
 Like push, the stab goes straight through other objects so it can
 actually hit what it's aimed at: every object except the held one (and
 `table_fit`) is exempt from collision checking for the reach search and
-the extend (`ArmActions.exempt_from_collisions`), restored afterwards
-even on failure. The pull-back and spin still avoid everything, and the
+the extend (`ArmActions.exempt_from_collisions`), and the held object is
+allowed to touch them too (`motion.allow_contact`: MoveIt checks an
+attached object as part of the robot, so exempting the others alone left
+the held object colliding with the target), all restored afterwards even
+on failure. The pull-back and spin still avoid everything, and the
 table and walls are always checked. Since the object is
 attached by that point (from `pickup`), it's excluded from collision
 checking against the gripper automatically - unlike `push`, `thrust`

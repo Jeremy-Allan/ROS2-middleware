@@ -1,5 +1,6 @@
 """'thrust' recipe action (single-plane reach, see docs/technical/motion-and-actions/push.md)."""
 import math
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from kinova_interface.actions.pour import POUR_DEFAULT_LIFT_HEIGHT
@@ -46,8 +47,9 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
        object started. The extend (and the reach search) goes straight
        through any other object, so it can actually stab the destination:
        every object but the held one is exempt from collision checking
-       for it (ArmActions.exempt_from_collisions), and restored afterwards
-       even on failure. The pull-back and spin still avoid everything;
+       for it (ArmActions.exempt_from_collisions), and the held object may
+       touch them too (motion.allow_contact), all restored afterwards even
+       on failure. The held object itself stays checked against the table. The pull-back and spin still avoid everything;
        the table and walls are always checked. Objects that get hit
        don't move in the planning scene - there's no physics.
 
@@ -117,19 +119,15 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     if object_names is None:
         return False, f"Couldn't list the scene's objects to thrust '{target_name}' through them"
     exempt = [name for name in object_names if name != target_name]
-    exempted = []
 
     if release is None:
         # To the reach limit along the bearing, from the pull-back point
         start_x, start_y = pull_radius * math.cos(thrust_yaw), pull_radius * math.sin(thrust_yaw)
-        try:
-            failed = ctx.exempt_from_collisions(exempt, exempted)
-            if failed:
-                return False, f"Failed to allow contact with '{failed}' for thrust"
+        with _passing_through(ctx, target_name, exempt) as error:
+            if error:
+                return False, error
             reach = ctx._find_max_planar_reach_distance(
                 {'x': start_x, 'y': start_y}, 'forward', raise_z, raise_shoulder, raise_elbow, fixed_yaw=thrust_yaw)
-        finally:
-            ctx.restore_collisions(exempted)
         if reach is None:
             return False, f"No reachable thrust distance found for '{target_name}'"
         release = (start_x + reach * math.cos(thrust_yaw), start_y + reach * math.sin(thrust_yaw))
@@ -151,10 +149,9 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
 
     # 3. Extend - same height, seeded at the spin position so it stays a
     # small, local adjustment - straight through any other object
-    try:
-        failed = ctx.exempt_from_collisions(exempt, exempted)
-        if failed:
-            return False, f"Failed to allow contact with '{failed}' for thrust"
+    with _passing_through(ctx, target_name, exempt) as error:
+        if error:
+            return False, error
         extend_solved = ctx.solve_planar_reach(
             thrust_yaw, release_x, release_y, raise_z,
             seed_shoulder=raise_shoulder, seed_elbow=raise_elbow
@@ -169,8 +166,6 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         r = ctx.call_joint_move_service(extend_joints, motion_params=motion_params)
         if not r['success']:
             return False, f"Failed to thrust '{target_name}' to its destination: {r['message']}"
-    finally:
-        ctx.restore_collisions(exempted)
 
     where = f"toward '{destination_name}'" if destination_name else direction
     return True, f"Thrust '{target_name}' {where}"
@@ -191,3 +186,25 @@ def _solve_pullback(ctx: 'ArmActions', face_yaw: float, object_radius: float, he
             break
         radius = min(radius + THRUST_PULLBACK_STEP, object_radius)
     return None
+
+
+@contextmanager
+def _passing_through(ctx: 'ArmActions', held: str, others: list[str]):
+    """Exempt `others` from collision checking - including against the held
+    object, which MoveIt checks as part of the robot - for the duration, and
+    restore everything afterwards, even on failure. Yields an error message,
+    or None if everything was exempted."""
+    exempted, paired, error = [], False, None
+    failed = ctx.exempt_from_collisions(others, exempted)
+    if failed:
+        error = f"Failed to allow contact with '{failed}' for thrust"
+    elif others:
+        paired = ctx.motion.allow_contact(held, others, True)
+        if not paired:
+            error = f"Couldn't let '{held}' pass through the other objects for thrust"
+    try:
+        yield error
+    finally:
+        if paired and not ctx.motion.allow_contact(held, others, False):
+            ctx.get_logger().warn(f"Couldn't restore collision checking between '{held}' and {', '.join(others)}")
+        ctx.restore_collisions(exempted)

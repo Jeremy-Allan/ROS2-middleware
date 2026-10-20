@@ -1454,23 +1454,28 @@ def _thrust_scene(actions, names):
     actions.check_joint_state_validity = MagicMock(return_value=True)
     actions._find_max_planar_reach_distance = MagicMock(side_effect=lambda *a, **k: order.append("search") or 0.3)
     actions.call_joint_move_service = MagicMock(side_effect=lambda *a, **k: order.append("move") or {"success": True})
+    actions.motion = MagicMock()
+    actions.motion.allow_contact = MagicMock(
+        side_effect=lambda held, others, allowed: order.append(f"{held}~{'+'.join(others)}:{allowed}") or True)
     return order
 
 
 def test_thrust_stabs_through_other_objects_but_winds_up_around_them(actions):
     """Other objects are exempt from collision checking for the reach search
-    and the extend, so the stab can hit what it's aimed at - but not for the
-    pull-back or spin, and never the held object itself or table_fit."""
+    and the extend, so the stab can hit what it's aimed at - including
+    against the held object, which MoveIt checks as part of the robot - but
+    not for the pull-back or spin. The held object itself and table_fit are
+    never exempted, so they're still checked against the table."""
     order = _thrust_scene(actions, ["red_cube", "tea_pot", "table_fit", "delivery_tray"])
 
     success, _ = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
 
     assert success is True
-    exempt = ["tea_pot:True", "delivery_tray:True"]
-    restore = ["tea_pot:False", "delivery_tray:False"]
-    assert order == [*exempt, "search", *restore,  # reach search ignores objects
-                     "move", "move",               # pull back, spin: normal checking
-                     *exempt, "move", *restore]    # the stab ignores objects
+    open_up = ["tea_pot:True", "delivery_tray:True", "red_cube~tea_pot+delivery_tray:True"]
+    close = ["red_cube~tea_pot+delivery_tray:False", "tea_pot:False", "delivery_tray:False"]
+    assert order == [*open_up, "search", *close,  # reach search ignores objects
+                     "move", "move",              # pull back, spin: normal checking
+                     *open_up, "move", *close]    # the stab ignores objects
 
 
 def test_thrust_restores_collision_checking_if_the_stab_fails(actions):
@@ -1481,7 +1486,17 @@ def test_thrust_restores_collision_checking_if_the_stab_fails(actions):
     success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
 
     assert (success, message) == (False, "Failed to thrust 'red_cube' to its destination: MoveIt failed")
-    assert order[-2:] == ["move", "tea_pot:False"]
+    assert order[-3:] == ["move", "red_cube~tea_pot:False", "tea_pot:False"]
+
+
+def test_thrust_fails_cleanly_if_the_held_object_cant_be_let_through(actions):
+    order = _thrust_scene(actions, ["red_cube", "tea_pot"])
+    actions.motion.allow_contact = MagicMock(return_value=False)
+
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Couldn't let 'red_cube' pass through the other objects for thrust")
+    assert order == ["tea_pot:True", "tea_pot:False"]  # exemption restored, nothing moved
 
 
 def test_thrust_fails_if_it_cant_list_the_scene_objects(actions):
