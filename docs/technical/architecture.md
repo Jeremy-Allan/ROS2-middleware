@@ -1,6 +1,6 @@
 # Architecture
 
-The middleware is three ROS 2 packages and a launch file. `robot.launch.py` starts the Kinova driver stack, MoveIt 2 and four nodes. A fifth node, in the optional `computer_vision` package, adds detected objects to the scene.
+The repository contains three ROS 2 packages, including the optional `computer_vision` package. `robot.launch.py` starts the Kinova driver stack, MoveIt 2 and four middleware nodes. When enabled, `vision_snapshot_node` adds detected objects to the scene.
 
 ## Packages
 
@@ -14,7 +14,7 @@ Each package is a folder of the same name at the root of the repository.
 
 ## Start-up
 
-`robot.launch.py` starts, in order:
+`robot.launch.py` starts the following components:
 
 ```mermaid
 flowchart TB
