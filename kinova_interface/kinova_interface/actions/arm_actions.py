@@ -7,6 +7,7 @@ state validity/ACM), the planar-reach solver, and held-object state.
 """
 
 import math
+from contextlib import contextmanager
 import time
 from functools import partial
 
@@ -270,6 +271,28 @@ class ArmActions:
         for name in exempted:
             self.set_collision_allowed(name, False)
         exempted.clear()
+
+    @contextmanager
+    def passing_through(self, held, others, action):
+        """Exempt `others` from collision checking - including against the
+        held object, which MoveIt checks as part of the robot - for the
+        duration, and restore everything afterwards, even on failure. Yields
+        an error message, or None if everything was exempted. Used for the
+        parts of thrust/throw that should go straight through other objects."""
+        exempted, paired, error = [], False, None
+        failed = self.exempt_from_collisions(others, exempted)
+        if failed:
+            error = f"Failed to allow contact with '{failed}' for {action}"
+        elif others:
+            paired = self.motion.allow_contact(held, others, True)
+            if not paired:
+                error = f"Couldn't let '{held}' pass through the other objects for {action}"
+        try:
+            yield error
+        finally:
+            if paired and not self.motion.allow_contact(held, others, False):
+                self.get_logger().warn(f"Couldn't restore collision checking between '{held}' and {', '.join(others)}")
+            self.restore_collisions(exempted)
 
     def get_relative_movement_vector(self, movement_name):
         """Query the environment mapping node for a named relative-movement offset.

@@ -99,6 +99,20 @@ winds up behind the base and finishes on the target's side, within about
 3 degrees of `joint_1`'s bearing. `joint_5` sweeps exactly as before, so
 the release trigger (`THROW_RELEASE_JOINT5`) is unchanged.
 
+## Flinging through other objects
+
+Like `push` and `thrust`, the fling goes straight through any object in
+its way instead of planning around it or failing: every object except the
+held one (and the vision node's `table_fit`) is exempt from collision
+checking, and the held object may touch them too
+(`ArmActions.passing_through`; MoveIt checks an attached object as part
+of the robot). That covers planning the fling through to the end of the
+swing: the fling runs asynchronously, so throw waits for it to finish
+before restoring collision checking, rather than restoring it mid-swing
+and having MoveIt abort the rest. The rotate and wind-up still avoid
+everything, and the table and walls are always checked. Objects that get
+hit don't move in the planning scene, since there's no physics.
+
 ## Implementation
 
 - `THROW_WINDUP_POSE`/`THROW_FLING_POSE` - fixed `joint_2..6` shapes

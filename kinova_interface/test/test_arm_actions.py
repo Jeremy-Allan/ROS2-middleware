@@ -2703,6 +2703,72 @@ def _fake_fling_plan(duration=1.0, crosses=True):
     return plan
 
 
+def _throw_scene(actions, names, plan=None):
+    """A held red_cube with every throw step mocked to succeed, recording the order of
+    moves, collision exemptions, fling planning/execution and the fling finishing."""
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
+    })
+    actions.latest_joint_positions = {f'joint_{i}': 0.1 * i for i in range(1, 7)}
+    actions.get_object_names = MagicMock(return_value=names)
+    order = []
+    actions.set_collision_allowed = MagicMock(side_effect=lambda name, allowed: order.append(f"{name}:{allowed}") or True)
+    actions.motion.allow_contact = MagicMock(
+        side_effect=lambda held, others, allowed: order.append(f"{held}~{'+'.join(others)}:{allowed}") or True)
+    actions.call_joint_move_service = MagicMock(side_effect=lambda *a, **k: order.append("move") or {"success": True})
+    actions.motion.plan_joints = MagicMock(
+        side_effect=lambda *a, **k: order.append("plan fling") or ((plan or _fake_fling_plan()), None))
+    fling = _mock_future()
+    fling.result.side_effect = lambda: order.append("fling finished")
+    actions.motion.execute_async = MagicMock(side_effect=lambda p: order.append("fling") or fling)
+    actions.wait_for_joint_crossing = MagicMock(return_value=True)
+    actions.compute_fk = MagicMock(return_value=(0.5, 0.1, 0.0))
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.detach_object = MagicMock(return_value=True)
+    actions.remove_object = MagicMock(side_effect=lambda name: order.append("removed") or True)
+    actions.update_object_pose = MagicMock(return_value=True)
+    return order
+
+
+def test_throw_flings_through_other_objects_but_winds_up_around_them(actions):
+    """Other objects (and the held one against them) are exempt from collision
+    checking from planning the fling until the swing has finished - not for
+    the rotate or wind-up, and never the held object itself or table_fit."""
+    order = _throw_scene(actions, ["red_cube", "tea_pot", "table_fit"])
+
+    with patch('kinova_interface.actions.throw.time.sleep'):
+        success, _ = actions.handlers['throw']({"target": "red_cube", "direction": "forward"})
+
+    assert success is True
+    assert order == [
+        "move", "move",                                    # rotate, wind-up: normal checking
+        "tea_pot:True", "red_cube~tea_pot:True",           # exempt for the fling
+        "plan fling", "fling", "removed", "fling finished",
+        "red_cube~tea_pot:False", "tea_pot:False",         # only once the swing has finished
+    ]
+
+
+def test_throw_restores_collision_checking_if_the_fling_cant_be_planned(actions):
+    order = _throw_scene(actions, ["red_cube", "tea_pot"])
+    actions.motion.plan_joints = MagicMock(return_value=(None, "no path"))
+
+    success, message = actions.handlers['throw']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Can't plan the throw fling for 'red_cube': no path")
+    assert order[-2:] == ["red_cube~tea_pot:False", "tea_pot:False"]
+
+
+def test_throw_fails_before_moving_if_it_cant_list_the_scene_objects(actions):
+    order = _throw_scene(actions, None)
+
+    success, message = actions.handlers['throw']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Couldn't list the scene's objects to throw 'red_cube' through them")
+    assert order == []
+
+
 def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
     """throw should rotate to face the throw direction (joint_1 only,
     current shoulder/elbow/wrist held exactly as read from
