@@ -2,6 +2,8 @@
 
 `computer_vision` is an optional package. Its node, `vision_snapshot_node`, finds the objects on the table with a Kinect v2 and adds them to the scene of `environment_mapping_node`, so that recipes can name them. The node works on request. It takes one snapshot for each call of `/vision/snapshot`.
 
+The node retains tracking information between snapshots, but `environment_mapping_node` owns the scene dictionary.
+
 !!! note "Alpha release"
     Computer vision is an alpha release. Its behaviour and parameters can change, and detected objects can be missing, mislabelled or approximated by boxes. Check the result with `/vision/debug_image` or `/get_scene_objects` before running a recipe that uses it. The rest of the middleware does not depend on it. Without `enable_CV:=true`, the objects come from `workspace_objects.yaml`.
 
@@ -182,3 +184,9 @@ The node needs the TF transform from `base_frame` to the camera frame. `kinect2_
 | `static_tf_child_frame` | `kinect2_link` | Child frame of the static transform. |
 | `static_tf_x`, `static_tf_y`, `static_tf_z` | `0.0`, `1.0`, `0.53` | Position of the camera in metres. |
 | `static_tf_roll`, `static_tf_pitch`, `static_tf_yaw` | `0.925`, `3.1`, `-0.05` | Orientation of the camera in radians. |
+
+
+The `static_tf_*` values are reference settings for one camera placement. Each installation must determine its own camera transform through calibration or manual configuration. Recalibrate if the camera mounting changes.
+
+See [Camera and calibration](../installation/camera-and-calibration.md) for the calibration procedure.
+
