@@ -4,6 +4,8 @@ repo_url: https://github.com/Jeremy-Allan/ROS2-middleware
 edit_uri: edit/main/docs/
 
 docs_dir: docs
+exclude_docs: |
+  assets/diagrams/src/
 
 nav:
   - Home:
