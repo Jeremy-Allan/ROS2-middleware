@@ -160,7 +160,7 @@ def _solve_pullback(ctx: 'ArmActions', face_yaw: float, object_radius: float, he
             joints = [face_yaw, solved[0], solved[1], *ctx._PLANAR_REACH_WRIST]
             if ctx.check_joint_state_validity(joints):
                 return radius, solved[0], solved[1]
-        if radius >= object_radius:
+        if radius >= object_radius - 1e-9:
             break
         radius = min(radius + THRUST_PULLBACK_STEP, object_radius)
     return None
