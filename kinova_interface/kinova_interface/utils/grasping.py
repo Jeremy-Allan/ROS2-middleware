@@ -122,13 +122,21 @@ def object_rotation(pose: dict) -> Rotation:
 
 def half_extent(shape: dict, rotation: Rotation, axis: int = Z) -> float:
     """Half the object's size along base axis X, Y or Z, for any orientation."""
-    matrix = rotation.as_matrix()
+    return half_extent_along(shape, rotation, np.eye(3)[axis])
+
+
+def half_extent_along(shape: dict, rotation: Rotation, direction) -> float:
+    """Half the object's size along any base-frame direction, for any orientation."""
+    direction = np.asarray(direction, dtype=float)
+    direction = direction / np.linalg.norm(direction)
+    # The direction's components along the object's own axes
+    alignment = np.abs(rotation.as_matrix().T @ direction)
     dimensions = shape['dimensions']
     if shape['type'] == SolidPrimitive.BOX:
-        return sum(abs(matrix[axis, object_axis]) * dimensions[object_axis] / 2.0 for object_axis in range(3))
+        return sum(alignment[object_axis] * dimensions[object_axis] / 2.0 for object_axis in range(3))
     if shape['type'] == SolidPrimitive.CYLINDER:
-        # How much the cylinder's own axis (its Z) lines up with the base axis
-        axis_alignment = abs(matrix[axis, 2])
+        # How much the cylinder's own axis (its Z) lines up with the direction
+        axis_alignment = alignment[2]
         height, radius = dimensions[SolidPrimitive.CYLINDER_HEIGHT], dimensions[SolidPrimitive.CYLINDER_RADIUS]
         return axis_alignment * height / 2.0 + radius * math.sqrt(max(0.0, 1.0 - axis_alignment ** 2))
     raise ValueError(f"unsupported shape type {shape['type']}")

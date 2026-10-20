@@ -56,6 +56,23 @@ def test_half_extent_box_on_its_side_and_tilted():
     assert half_extent(box, tilted, Z) == pytest.approx((0.06 + 0.02) / 2 * math.sqrt(0.5))
 
 
+def test_half_extent_along_matches_the_axis_version_and_handles_diagonals():
+    box = {'type': SolidPrimitive.BOX, 'dimensions': [0.1, 0.04, 0.06]}
+    cylinder = {'type': SolidPrimitive.CYLINDER, 'dimensions': [0.22, 0.035]}
+    tilted = Rotation.from_euler('xyz', [0.3, -0.2, 0.7])
+    for shape in (box, cylinder):
+        for axis in range(3):
+            assert grasping.half_extent_along(shape, tilted, np.eye(3)[axis]) == pytest.approx(
+                grasping.half_extent(shape, tilted, axis))
+
+    # an upright cylinder is its radius across, from any horizontal direction
+    diagonal = (math.cos(0.8), math.sin(0.8), 0.0)
+    assert grasping.half_extent_along(cylinder, Rotation.identity(), diagonal) == pytest.approx(0.035)
+    # a box seen along its own diagonal (direction needn't be normalised)
+    assert grasping.half_extent_along(box, Rotation.identity(), (1.0, 1.0, 0.0)) == pytest.approx(
+        (0.05 + 0.02) / math.sqrt(2))
+
+
 def test_unsupported_shape_raises():
     sphere = {'type': SolidPrimitive.SPHERE, 'dimensions': [0.03]}
     with pytest.raises(ValueError):

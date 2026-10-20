@@ -3,7 +3,8 @@ import math
 from typing import TYPE_CHECKING
 
 from kinova_interface.actions.motion import MotionUnavailable
-from kinova_interface.utils.geometry import resolve_direction_offset
+from kinova_interface.utils.geometry import DIRECTION_ROTATIONS, resolve_direction_offset
+from kinova_interface.utils.grasping import half_extent_along, object_rotation
 from kinova_interface.utils.robot import GRIPPER_OPEN
 
 # Objects push never exempts from collision checking: the vision node's
@@ -44,12 +45,19 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     Push only ever extends an object further from the arm's own base
     - it's not designed to drag one back in.
 
+    Like pickup's pre-grasp, the arm first lines up at a pre-contact
+    pose in the same plane, on the base side of the object and clear of
+    it by grasping.standoff, reached with normal collision checking so it
+    goes around the object instead of clipping its side on the way. Only
+    then does it move straight in to the contact pose.
+
     The gripper stays open for the whole push - it never closes on the
     object. The arm pushes with the open gripper and carries straight
     on through anything else in its way: collision checking is
     switched off (set_collision_allowed) for the target and every other
-    object for the whole approach/extend/retreat sequence, and always
-    reverted in a 'finally' block even if the push fails partway
+    object from the move in to contact until after the retreat (and
+    briefly while the contact/extend poses are checked beforehand), and
+    always reverted in a 'finally' block even if the push fails partway
     through. Obstacles (the table, walls) and PUSH_KEEPS_CHECKING are
     still checked. Other objects aren't moved in the planning scene -
     there's no physics - only the target is.
@@ -81,6 +89,8 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         return False, "push action requires 'target'"
     if not destination_name and not direction:
         return False, "push action requires either 'destination' or 'direction'"
+    if not destination_name and direction not in DIRECTION_ROTATIONS:
+        return False, f"Unknown push direction '{direction}'"
 
     target_info = ctx.get_object_info(target_name)
     if not target_info:
@@ -91,6 +101,23 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     # plane every subsequent move (including the dynamic distance
     # search below) stays within.
     base_yaw = math.atan2(origin['y'], origin['x'])
+
+    # 1. Line up first: a pre-contact pose in the same plane, on the
+    # base side of the object, clear of it by grasping.standoff (the
+    # same clearance pickup's pre-grasp uses). It's reached with normal
+    # collision checking, so the arm goes around the object rather than
+    # into its side on the way there.
+    bearing = (math.cos(base_yaw), math.sin(base_yaw), 0.0)
+    clearance = (half_extent_along(target_info['shape'], object_rotation(target_info['pose']), bearing)
+                 + ctx.grasp_config['standoff'])
+    pre_radius = math.hypot(origin['x'], origin['y']) - clearance
+    pre_contact = ctx.solve_planar_reach(
+        base_yaw, pre_radius * math.cos(base_yaw), pre_radius * math.sin(base_yaw), origin['z'])
+    if pre_contact is None or pre_contact[3] > ctx._PLANAR_REACH_MAX_ERROR:
+        return False, f"Could not solve a pose to line up behind '{target_name}' for push"
+    pre_joints = [base_yaw, pre_contact[0], pre_contact[1], *ctx._PLANAR_REACH_WRIST]
+    if not ctx.check_joint_state_validity(pre_joints):
+        return False, f"Push line-up pose behind '{target_name}' is in collision"
 
     # Contact with the target object itself is the entire point of a
     # push, and anything else in the way gets pushed through too -
@@ -110,14 +137,16 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         return False, f"Couldn't list the scene's objects to push '{target_name}' through them"
     others = [name for name in object_names if name != target_name and name not in PUSH_KEEPS_CHECKING]
 
+    exempt = [target_name, *others]
     allowed = []
     try:
-        for name in [target_name, *others]:
-            if not ctx.set_collision_allowed(name, True):
-                return False, f"Failed to allow contact with '{name}' for push"
-            allowed.append(name)
+        failed = _allow_collisions(ctx, exempt, allowed)
+        if failed:
+            return False, f"Failed to allow contact with '{failed}' for push"
 
-        contact = ctx.solve_planar_reach(base_yaw, origin['x'], origin['y'], origin['z'])
+        contact = ctx.solve_planar_reach(
+            base_yaw, origin['x'], origin['y'], origin['z'],
+            seed_shoulder=pre_contact[0], seed_elbow=pre_contact[1])
         if contact is None or contact[3] > ctx._PLANAR_REACH_MAX_ERROR:
             return False, f"Could not solve a planar reach to '{target_name}'"
         contact_shoulder, contact_elbow, _, _ = contact
@@ -164,15 +193,25 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         extend_joints = [base_yaw, extend_shoulder, extend_elbow, *ctx._PLANAR_REACH_WRIST]
         if not ctx.check_joint_state_validity(extend_joints):
             return False, f"Push end pose for '{target_name}' is in collision"
+    finally:
+        _revert_collisions(ctx, allowed)
 
-        motion_params = ctx.build_motion_params(params.get('speed'))
+    motion_params = ctx.build_motion_params(params.get('speed'))
 
-        # 1. Open the gripper before approaching - it stays open throughout
-        rg = ctx.call_move_gripper_service(GRIPPER_OPEN)
-        if not rg['success']:
-            return False, f"Failed to open gripper before push approach: {rg['message']}"
+    # 2. Open the gripper - it stays open throughout - and line up
+    rg = ctx.call_move_gripper_service(GRIPPER_OPEN)
+    if not rg['success']:
+        return False, f"Failed to open gripper before push approach: {rg['message']}"
+    r = ctx.call_joint_move_service(pre_joints, motion_params=motion_params)
+    if not r['success']:
+        return False, f"Failed to line up behind '{target_name}' for push: {r['message']}"
 
-        # 2. Move to the contact pose
+    try:
+        failed = _allow_collisions(ctx, exempt, allowed)
+        if failed:
+            return False, f"Failed to allow contact with '{failed}' for push"
+
+        # Move in to the contact pose
         r = ctx.call_joint_move_service(contact_joints, motion_params=motion_params)
         if not r['success']:
             return False, f"Failed to approach push target: {r['message']}"
@@ -209,9 +248,9 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
             return False, f"Failed to push to destination: {r['message']}"
 
         # 5. Detach (then update the registered pose, like dropoff/throw),
-        # then retreat to the contact pose before the collision exemptions
-        # below are revoked. Retreating is safe now because the object
-        # has genuinely relocated away from contact_joints during the
+        # then retreat back to the line-up pose before the collision
+        # exemptions below are revoked. Retreating is safe now because the
+        # object has genuinely relocated away from contact_joints during the
         # attached extend above - push only ever extends an object
         # further away, never back towards the arm (see docstring
         # above) - rather than relying on it having silently stayed put
@@ -222,12 +261,29 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         orient = target_info['pose']['orientation']
         if not ctx.update_object_pose(target_name, release_x, release_y, origin['z'], orient):
             ctx.get_logger().error(f"Failed to update pose for {target_name}, but continuing...")
-        r = ctx.call_joint_move_service(contact_joints, motion_params=motion_params)
+        r = ctx.call_joint_move_service(pre_joints, motion_params=motion_params)
         if not r['success']:
             return False, f"Pushed '{target_name}' but failed to retreat afterward: {r['message']}"
     finally:
-        for name in allowed:
-            ctx.set_collision_allowed(name, False)
+        _revert_collisions(ctx, allowed)
 
     where = f"to '{destination_name}'" if destination_name else f"{direction}"
     return True, f"Pushed '{target_name}' {where}"
+
+
+def _allow_collisions(ctx: 'ArmActions', names: list[str], allowed: list[str]):
+    """Exempt each object from collision checking, recording it in `allowed`
+    so the caller can revert exactly those. Returns the first name that
+    couldn't be exempted, or None."""
+    for name in names:
+        if not ctx.set_collision_allowed(name, True):
+            return name
+        allowed.append(name)
+    return None
+
+
+def _revert_collisions(ctx: 'ArmActions', allowed: list[str]):
+    """Restore collision checking for everything _allow_collisions exempted."""
+    for name in allowed:
+        ctx.set_collision_allowed(name, False)
+    allowed.clear()

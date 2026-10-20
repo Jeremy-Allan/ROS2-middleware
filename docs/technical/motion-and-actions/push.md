@@ -122,8 +122,10 @@ search:
   permitting (then reverting) contact between an object and everything
   else. Push applies it to the pushed object *and every other object* in
   the scene (from `/get_robot_parameters`, minus the vision node's
-  `table_fit`) for the duration of the push, so it carries straight on
-  through anything in its way instead of planning around it or failing.
+  `table_fit`) from the move in to contact until after the retreat (and
+  briefly while the contact/extend poses are checked), so it carries
+  straight on through anything in its way instead of planning around it
+  or failing. Lining up beforehand still avoids everything.
   Obstacles (`table`, walls) aren't objects and stay collision-checked.
   Always reverted in a `finally` block, even on failure. See
   "Open gripper" below.
@@ -172,6 +174,22 @@ bigger object may get pushed slightly off from how a human would
 naturally grip it (by its center rather than a computed near-face point)
 in exchange for keeping the single-plane motion exactly as simple as
 it already is.
+
+## Lining up before contact
+
+The contact pose puts the gripper at the object's centre, so moving there
+directly from wherever the arm happened to be could sweep the gripper
+into the object's side on the way (seen with `water_bottle`). Push now
+lines up first, the same way `pickup` uses a pre-grasp: a pre-contact
+pose in the push plane, on the base side of the object, back from its
+centre by its size along the push bearing (`grasping.half_extent_along`)
+plus `grasping.standoff` (0.08 m). That pose is solved and checked, and
+moved to, with normal collision checking, so MoveIt routes around the
+object. Only then are the collision exemptions switched on for the
+straight move in to contact, the extend and the retreat, which backs out
+to the line-up pose. Checked against every workspace object: each one's
+line-up pose is reachable and clear at the full standoff (the water
+bottle's is 0.23 m from the base).
 
 ## Open gripper
 
