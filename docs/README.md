@@ -57,7 +57,7 @@ Pages marked *draft* are placeholders that don't have content yet.
 | [Motion and actions](technical/motion-and-actions/index.md) | How actions become motion. [Pour](technical/motion-and-actions/pour.md), [Push](technical/motion-and-actions/push.md) and [Throw](technical/motion-and-actions/throw.md) show how each composite motion was captured and designed |
 | [Computer vision](technical/computer-vision.md) | *Draft.* How objects are detected and added to the scene |
 | [Safety and contracts](technical/safety-and-contracts.md) | The execution contract, safety layers, failure mode table, and system readiness definition |
-| [Kinova drivers and APIs](technical/kinova-drivers-and-apis.md) | *Draft.* The driver interfaces, their errors, and where to look when a move fails |
+| [Kinova drivers](technical/kinova-drivers-and-apis.md) | *Draft.* The driver interfaces, their errors, and where to look when a move fails |
 | [Testing](technical/testing.md) | The middleware's recipe test suite, the proxy's LLM-output test suite, a manual smoke test |
 | [Contributing](technical/contributing.md) | *Draft.* Branches, pull requests and the docstring rule |
 | [API reference](technical/api/nodes.md) | Function-level reference generated from the code's own docstrings, for the middleware and the proxy |
