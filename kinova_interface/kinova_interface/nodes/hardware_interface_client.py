@@ -15,7 +15,7 @@ import threading
 from collections import namedtuple
 
 from moveit_msgs.action import MoveGroup, ExecuteTrajectory as MoveItExecuteTrajectory
-from moveit_msgs.msg import Constraints, PositionConstraint, OrientationConstraint, JointConstraint
+from moveit_msgs.msg import Constraints, PositionConstraint, OrientationConstraint, JointConstraint, MoveItErrorCodes
 from shape_msgs.msg import SolidPrimitive
 from geometry_msgs.msg import Pose
 from control_msgs.action import GripperCommand
@@ -56,6 +56,8 @@ class HardwareInterfaceClient(Node):
     # fast rejection in the fire-and-forget path without turning into a
     # real wait for a genuine, slow motion in progress.
     FIRE_AND_FORGET_REJECTION_WINDOW_SEC = 0.5
+
+    FAULTED_MESSAGE = "Robot is faulted, reset it first (/system/reset_fault)"
 
     # Arm moves try Pilz PTP first (same path every time, but it won't route
     # around obstacles), then fall back to OMPL RRT* if it can't plan.
@@ -143,6 +145,9 @@ class HardwareInterfaceClient(Node):
         self.arm_action_successful = False
         self.arm_action_error_code = None
         self.arm_action_message = "Ready"
+        # The arm goal being waited on. Anything reported by an older goal is ignored.
+        self.arm_goal_future = None
+        self.arm_goal_handle = None
 
         self.gripper_movement_finished = threading.Event()
         self.gripper_movement_finished.set()
@@ -242,26 +247,29 @@ class HardwareInterfaceClient(Node):
         """Helper to centralize state & status updates after a service completes."""
         self.current_state = ExtendedStatus.STATE_FAULT if self.is_faulted else ExtendedStatus.STATE_IDLE
         self.command_success = response.success
-        if not self.is_faulted and not self.fault_controller_warning_active:
+        if not self.fault_controller_warning_active:
             self.status_text = response.message
         self.publish_status()
         return response
 
     # --- Fault Handling ---
     def fault_callback(self, msg: Bool):
-        """Asynchronously updates the internal fault status."""
-        if msg.data and not self.is_faulted:
+        """Track the driver's fault flag. It arrives every control cycle (~1 kHz), so only changes are acted on."""
+        if msg.data == self.is_faulted:
+            return
+        self.is_faulted = msg.data
+        if msg.data:
             self.get_logger().error("Robot entered a hardware FAULT state.")
             self.current_state = ExtendedStatus.STATE_FAULT
             self.status_text = "HARDWARE FAULT: Robot is faulted"
             self.command_success = False
-        elif not msg.data and self.is_faulted:
+        else:
             self.get_logger().info("Robot hardware fault has been cleared.")
-            self.current_state = ExtendedStatus.STATE_IDLE
+            moving = not (self.arm_movement_finished.is_set() and self.gripper_movement_finished.is_set())
+            self.current_state = ExtendedStatus.STATE_BUSY if moving else ExtendedStatus.STATE_IDLE
             self.status_text = "Robot Ready (Fault Cleared)"
             self.command_success = True
         self.publish_status()
-        self.is_faulted = msg.data
 
     def handle_moveit_failure(self):
         """Called when MoveIt execution fails."""
@@ -274,14 +282,17 @@ class HardwareInterfaceClient(Node):
         else:
             self.get_logger().info("No hardware fault detected. Failure may be algorithmic (planning timeout).")
 
-    def _await_action(self, event: threading.Event, timeout_sec: float, success_attr: str, message_attr: str, action_desc: str, response):
-        """Wait for an action event and populate the service response with status and message."""
+    def _await_action(self, event: threading.Event, timeout_sec: float, success_attr: str, message_attr: str, action_desc: str, response, on_timeout=None):
+        """Wait for an action event and populate the service response with status and message.
+        on_timeout() runs if it doesn't finish in time."""
         # TODO: create a request/response interface to do type constraints in functions
         finished = event.wait(timeout=timeout_sec)
         if not finished:
             response.success = False
             response.message = f"{action_desc} timed out after {timeout_sec}s"
             self.get_logger().error(response.message)
+            if on_timeout is not None:
+                on_timeout()
         else:
             response.success = getattr(self, success_attr) if isinstance(success_attr, str) else success_attr()
             response.message = getattr(self, message_attr) if isinstance(message_attr, str) else message_attr()
@@ -310,7 +321,8 @@ class HardwareInterfaceClient(Node):
                     'arm_action_successful',
                     'arm_action_message',
                     action_desc,
-                    response
+                    response,
+                    on_timeout=self._abandon_arm_goal,
                 )
             elif self.arm_movement_finished.wait(timeout=self.FIRE_AND_FORGET_REJECTION_WINDOW_SEC):
                 response.success = self.arm_action_successful
@@ -436,6 +448,7 @@ class HardwareInterfaceClient(Node):
             'arm_action_message',
             "Trajectory execution",
             response,
+            on_timeout=self._abandon_arm_goal,
         )
         response.error_code.val = self.arm_action_error_code or 0
         return self.finalize_service_status(response)
@@ -716,12 +729,30 @@ class HardwareInterfaceClient(Node):
         Both results carry a MoveIt error_code, so they share the callbacks below."""
         self.arm_movement_finished.clear()
         self.arm_action_error_code = None
+        self.arm_goal_handle = None
+        if self.is_faulted:
+            # The driver drops every command while faulted, so fail it here, as if MoveIt had
+            self.arm_goal_future = None
+            self.arm_action_successful = False
+            self.arm_action_message = self.FAULTED_MESSAGE
+            self.arm_movement_finished.set()
+            return True
         future = (client or self.arm_client).send_goal_async(
             goal_msg,
             feedback_callback=self.arm_feedback_callback
         )
+        self.arm_goal_future = future
         future.add_done_callback(self.goal_response_callback)
         return True
+
+    def _abandon_arm_goal(self):
+        """Cancel the arm goal nobody is waiting for any more, and ignore whatever it reports later."""
+        goal_handle = self.arm_goal_handle
+        self.arm_goal_future = None
+        self.arm_goal_handle = None
+        if goal_handle is not None:
+            self.get_logger().warn("Cancelling the arm goal that timed out")
+            goal_handle.cancel_goal_async()
 
     def move_gripper(self, position):
         """Send a target position to the gripper action server.
@@ -741,6 +772,11 @@ class HardwareInterfaceClient(Node):
         goal.command.position = float(position)
 
         self.gripper_movement_finished.clear()
+        if self.is_faulted:
+            self.gripper_action_successful = False
+            self.gripper_action_message = self.FAULTED_MESSAGE
+            self.gripper_movement_finished.set()
+            return True
         future = self.gripper_client.send_goal_async(
             goal,
             feedback_callback=self.gripper_feedback_callback
@@ -761,6 +797,10 @@ class HardwareInterfaceClient(Node):
         """
         try:
             goal_handle = future.result()
+            if future is not self.arm_goal_future:
+                if goal_handle.accepted:
+                    goal_handle.cancel_goal_async()
+                return
             if not goal_handle.accepted:
                 self.get_logger().error('Goal rejected by the Action Server.')
                 self.arm_action_successful = False
@@ -769,8 +809,9 @@ class HardwareInterfaceClient(Node):
                 return
 
             self.get_logger().info('Goal accepted! Moving...')
+            self.arm_goal_handle = goal_handle
             result_future = goal_handle.get_result_async()
-            result_future.add_done_callback(self.result_callback)
+            result_future.add_done_callback(lambda done: self.result_callback(done, goal_handle))
         except Exception as e:
             self.get_logger().error(f"Error handling arm goal response: {e}")
             self.arm_action_successful = False
@@ -786,17 +827,21 @@ class HardwareInterfaceClient(Node):
         feedback = feedback_msg.feedback
         self.get_logger().debug(f'[Feedback] MoveIt State: {feedback.state}')
 
-    def result_callback(self, future):
+    def result_callback(self, future, goal_handle=None):
         """Record the outcome of an arm goal and release the waiting service call.
 
         Stores the MoveIt error code, sets the success flag and a readable
-        message, and calls ``handle_moveit_failure`` on a failure. Always
+        message, and calls ``handle_moveit_failure`` on a failure. A move the
+        robot faulted during fails even if MoveIt reported success. Always
         returns the node to idle (unless faulted) and sets
         ``arm_movement_finished``, so a service waiting on the move can continue.
 
         Args:
             future: Future holding the arm action's result.
+            goal_handle: The goal it's for. A result for an abandoned goal is ignored.
         """
+        if goal_handle is not None and goal_handle is not self.arm_goal_handle:
+            return
         try:
             result = future.result().result
             error_code = result.error_code.val
@@ -812,6 +857,13 @@ class HardwareInterfaceClient(Node):
                 self.get_logger().error(f"ERROR: {msg}")
                 self.arm_action_message = msg
                 self.handle_moveit_failure()
+
+            # A fault that clears before the result comes back is missed
+            if self.is_faulted:
+                self.get_logger().error("The robot faulted during the move")
+                self.arm_action_successful = False
+                self.arm_action_message = f"Robot faulted during the move ({self.arm_action_message})"
+                self.arm_action_error_code = MoveItErrorCodes.CONTROL_FAILED
         except Exception as e:
             self.get_logger().error(f"Error processing arm action result: {e}")
             self.arm_action_successful = False
@@ -885,6 +937,11 @@ class HardwareInterfaceClient(Node):
                 self.gripper_action_message = f"Gripper moved to position {result.position:.3f}"
             else:
                 self.gripper_action_message = f"Gripper failed to reach target (position={result.position:.3f})"
+
+            if self.is_faulted:
+                self.get_logger().error("The robot faulted during the gripper move")
+                self.gripper_action_successful = False
+                self.gripper_action_message = f"Robot faulted during the gripper move ({self.gripper_action_message})"
         except Exception as e:
             self.get_logger().error(f"Error processing gripper action result: {e}")
             self.gripper_action_successful = False

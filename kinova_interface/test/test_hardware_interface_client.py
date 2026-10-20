@@ -179,22 +179,20 @@ def test_finalize_service_status_success(node):
 
 
 def test_finalize_service_status_fault(node):
-    """Test final service status while hardware is faulted."""
+    """A move refused while faulted reports why, not the 'Sending arm home' text from before it."""
 
     node.is_faulted = True
-    node.status_text = "HARDWARE FAULT: Robot is faulted"
+    node.status_text = "Sending arm to home position"
 
     response = Trigger.Response()
     response.success = False
-    response.message = "Failed"
+    response.message = node.FAULTED_MESSAGE
 
     node.finalize_service_status(response)
 
     assert node.current_state == ExtendedStatus.STATE_FAULT
     assert node.command_success is False
-
-    # Fault-specific message should be preserved
-    assert node.status_text == "HARDWARE FAULT: Robot is faulted"
+    assert node.status_text == node.FAULTED_MESSAGE
 
 # fault_callback()
 def test_fault_callback_faulted(node):
@@ -1065,6 +1063,8 @@ def test_goal_response_callback_rejected(node):
 
     future = MagicMock()
     future.result.return_value = goal_handle
+    node.arm_goal_future = future
+    node.arm_movement_finished.clear()
 
     node.goal_response_callback(future)
 
@@ -1083,9 +1083,11 @@ def test_goal_response_callback_accepted(node):
 
     future = MagicMock()
     future.result.return_value = goal_handle
+    node.arm_goal_future = future
 
     node.goal_response_callback(future)
 
+    assert node.arm_goal_handle is goal_handle
     goal_handle.get_result_async.assert_called_once()
     result_future.add_done_callback.assert_called_once()
 
@@ -1295,3 +1297,119 @@ def test_handle_execute_trajectory_rejects_an_empty_trajectory(node):
 
     assert (result.success, result.message) == (False, "Trajectory has no points")
     node._dispatch_arm_goal.assert_not_called()
+
+
+# Hardware faults
+def _fault_message(faulted):
+    message = Bool()
+    message.data = faulted
+    return message
+
+
+def _arm_result(error_code):
+    result_future = MagicMock()
+    result_future.result.return_value.result.error_code = MoveItErrorCodes(val=error_code)
+    return result_future
+
+
+def test_fault_callback_ignores_a_repeated_value(node):
+    """The fault flag arrives every control cycle, only a change is acted on."""
+    node.fault_callback(_fault_message(False))
+    node.fault_callback(_fault_message(False))
+
+    node.status_pub.publish.assert_not_called()
+
+
+def test_fault_callback_cleared_mid_move_stays_busy(node):
+    node.is_faulted = True
+    node.arm_movement_finished.clear()
+
+    node.fault_callback(_fault_message(False))
+
+    assert node.current_state == ExtendedStatus.STATE_BUSY
+
+
+def test_home_arm_is_refused_while_faulted(node):
+    node.is_faulted = True
+
+    result = node.handle_home_arm(HomeArm.Request(), HomeArm.Response())
+
+    assert result.success is False
+    assert result.message == node.FAULTED_MESSAGE
+    node.arm_client.send_goal_async.assert_not_called()
+    assert node.current_state == ExtendedStatus.STATE_FAULT
+
+
+def test_move_gripper_is_refused_while_faulted(node):
+    node.is_faulted = True
+
+    result = node.handle_move_gripper(MoveGripper.Request(position=0.8), MoveGripper.Response())
+
+    assert (result.success, result.message) == (False, node.FAULTED_MESSAGE)
+    node.gripper_client.send_goal_async.assert_not_called()
+
+
+def test_result_callback_fails_a_move_the_robot_faulted_during(node):
+    """MoveIt can report success while the driver dropped every command."""
+    node._dispatch_arm_goal(MoveGroup.Goal())
+    node.fault_callback(_fault_message(True))
+
+    node.result_callback(_arm_result(MoveItErrorCodes.SUCCESS))
+
+    assert node.arm_action_successful is False
+    assert node.arm_action_message == "Robot faulted during the move (Movement complete)"
+    assert node.arm_action_error_code == MoveItErrorCodes.CONTROL_FAILED
+
+
+def test_gripper_result_callback_fails_a_move_the_robot_faulted_during(node):
+    node.move_gripper(0.8)
+    node.fault_callback(_fault_message(True))
+    gripper_result = MagicMock(position=0.3, effort=0.0, stalled=True, reached_goal=False)
+    result_future = MagicMock()
+    result_future.result.return_value.result = gripper_result
+
+    node.gripper_result_callback(result_future)
+
+    assert node.gripper_action_successful is False
+    assert node.gripper_action_message.startswith("Robot faulted during the gripper move")
+
+
+def test_timed_out_arm_move_is_cancelled(node):
+    goal_handle = MagicMock()
+    node.arm_goal_handle = goal_handle
+    node.arm_movement_finished = MagicMock()
+    node.arm_movement_finished.wait.return_value = False
+    node.send_home_goal = MagicMock(return_value=True)
+
+    result = node.handle_home_arm(HomeArm.Request(), HomeArm.Response())
+
+    assert result.success is False
+    assert "timed out" in result.message
+    goal_handle.cancel_goal_async.assert_called_once()
+    assert node.arm_goal_handle is None
+
+
+def test_result_callback_ignores_an_abandoned_goal(node):
+    """A late result from a goal that timed out must not count as the next move's result."""
+    abandoned_goal = MagicMock()
+    node.arm_goal_handle = MagicMock()
+    node.arm_movement_finished.clear()
+
+    node.result_callback(_arm_result(MoveItErrorCodes.PREEMPTED), abandoned_goal)
+
+    assert not node.arm_movement_finished.is_set()
+
+
+def test_goal_response_callback_cancels_an_abandoned_goal(node):
+    """MoveIt accepted the goal only after the move had timed out."""
+    goal_handle = MagicMock(accepted=True)
+    send_future = MagicMock()
+    send_future.result.return_value = goal_handle
+    node.arm_goal_future = None
+    node.arm_movement_finished.clear()
+
+    node.goal_response_callback(send_future)
+
+    goal_handle.cancel_goal_async.assert_called_once()
+    goal_handle.get_result_async.assert_not_called()
+    assert not node.arm_movement_finished.is_set()
