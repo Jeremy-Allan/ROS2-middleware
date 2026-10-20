@@ -172,13 +172,18 @@ it already is.
 
 `thrust` reuses this exact mechanism (`solve_planar_reach` +
 `check_joint_state_validity`) for a held object rather than a resting
-one: raise straight up (facing wherever it was originally resting,
+one: raise it and pull it back toward the base along its own bearing,
+to `THRUST_PULLBACK_RADIUS` (0.30 m, stepping outward if that's blocked;
 wrist reset to `_PLANAR_REACH_WRIST` regardless of whatever orientation
 `pickup`'s `grasp_style: 'side'` search happened to land on), spin to
-face the thrust direction (`joint_1` only - shoulder/elbow held exactly
-where the raise left them, so an arbitrarily large turn doesn't disturb
-the object's orientation, only which way the arm points), then extend
-(shoulder/elbow only, seeded at the spin position). Since the object is
+face the thrust bearing (`joint_1` only - shoulder/elbow held exactly
+where the pull-back left them, so an arbitrarily large turn doesn't
+disturb the object's orientation, only which way the arm points), then
+extend (shoulder/elbow only, seeded at the spin position) as far as the
+arm can reach along that bearing. A `destination` only sets the bearing,
+so the stab doesn't stop at it; the pull-back guarantees a real stroke
+even when the destination is no further from the base than the object
+started. An explicit `distance` (with `direction`) is still honoured. Since the object is
 attached by that point (from `pickup`), it's excluded from collision
 checking against the gripper automatically - unlike `push`, `thrust`
 needs no `set_collision_allowed` at all.
