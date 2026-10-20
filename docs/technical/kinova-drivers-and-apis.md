@@ -1,6 +1,6 @@
 # Kinova drivers and APIs
 
-The middleware moves the arm through the Kinova ROS 2 packages, `ros2_control` and MoveIt 2. This page lists what each one provides, how `robot.launch.py` starts them and what the error messages of a failed move mean.
+The middleware uses Kinova ROS 2 packages, ros2_control and MoveIt 2 for arm control. This page documents their roles, launch configuration and motion error messages.
 
 ## Control path
 
