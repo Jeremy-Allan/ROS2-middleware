@@ -7,6 +7,7 @@ state validity/ACM), the planar-reach solver, and held-object state.
 """
 
 import math
+from contextlib import contextmanager
 import time
 from functools import partial
 
@@ -18,6 +19,7 @@ from moveit_msgs.srv import GetPositionIK, ApplyPlanningScene, GetPositionFK, Ge
 from moveit_msgs.msg import RobotState, PlanningScene, AllowedCollisionMatrix, AllowedCollisionEntry, PlanningSceneComponents
 
 from kinova_interfaces.srv import (
+    GetRobotParameters,
     GetObjectCoordinates,
     GetRelativeMovement,
     GetObjectInfo,
@@ -80,6 +82,7 @@ class ArmActions:
         self.relative_client = node.create_client(GetRelativeMovement, '/get_relative_movement', callback_group=cb_group)
         self.info_client = node.create_client(GetObjectInfo, '/get_object_info', callback_group=cb_group)
         self.orientation_client = node.create_client(GetOrientationPreset, '/get_orientation_preset', callback_group=cb_group)
+        self.parameters_client = node.create_client(GetRobotParameters, '/get_robot_parameters', callback_group=cb_group)
 
         # Service clients for attach/detach/update-pose, provided by the environment mapping node
         self.attach_client = node.create_client(AttachObject, '/attach_object', callback_group=cb_group)
@@ -231,6 +234,65 @@ class ArmActions:
         else:
             self.get_logger().error(f"Failed to get object info for {target_name}: {response.message if response else 'no response'}")
             return None
+
+    def get_object_names(self):
+        """Names of every object recipes can name (not obstacles like the table), or None if unavailable."""
+        response = call_service(self.parameters_client, GetRobotParameters.Request(), '/get_robot_parameters',
+                                self.get_logger())
+        if response is None:
+            return None
+        return list(response.object_list)
+
+    # Objects that are never exempted from collision checking: the vision
+    # node's fitted table plane is registered as an object, but it's the table.
+    NEVER_EXEMPT = {'table_fit'}
+
+    def exemptible_objects(self):
+        """Objects push/thrust may pass straight through: every object except
+        NEVER_EXEMPT (obstacles like the table aren't objects). None if the
+        object list is unavailable."""
+        names = self.get_object_names()
+        if names is None:
+            return None
+        return [name for name in names if name not in self.NEVER_EXEMPT]
+
+    def exempt_from_collisions(self, names, exempted):
+        """Exempt each object from collision checking (set_collision_allowed),
+        recording it in `exempted` so restore_collisions can revert exactly
+        those. Returns the first name that couldn't be exempted, or None."""
+        for name in names:
+            if not self.set_collision_allowed(name, True):
+                return name
+            exempted.append(name)
+        return None
+
+    def restore_collisions(self, exempted):
+        """Restore collision checking for everything exempt_from_collisions exempted."""
+        for name in exempted:
+            self.set_collision_allowed(name, False)
+        exempted.clear()
+
+    @contextmanager
+    def passing_through(self, held, others, action):
+        """Exempt `others` from collision checking - including against the
+        held object, which MoveIt checks as part of the robot - for the
+        duration, and restore everything afterwards, even on failure. Yields
+        an error message, or None if everything was exempted. Used for the
+        parts of thrust/throw that should go straight through other objects."""
+        exempted, paired, error = [], False, None
+        failed = self.exempt_from_collisions(others, exempted)
+        if failed:
+            error = f"Failed to allow contact with '{failed}' for {action}"
+        elif others:
+            paired = self.motion.allow_contact(held, others, True)
+            if not paired:
+                error = f"Couldn't let '{held}' pass through the other objects for {action}"
+        try:
+            yield error
+        finally:
+            if paired and not self.motion.allow_contact(held, others, False):
+                self.get_logger().warn(f"Couldn't restore collision checking between '{held}' and {', '.join(others)}")
+            self.restore_collisions(exempted)
 
     def get_relative_movement_vector(self, movement_name):
         """Query the environment mapping node for a named relative-movement offset.

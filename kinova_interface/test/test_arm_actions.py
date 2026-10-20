@@ -12,8 +12,8 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 
 from kinova_interface.actions.arm_actions import ArmActions
 from kinova_interface.actions.motion import MotionUnavailable
-from kinova_interface.actions import pour, throw
-from kinova_interface.utils import geometry
+from kinova_interface.actions import pour, throw, thrust
+from kinova_interface.utils import geometry, grasping
 
 from kinova_interfaces.srv import (
     GetObjectInfo,
@@ -44,6 +44,9 @@ def actions(ros_context):
     host_node.cb_group = ReentrantCallbackGroup()
 
     arm_actions = ArmActions(host_node)
+    # push lists the scene's objects; default to none so push tests only
+    # see their target unless they say otherwise
+    arm_actions.get_object_names = MagicMock(return_value=[])
 
     yield arm_actions
     host_node.destroy_node()
@@ -1320,13 +1323,11 @@ def test_thrust_requires_destination_or_direction(actions):
     assert success is False
 
 
-def test_thrust_raises_spins_and_extends(actions):
-    """thrust should raise straight up (facing wherever the object was
-    originally resting, wrist reset to level), spin to face the thrust
-    direction (joint_1 only, shoulder/elbow held from the raise), then
-    extend toward the destination (shoulder/elbow only, seeded at the
-    spin position) - reusing the exact same single-plane mechanism as
-    push (see docs/technical/motion-and-actions/push.md)."""
+def test_thrust_pulls_back_spins_and_extends_to_the_reach_limit(actions):
+    """thrust should raise the object and draw it in toward the base along
+    its own bearing (wrist level), spin to face the destination (joint_1
+    only), then extend along that bearing as far as the arm can reach -
+    past the destination, not stopping at it."""
 
     actions.held_object = "red_cube"
     origin_x, origin_y, origin_z = 0.3, 0.1, 0.02
@@ -1345,29 +1346,167 @@ def test_thrust_raises_spins_and_extends(actions):
     face_yaw = math.atan2(origin_y, origin_x)
     thrust_yaw = math.atan2(0.4, -0.2)
     raise_z = origin_z + pour.POUR_DEFAULT_LIFT_HEIGHT
+    pull = thrust.THRUST_PULLBACK_RADIUS
 
     def solve_side_effect(base_yaw, x, y, z, seed_shoulder=None, seed_elbow=None):
         if seed_shoulder is None:
             assert base_yaw == pytest.approx(face_yaw)
-            assert (x, y, z) == pytest.approx((origin_x, origin_y, raise_z))
+            assert (x, y, z) == pytest.approx((pull * math.cos(face_yaw), pull * math.sin(face_yaw), raise_z))
             return (-0.1, 1.8, (x, y, z), 0.0)
         assert base_yaw == pytest.approx(thrust_yaw)
-        assert seed_shoulder == pytest.approx(-0.1)
-        assert seed_elbow == pytest.approx(1.8)
+        assert (seed_shoulder, seed_elbow) == pytest.approx((-0.1, 1.8))
+        assert math.hypot(x, y) == pytest.approx(pull + 0.35)  # reach limit, beyond the destination's 0.45 m
+        assert math.atan2(y, x) == pytest.approx(thrust_yaw)
         return (-0.4, 1.5, (x, y, z), 0.0)
 
     actions.solve_planar_reach = MagicMock(side_effect=solve_side_effect)
     actions.check_joint_state_validity = MagicMock(return_value=True)
     actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.35)
 
     success, message = actions.handlers['thrust']({"target": "red_cube", "destination": "target_spot"})
 
     assert success is True
-    raise_call, spin_call, extend_call = actions.call_joint_move_service.call_args_list
+    reference, direction, height, *_ = actions._find_max_planar_reach_distance.call_args[0]
+    assert (reference['x'], reference['y']) == pytest.approx((pull * math.cos(thrust_yaw), pull * math.sin(thrust_yaw)))
+    assert direction == "forward" and height == pytest.approx(raise_z)
+    assert actions._find_max_planar_reach_distance.call_args[1]['fixed_yaw'] == pytest.approx(thrust_yaw)
 
+    raise_call, spin_call, extend_call, retreat_call = actions.call_joint_move_service.call_args_list
     assert raise_call[0][0] == [pytest.approx(face_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
     assert spin_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.1), pytest.approx(1.8), 0.0, 0.0, 0.0]
     assert extend_call[0][0] == [pytest.approx(thrust_yaw), pytest.approx(-0.4), pytest.approx(1.5), 0.0, 0.0, 0.0]
+    assert retreat_call[0][0] == spin_call[0][0]  # backs out along the same line
+
+
+def test_thrust_steps_the_pull_back_outward_if_the_closest_pose_is_blocked(actions):
+    """If the pull-back pose at THRUST_PULLBACK_RADIUS is in collision, try
+    further out in THRUST_PULLBACK_STEP steps, never past the object itself."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.45, "y": 0.0, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(side_effect=[False, True, True, True])  # 0.30 blocked
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.3)
+
+    success, _ = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert success is True
+    pullback_radii = [call[0][1] for call in actions.solve_planar_reach.call_args_list[:2]]
+    assert pullback_radii == pytest.approx([thrust.THRUST_PULLBACK_RADIUS,
+                                            thrust.THRUST_PULLBACK_RADIUS + thrust.THRUST_PULLBACK_STEP])
+
+
+def test_thrust_fails_if_no_pull_back_pose_up_to_the_object_is_clear(actions):
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.4, "y": 0.0, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=False)
+    actions.call_joint_move_service = MagicMock()
+
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Could not solve a pulled-back raise for 'red_cube'")
+    pullback_radii = [call[0][1] for call in actions.solve_planar_reach.call_args_list]
+    assert pullback_radii == pytest.approx([0.30, 0.35, 0.40])  # stops at the object's own 0.4 m
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_thrust_backward_faces_the_far_side_of_the_base(actions):
+    """'backward' turns the object's own bearing by 180 degrees (wrapped to
+    +-pi for joint_1), rather than shortening a reach along it."""
+
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": -0.3, "y": 0.1, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock(return_value={"success": True})
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.3)
+
+    success, _ = actions.handlers['thrust']({"target": "red_cube", "direction": "backward"})
+
+    assert success is True
+    spin_call = actions.call_joint_move_service.call_args_list[1]
+    assert spin_call[0][0][0] == pytest.approx(math.atan2(-0.1, 0.3))
+
+
+def _thrust_scene(actions, names):
+    """A held red_cube at (0.45, 0, 0.02) with every planning step mocked to succeed,
+    recording the order of collision exemptions, reach searches and moves."""
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.45, "y": 0.0, "z": 0.02}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.05, 0.05, 0.05]}
+    })
+    actions.get_object_names = MagicMock(return_value=names)
+    order = []
+    actions.set_collision_allowed = MagicMock(side_effect=lambda name, allowed: order.append(f"{name}:{allowed}") or True)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.1, 1.8, (0.0, 0.0, 0.0), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions._find_max_planar_reach_distance = MagicMock(side_effect=lambda *a, **k: order.append("search") or 0.3)
+    actions.call_joint_move_service = MagicMock(side_effect=lambda *a, **k: order.append("move") or {"success": True})
+    actions.motion = MagicMock()
+    actions.motion.allow_contact = MagicMock(
+        side_effect=lambda held, others, allowed: order.append(f"{held}~{'+'.join(others)}:{allowed}") or True)
+    return order
+
+
+def test_thrust_stabs_through_other_objects_but_winds_up_around_them(actions):
+    """Other objects are exempt from collision checking for the reach search
+    and the extend, so the stab can hit what it's aimed at - including
+    against the held object, which MoveIt checks as part of the robot - but
+    not for the pull-back or spin. The held object itself and table_fit are
+    never exempted, so they're still checked against the table."""
+    order = _thrust_scene(actions, ["red_cube", "tea_pot", "table_fit", "delivery_tray"])
+
+    success, _ = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert success is True
+    open_up = ["tea_pot:True", "delivery_tray:True", "red_cube~tea_pot+delivery_tray:True"]
+    close = ["red_cube~tea_pot+delivery_tray:False", "tea_pot:False", "delivery_tray:False"]
+    assert order == [*open_up, "search", *close,        # reach search ignores objects
+                     "move", "move",                    # pull back, spin: normal checking
+                     *open_up, "move", "move", *close]  # stab and retreat ignore objects
+
+
+def test_thrust_restores_collision_checking_if_the_stab_fails(actions):
+    order = _thrust_scene(actions, ["red_cube", "tea_pot"])
+    actions.call_joint_move_service = MagicMock(side_effect=lambda *a, **k: order.append("move") or (
+        {"success": False, "message": "MoveIt failed"} if order.count("move") == 3 else {"success": True}))
+
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Failed to thrust 'red_cube' to its destination: MoveIt failed")
+    assert order[-3:] == ["move", "red_cube~tea_pot:False", "tea_pot:False"]
+
+
+def test_thrust_fails_cleanly_if_the_held_object_cant_be_let_through(actions):
+    order = _thrust_scene(actions, ["red_cube", "tea_pot"])
+    actions.motion.allow_contact = MagicMock(return_value=False)
+
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Couldn't let 'red_cube' pass through the other objects for thrust")
+    assert order == ["tea_pot:True", "tea_pot:False"]  # exemption restored, nothing moved
+
+
+def test_thrust_fails_if_it_cant_list_the_scene_objects(actions):
+    order = _thrust_scene(actions, None)
+
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Couldn't list the scene's objects to thrust 'red_cube' through them")
+    assert order == []  # nothing exempted, nothing moved
 
 
 def test_thrust_without_target_defaults_to_held_object(actions):
@@ -1627,12 +1766,11 @@ def test_thrust_uses_dynamic_distance_when_none_given(actions):
 
     assert success is True
     actions._find_max_planar_reach_distance.assert_called_once()
-    # 'forward' extends straight along the object's own bearing from the
-    # arm's base, so the resolved release point should sit 0.22m further
-    # out along the same (origin_x, origin_y) direction.
-    call_args = actions._find_max_planar_reach_distance.call_args[0]
-    assert call_args[0] == {"x": origin_x, "y": origin_y, "z": origin_z}
-    assert call_args[1] == "forward"
+    # searched outward along the object's own bearing, from the pull-back point
+    call_args = actions._find_max_planar_reach_distance.call_args
+    assert call_args[0][0] == pytest.approx({"x": thrust.THRUST_PULLBACK_RADIUS, "y": 0.0})
+    assert call_args[0][1] == "forward"
+    assert call_args[1]['fixed_yaw'] == pytest.approx(0.0)
 
 
 def test_thrust_honors_explicit_distance_without_dynamic_search(actions):
@@ -1690,7 +1828,7 @@ def test_push_faces_object_and_extends_shoulder_elbow_only(actions):
     """push should face the object (joint_1 = its bearing from the arm),
     solve a planar reach (solve_planar_reach) for both the contact pose
     and the extended end pose, verify both collision-free
-    (check_joint_state_validity), then approach/close/extend - all while
+    (check_joint_state_validity), then approach/extend - all while
     contact with the object is temporarily permitted."""
 
     target_info = {
@@ -1706,10 +1844,19 @@ def test_push_faces_object_and_extends_shoulder_elbow_only(actions):
     }[name])
 
     expected_base_yaw = math.atan2(0.1, 0.3)
+    bearing = (math.cos(expected_base_yaw), math.sin(expected_base_yaw), 0.0)
+    clearance = grasping.half_extent_along(target_info["shape"], Rotation.identity(), bearing) \
+        + actions.grasp_config['standoff']
+    pre_radius = math.hypot(0.3, 0.1) - clearance
 
     def solve_side_effect(base_yaw, x, y, z, seed_shoulder=None, seed_elbow=None):
         assert base_yaw == pytest.approx(expected_base_yaw)
+        if seed_shoulder is None:  # line-up pose, back from the object along its bearing
+            assert math.hypot(x, y) == pytest.approx(pre_radius)
+            assert z == pytest.approx(0.02)
+            return (-0.2, 2.2, (x, y, z), 0.0)
         if (x, y) == (0.3, 0.1):
+            assert (seed_shoulder, seed_elbow) == pytest.approx((-0.2, 2.2))
             return (-0.3, 2.0, (0.3, 0.1, 0.02), 0.0)
         if (x, y) == (0.6, 0.2):
             assert seed_shoulder == pytest.approx(-0.3)
@@ -1735,21 +1882,20 @@ def test_push_faces_object_and_extends_shoulder_elbow_only(actions):
     assert allow_calls[0][0] == ("push_block", True)
     assert allow_calls[-1][0] == ("push_block", False)
 
-    approach_call, extend_call, retreat_call = actions.call_joint_move_service.call_args_list
-    assert approach_call[0][0] == [pytest.approx(expected_base_yaw), pytest.approx(-0.3), pytest.approx(2.0), 0.0, 0.0, 0.0]
+    line_up_call, contact_call, extend_call, retreat_call = actions.call_joint_move_service.call_args_list
+    assert line_up_call[0][0] == [pytest.approx(expected_base_yaw), pytest.approx(-0.2), pytest.approx(2.2), 0.0, 0.0, 0.0]
+    assert contact_call[0][0] == [pytest.approx(expected_base_yaw), pytest.approx(-0.3), pytest.approx(2.0), 0.0, 0.0, 0.0]
     assert extend_call[0][0] == [pytest.approx(expected_base_yaw), pytest.approx(-0.5), pytest.approx(1.6), 0.0, 0.0, 0.0]
-    assert retreat_call[0][0] == [pytest.approx(expected_base_yaw), pytest.approx(-0.3), pytest.approx(2.0), 0.0, 0.0, 0.0]
+    assert retreat_call[0][0] == line_up_call[0][0]  # backs out to where it lined up
 
     actions.update_object_pose.assert_called_once_with(
         "push_block", 0.6, 0.2, 0.02, {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}
     )
 
 
-def test_push_fails_if_contact_reach_unsolvable(actions):
-    """If solve_planar_reach can't find the contact pose at all (returns
-    None), push should fail cleanly before ever moving, but still revert
-    the collision allowance it already granted (contact with the target
-    is permitted up front now - see test_push_allows_target_object_contact_before_checking)."""
+def test_push_fails_if_line_up_reach_unsolvable(actions):
+    """If the line-up pose behind the object can't be solved, push fails
+    before exempting anything from collision checking or moving."""
 
     target_info = {
         "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
@@ -1762,14 +1908,12 @@ def test_push_fails_if_contact_reach_unsolvable(actions):
 
     success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
-    assert success is False
+    assert (success, message) == (False, "Could not solve a pose to line up behind 'push_block' for push")
     actions.call_joint_move_service.assert_not_called()
-    allow_calls = actions.set_collision_allowed.call_args_list
-    assert allow_calls[0][0] == ("push_block", True)
-    assert allow_calls[-1][0] == ("push_block", False)
+    actions.set_collision_allowed.assert_not_called()
 
 
-def test_push_fails_if_contact_reach_error_too_large(actions):
+def test_push_fails_if_line_up_reach_error_too_large(actions):
     """A solved reach with a large position error should be treated as a
     failure to converge, not trusted just because some result came back."""
 
@@ -1784,8 +1928,28 @@ def test_push_fails_if_contact_reach_error_too_large(actions):
     success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
     assert success is False
-    allow_calls = actions.set_collision_allowed.call_args_list
-    assert allow_calls[-1][0] == ("push_block", False)
+    actions.set_collision_allowed.assert_not_called()
+
+
+def test_push_fails_if_contact_reach_unsolvable(actions):
+    """If the contact pose can't be solved, push should fail cleanly before
+    ever moving, reverting the collision exemption it granted for the check."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(side_effect=[(-0.2, 2.2, (0.2, 0.07, 0.02), 0.0), None])
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock()
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert (success, message) == (False, "Could not solve a planar reach to 'push_block'")
+    actions.call_joint_move_service.assert_not_called()
+    assert [c[0] for c in actions.set_collision_allowed.call_args_list] == [("push_block", True), ("push_block", False)]
 
 
 def test_push_allows_target_object_contact_before_checking(actions):
@@ -1825,15 +1989,16 @@ def test_push_allows_target_object_contact_before_checking(actions):
 
     assert success is True
     assert actions.set_collision_allowed.call_args_list[0][0] == ("push_block", True)
-    # allowed BEFORE the geometry/validity checks ever run
-    assert call_order.index("set_collision_allowed") < call_order.index("solve_planar_reach")
-    assert call_order.index("set_collision_allowed") < call_order.index("check_joint_state_validity")
+    # The line-up pose is solved and checked with collisions on (it must
+    # really be clear of the object); the contact pose only after the
+    # exemption, since it overlaps the object by design.
+    assert call_order[:3] == ["solve_planar_reach", "check_joint_state_validity", "set_collision_allowed"]
+    assert call_order[3:5] == ["solve_planar_reach", "check_joint_state_validity"]
 
 
-def test_push_fails_if_contact_pose_in_collision(actions):
-    """A geometrically-solved contact pose that's in collision with
-    something *other* than the target object should still fail cleanly,
-    and still revert the collision allowance."""
+def test_push_fails_if_line_up_pose_in_collision(actions):
+    """A line-up pose that collides (with collisions still on) fails the
+    push before anything is exempted or moved."""
 
     target_info = {
         "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
@@ -1847,11 +2012,31 @@ def test_push_fails_if_contact_pose_in_collision(actions):
 
     success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
-    assert success is False
+    assert (success, message) == (False, "Push line-up pose behind 'push_block' is in collision")
     actions.call_joint_move_service.assert_not_called()
-    allow_calls = actions.set_collision_allowed.call_args_list
-    assert allow_calls[0][0] == ("push_block", True)
-    assert allow_calls[-1][0] == ("push_block", False)
+    actions.set_collision_allowed.assert_not_called()
+
+
+def test_push_fails_if_contact_pose_in_collision(actions):
+    """A contact pose in collision with something the exemption doesn't
+    cover (e.g. the table) should still fail cleanly, and still revert
+    the collision exemption."""
+
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.check_joint_state_validity = MagicMock(side_effect=[True, False])  # line-up fine, contact not
+    actions.set_collision_allowed = MagicMock(return_value=True)
+    actions.call_joint_move_service = MagicMock()
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert (success, message) == (False, "Push contact pose for 'push_block' is in collision")
+    actions.call_joint_move_service.assert_not_called()
+    assert [c[0] for c in actions.set_collision_allowed.call_args_list] == [("push_block", True), ("push_block", False)]
 
 
 def test_push_fails_if_extend_reach_unsolvable(actions):
@@ -1865,12 +2050,9 @@ def test_push_fails_if_extend_reach_unsolvable(actions):
     }
     actions.get_object_info = MagicMock(return_value=target_info)
 
-    def solve_side_effect(base_yaw, x, y, z, seed_shoulder=None, seed_elbow=None):
-        if seed_shoulder is None:
-            return (-0.3, 2.0, (0.3, 0.1, 0.02), 0.0)
-        return None  # extend fails to solve
-
-    actions.solve_planar_reach = MagicMock(side_effect=solve_side_effect)
+    # line-up and contact solve, the extend doesn't
+    actions.solve_planar_reach = MagicMock(side_effect=[
+        (-0.2, 2.2, (0.2, 0.07, 0.02), 0.0), (-0.3, 2.0, (0.3, 0.1, 0.02), 0.0), None])
     actions.check_joint_state_validity = MagicMock(return_value=True)
     actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_joint_move_service = MagicMock()
@@ -1932,8 +2114,8 @@ def test_push_fails_if_attach_fails(actions):
     success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
     assert success is False
-    # only the approach move happened - never the extend
-    assert actions.call_joint_move_service.call_count == 1
+    # only the line-up and contact moves happened - never the extend
+    assert actions.call_joint_move_service.call_count == 2
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[-1][0] == ("push_block", False)
 
@@ -1961,8 +2143,8 @@ def test_push_fails_if_detach_fails(actions):
 
     assert success is False
     assert "detach" in message.lower()
-    # retreat never attempted - only approach + extend
-    assert actions.call_joint_move_service.call_count == 2
+    # retreat never attempted - only line-up, contact and extend
+    assert actions.call_joint_move_service.call_count == 3
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[-1][0] == ("push_block", False)
 
@@ -1996,7 +2178,7 @@ def test_push_fails_if_cant_check_what_its_resting_on(actions):
     assert success is False
     assert "resting on" in message.lower()
     # never reached the extend
-    assert actions.call_joint_move_service.call_count == 1
+    assert actions.call_joint_move_service.call_count == 2
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[-1][0] == ("push_block", False)
 
@@ -2023,7 +2205,7 @@ def test_push_fails_if_cant_allow_contact_with_what_its_resting_on(actions):
 
     assert success is False
     assert "table" in message.lower()
-    assert actions.call_joint_move_service.call_count == 1
+    assert actions.call_joint_move_service.call_count == 2
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[-1][0] == ("push_block", False)
 
@@ -2044,7 +2226,7 @@ def test_push_allows_and_reverts_table_contact_around_the_extend(actions):
     actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(
-        side_effect=[{"success": True}, {"success": False, "message": "MoveIt failed"}]
+        side_effect=[{"success": True}, {"success": True}, {"success": False, "message": "MoveIt failed"}]
     )
     actions.attach_object = MagicMock(return_value=True)
     actions.motion = FakeMotion(supports=["table"])
@@ -2056,14 +2238,11 @@ def test_push_allows_and_reverts_table_contact_around_the_extend(actions):
     assert actions.motion.allowed == [("push_block", ["table"], True), ("push_block", ["table"], False)]
 
 
-def test_push_attaches_after_closing_and_detaches_before_retreating(actions):
-    """The object should be attached right after the gripper closes on
-    it (so its position in the planning scene tracks the real arm
-    motion through the extend, like pickup/dropoff/throw), and detached
-    again - mirroring dropoff/throw's open -> detach -> update-pose
-    ordering - before the arm retreats, so retreating moves through
-    space the object has genuinely vacated rather than through its
-    still-registered pre-push position."""
+def test_push_keeps_the_gripper_open_and_attaches_at_contact(actions):
+    """The gripper opens once before the approach and never closes. The
+    object is attached (scene only) once the gripper reaches it, so its
+    position in the planning scene tracks the extend, and detached again
+    (detach -> update-pose) before the arm retreats."""
 
     target_info = {
         "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
@@ -2086,33 +2265,64 @@ def test_push_attaches_after_closing_and_detaches_before_retreating(actions):
     actions.update_object_pose = MagicMock(side_effect=lambda *a: call_order.append("update_pose") or True)
     actions.motion = FakeMotion(supports=["table"])
 
-    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward", "close_position": 0.75})
 
     assert success is True
-    actions.attach_object.assert_called_once_with("push_block")
-    actions.detach_object.assert_called_once_with("push_block")
-
-    # open, approach, close, attach, extend, open, detach, update_pose, retreat
+    # open, line up, contact, attach, extend, detach, update_pose, retreat - never closes
     assert call_order == [
-        "gripper:0.0", "joint_move", "gripper:0.75", "attach", "joint_move",
-        "gripper:0.0", "detach", "update_pose", "joint_move",
+        "gripper:0.0", "joint_move", "joint_move", "attach", "joint_move", "detach", "update_pose", "joint_move",
     ]
 
     joint_calls = actions.call_joint_move_service.call_args_list
-    approach_joints = joint_calls[0][0][0]
-    retreat_joints = joint_calls[-1][0][0]
-    assert retreat_joints == approach_joints  # retreats to the contact pose
+    assert joint_calls[-1][0][0] == joint_calls[0][0][0]  # retreats to the line-up pose
 
-    # retreat happens before the collision allowance is reverted
     allow_calls = actions.set_collision_allowed.call_args_list
     assert allow_calls[-1][0] == ("push_block", False)
 
 
-def test_push_fails_if_retreat_gripper_open_fails(actions):
-    """If the post-push gripper-open fails, push should report the
-    failure (while still having completed the push itself) rather than
-    silently continuing with the gripper still closed on the object."""
+def test_push_allows_collisions_with_every_other_object_and_restores_them(actions):
+    """Push carries on through anything in its way: every object (bar the
+    vision node's table_fit) is exempt from collision checking from before
+    the pose checks until after the retreat. Obstacles like the table
+    aren't objects, so they're never touched."""
 
+    target_info = {
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    }
+    actions.get_object_info = MagicMock(return_value=target_info)
+    actions.get_object_names = MagicMock(return_value=["tea_pot", "push_block", "table_fit", "delivery_tray"])
+    call_order = []
+    actions.solve_planar_reach = MagicMock(
+        side_effect=lambda *a, **k: call_order.append("solve") or (-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.set_collision_allowed = MagicMock(
+        side_effect=lambda name, allowed: call_order.append(f"{name}:{allowed}") or True)
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.call_joint_move_service = MagicMock(
+        side_effect=lambda *a, **k: call_order.append("joint_move") or {"success": True})
+    actions.attach_object = MagicMock(return_value=True)
+    actions.detach_object = MagicMock(return_value=True)
+    actions.update_object_pose = MagicMock(return_value=True)
+    actions.motion = FakeMotion(supports=["table"])
+    actions._find_max_planar_reach_distance = MagicMock(return_value=0.2)
+
+    success, _ = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert success is True
+    allowed = ["push_block:True", "tea_pot:True", "delivery_tray:True"]
+    restored = ["push_block:False", "tea_pot:False", "delivery_tray:False"]
+    # line-up solved with collisions on, then exempted for the contact/extend checks
+    assert call_order[:5] == ["solve", *allowed, "solve"]
+    # restored before lining up for real, so the arm goes around everything on the way
+    line_up = call_order.index("joint_move")
+    assert call_order[line_up - 3:line_up] == restored
+    assert call_order[line_up + 1:line_up + 4] == allowed
+    assert call_order[-3:] == restored
+    assert "table_fit:True" not in call_order
+
+
+def test_push_reverts_only_what_it_allowed_if_an_allowance_fails(actions):
     target_info = {
         "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
         "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
@@ -2120,22 +2330,63 @@ def test_push_fails_if_retreat_gripper_open_fails(actions):
     actions.get_object_info = MagicMock(return_value=target_info)
     actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
     actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.get_object_names = MagicMock(return_value=["push_block", "tea_pot", "delivery_tray"])
+    actions.set_collision_allowed = MagicMock(side_effect=lambda name, allowed: not (name == "tea_pot" and allowed))
+    actions.call_joint_move_service = MagicMock()
+
+    success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
+
+    assert (success, message) == (False, "Failed to allow contact with 'tea_pot' for push")
+    assert [c[0] for c in actions.set_collision_allowed.call_args_list] == [
+        ("push_block", True), ("tea_pot", True), ("push_block", False)]
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_push_fails_if_it_cant_list_the_scene_objects(actions):
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.3, "y": 0.1, "z": 0.02}, "orientation": {"x": 0.0, "y": 0.0, "z": 0.0, "w": 1.0}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.06, 0.06, 0.03]}
+    })
+    actions.solve_planar_reach = MagicMock(return_value=(-0.3, 2.0, (0.3, 0.1, 0.02), 0.0))
+    actions.check_joint_state_validity = MagicMock(return_value=True)
+    actions.get_object_names = MagicMock(return_value=None)
     actions.set_collision_allowed = MagicMock(return_value=True)
-    actions.call_move_gripper_service = MagicMock(
-        side_effect=[{"success": True}, {"success": True}, {"success": False, "message": "gripper fault"}]
-    )
-    actions.call_joint_move_service = MagicMock(return_value={"success": True})
-    actions.attach_object = MagicMock(return_value=True)
-    actions.detach_object = MagicMock(return_value=True)
-    actions.motion = FakeMotion(supports=["table"])
+    actions.call_joint_move_service = MagicMock()
 
     success, message = actions.handlers['push']({"target": "push_block", "direction": "forward"})
 
     assert success is False
-    assert "gripper fault" in message
-    actions.detach_object.assert_not_called()
-    allow_calls = actions.set_collision_allowed.call_args_list
-    assert allow_calls[-1][0] == ("push_block", False)
+    assert "Couldn't list the scene's objects" in message
+    actions.set_collision_allowed.assert_not_called()
+    actions.call_joint_move_service.assert_not_called()
+
+
+def test_exemptible_objects_leaves_out_the_vision_table(actions):
+    actions.get_object_names = MagicMock(return_value=["water_bottle", "table_fit", "tea_pot"])
+    assert actions.exemptible_objects() == ["water_bottle", "tea_pot"]
+    actions.get_object_names = MagicMock(return_value=None)
+    assert actions.exemptible_objects() is None
+
+
+def test_exempt_from_collisions_stops_at_the_first_failure_and_restores_exactly_what_it_exempted(actions):
+    actions.set_collision_allowed = MagicMock(side_effect=lambda name, allowed: not (name == "b" and allowed))
+    exempted = []
+
+    assert actions.exempt_from_collisions(["a", "b", "c"], exempted) == "b"
+    assert exempted == ["a"]
+    actions.restore_collisions(exempted)
+
+    assert [c[0] for c in actions.set_collision_allowed.call_args_list] == [("a", True), ("b", True), ("a", False)]
+    assert exempted == []
+
+
+def test_get_object_names_lists_the_robot_parameters_objects(actions):
+    response = SimpleNamespace(object_list=["water_bottle", "tea_pot"])
+    with patch("kinova_interface.actions.arm_actions.call_service", return_value=response) as call:
+        assert ArmActions.get_object_names(actions) == ["water_bottle", "tea_pot"]
+    assert call.call_args[0][2] == "/get_robot_parameters"
+    with patch("kinova_interface.actions.arm_actions.call_service", return_value=None):
+        assert ArmActions.get_object_names(actions) is None
 
 
 def test_push_fails_if_retreat_move_fails(actions):
@@ -2153,7 +2404,7 @@ def test_push_fails_if_retreat_move_fails(actions):
     actions.set_collision_allowed = MagicMock(return_value=True)
     actions.call_move_gripper_service = MagicMock(return_value={"success": True})
     actions.call_joint_move_service = MagicMock(
-        side_effect=[{"success": True}, {"success": True}, {"success": False, "message": "MoveIt failed"}]
+        side_effect=[{"success": True}, {"success": True}, {"success": True}, {"success": False, "message": "MoveIt failed"}]
     )
     actions.attach_object = MagicMock(return_value=True)
     actions.detach_object = MagicMock(return_value=True)
@@ -2451,6 +2702,75 @@ def _fake_fling_plan(duration=1.0, crosses=True):
     plan.duration = duration
     plan.time_at_joint_crossing = MagicMock(return_value=duration * 0.8 if crosses else None)
     return plan
+
+
+def _throw_scene(actions, names, plan=None):
+    """A held red_cube with every throw step mocked to succeed, recording the order of
+    moves, collision exemptions, fling planning/execution and the fling finishing."""
+    actions.held_object = "red_cube"
+    actions.get_object_info = MagicMock(return_value={
+        "pose": {"position": {"x": 0.5, "y": 0.1, "z": 0.0}, "orientation": {}},
+        "shape": {"type": SolidPrimitive.BOX, "dimensions": [0.3, 0.2, 0.02]}
+    })
+    actions.latest_joint_positions = {f'joint_{i}': 0.1 * i for i in range(1, 7)}
+    actions.get_object_names = MagicMock(return_value=names)
+    order = []
+    actions.set_collision_allowed = MagicMock(side_effect=lambda name, allowed: order.append(f"{name}:{allowed}") or True)
+    actions.motion.allow_contact = MagicMock(
+        side_effect=lambda held, others, allowed: order.append(f"{held}~{'+'.join(others)}:{allowed}") or True)
+    actions.call_joint_move_service = MagicMock(side_effect=lambda *a, **k: order.append("move") or {"success": True})
+    actions.motion.plan_joints = MagicMock(
+        side_effect=lambda *a, **k: order.append("plan fling") or ((plan or _fake_fling_plan()), None))
+    fling = _mock_future()
+    fling.result.side_effect = lambda: order.append("fling finished")
+    actions.motion.execute_async = MagicMock(side_effect=lambda p: order.append("fling") or fling)
+    actions.wait_for_joint_crossing = MagicMock(return_value=True)
+    actions.compute_fk = MagicMock(return_value=(0.5, 0.1, 0.0))
+    actions.call_move_gripper_service = MagicMock(return_value={"success": True})
+    actions.detach_object = MagicMock(return_value=True)
+    actions.remove_object = MagicMock(side_effect=lambda name: order.append("removed") or True)
+    actions.update_object_pose = MagicMock(return_value=True)
+    return order
+
+
+def test_throw_flings_through_other_objects_but_winds_up_around_them(actions):
+    """Other objects (and the held one against them) are exempt from collision
+    checking from planning the fling until the swing has finished - not for
+    the rotate or wind-up, and never the held object itself or table_fit."""
+    order = _throw_scene(actions, ["red_cube", "tea_pot", "table_fit"])
+
+    with patch('kinova_interface.actions.throw.time.sleep'):
+        success, _ = actions.handlers['throw']({"target": "red_cube", "direction": "forward"})
+
+    assert success is True
+    assert order == [
+        "move", "move",                                    # rotate, wind-up: normal checking
+        "tea_pot:True", "red_cube~tea_pot:True",           # exempt for the fling
+        "plan fling", "fling", "removed", "fling finished",
+        "move",                                            # retreat, still exempt
+        "red_cube~tea_pot:False", "tea_pot:False",         # only once clear
+    ]
+    retreat = actions.call_joint_move_service.call_args_list[-1][0][0]
+    assert retreat == actions.call_joint_move_service.call_args_list[0][0][0]  # back to the rotate pose
+
+
+def test_throw_restores_collision_checking_if_the_fling_cant_be_planned(actions):
+    order = _throw_scene(actions, ["red_cube", "tea_pot"])
+    actions.motion.plan_joints = MagicMock(return_value=(None, "no path"))
+
+    success, message = actions.handlers['throw']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Can't plan the throw fling for 'red_cube': no path")
+    assert order[-2:] == ["red_cube~tea_pot:False", "tea_pot:False"]
+
+
+def test_throw_fails_before_moving_if_it_cant_list_the_scene_objects(actions):
+    order = _throw_scene(actions, None)
+
+    success, message = actions.handlers['throw']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Couldn't list the scene's objects to throw 'red_cube' through them")
+    assert order == []
 
 
 def test_throw_rotates_winds_up_flings_and_releases_on_joint5_crossing(actions):
@@ -2754,7 +3074,8 @@ def test_push_fails_on_unknown_direction(actions):
 
     success, message = actions.handlers['push']({"target": "red_cube", "direction": "sideways"})
 
-    assert success is False
+    assert (success, message) == (False, "Unknown push direction 'sideways'")
+    actions.call_move_gripper_service.assert_not_called()
 
 
 # throw() with 'direction' instead of 'destination'
@@ -2901,3 +3222,14 @@ def test_every_moveit_error_code_has_a_name():
              if k.isupper() and isinstance(getattr(MoveItErrorCodes, k), int)} - {MoveItErrorCodes.SUCCESS}
     assert set(MOVEIT_ERRORS) == codes
     assert moveit_error(-999) == 'unknown MoveIt error code -999'
+
+
+def test_thrust_fails_if_the_retreat_fails_but_still_restores_collision_checking(actions):
+    order = _thrust_scene(actions, ["red_cube", "tea_pot"])
+    actions.call_joint_move_service = MagicMock(side_effect=lambda *a, **k: order.append("move") or (
+        {"success": False, "message": "MoveIt failed"} if order.count("move") == 4 else {"success": True}))
+
+    success, message = actions.handlers['thrust']({"target": "red_cube", "direction": "forward"})
+
+    assert (success, message) == (False, "Thrust 'red_cube' but failed to retreat afterward: MoveIt failed")
+    assert order[-2:] == ["red_cube~tea_pot:False", "tea_pot:False"]

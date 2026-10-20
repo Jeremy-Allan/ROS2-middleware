@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 
 from kinova_interface.actions.motion import MotionUnavailable
 from kinova_interface.utils.geometry import resolve_direction_offset
+from kinova_interface.utils.ros import wait_for_future
 
 # Only for the ctx type hint (editor go-to-definition). Not imported at runtime,
 # because arm_actions imports this module and that would be circular.
@@ -12,24 +13,27 @@ if TYPE_CHECKING:
     from kinova_interface.actions.arm_actions import ArmActions
 
 
-# A captured, fixed joint_2..6 shape (see docs/technical/motion-and-actions/throw.md)
-# for a real, manually-demonstrated wind-up - not derived from home by
-# a wind-up angle like an earlier version of this; joint_1 (base
-# facing) is the only thing that varies per throw.
-THROW_WINDUP_POSE = [math.radians(v) for v in [-22.84, 56.01, 80.71, 50.6, 0.0]]
+# A fixed joint_2..6 wind-up shape from a manual demonstration (see
+# docs/technical/motion-and-actions/throw.md); joint_1 (base facing) is
+# the only thing that varies per throw. Mirrored from the demo (joint_2/3
+# negated, joint_4 - 180 deg): as captured, the swing went over the top
+# and away from the direction joint_1 faces, throwing away from the target.
+THROW_WINDUP_POSE = [math.radians(v) for v in [22.84, -56.01, -99.29, 50.6, 0.0]]
 # The fling's own end pose - a single continuous swing straight from
-# the wind-up to here, joint_1 fixed the whole way.
-THROW_FLING_POSE = [math.radians(v) for v in [32.63, -34.26, 80.71, -63.25, 0.0]]
+# the wind-up to here, joint_1 fixed the whole way, ending on the
+# target's side of the base.
+THROW_FLING_POSE = [math.radians(v) for v in [-32.63, 34.26, -99.29, -63.25, 0.0]]
 # joint_5 barely moves during the early part of the fling, then swings
 # hard right at the release moment - this is where the gripper should
 # open. -42.7 deg was the value directly captured from the original
 # manual demo (see docs/technical/motion-and-actions/throw.md), but in-person
 # testing on the real arm found that released too late - visibly near
 # the very end of the fling rather than clearly mid-swing - so this has
-# been nudged earlier to -35.0 deg (~75% through the joint_5 sweep from
-# wind-up to fling-end, vs. ~82% before). Still empirical, not computed -
-# further tuning may still be needed on real hardware.
-THROW_RELEASE_JOINT5 = math.radians(-35.0)
+# been nudged earlier twice: to -35.0 deg (~75% through the joint_5 sweep
+# from wind-up to fling-end, vs. ~82%), then, still a bit late after the
+# swing was mirrored to face the target, to -25.0 deg (~66%). Still
+# empirical, not computed - further tuning may still be needed.
+THROW_RELEASE_JOINT5 = math.radians(-25.0)
 # Extra time allowed on top of the fling's own planned duration, for
 # controller dispatch/startup jitter between firing execution and the
 # arm actually beginning to move.
@@ -116,6 +120,16 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     target, not a computed trajectory - just enough to visually read as
     thrown rather than placed.
 
+    The fling goes straight through any other object in its way: every
+    object but the held one is exempt from collision checking (and the held
+    object may touch them too, ArmActions.passing_through) from planning
+    the fling until it has finished - throw waits for the swing to finish
+    before restoring it, so MoveIt doesn't abort the rest of the swing, then
+    retreats to the pose it rotated to before winding up (still exempt), so
+    the arm isn't left inside anything once collision checking is back.
+    The rotate and wind-up still avoid everything, and the table and walls
+    are always checked.
+
     After that, the object is removed from the scene entirely
     (ctx.remove_object) rather than left behind as a real collision
     object. Detaching mid-swing puts the actual collision geometry back
@@ -155,6 +169,12 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     base_yaw = math.atan2(release_y, release_x)
     motion_params = ctx.build_motion_params(params.get('speed'))
 
+    # The fling goes straight through other objects (see the 'with' below)
+    object_names = ctx.exemptible_objects()
+    if object_names is None:
+        return False, f"Couldn't list the scene's objects to throw '{target_name}' through them"
+    others = [name for name in object_names if name != target_name]
+
     # 1. Rotate to face the throw direction - joint_1 only, current
     # shoulder/elbow/wrist (wherever pickup left them) held exactly
     if ctx.latest_joint_positions is None:
@@ -174,70 +194,93 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     if not r['success']:
         return False, f"Failed to wind up for throw of '{target_name}': {r['message']}"
 
-    # 3. Fling - planned explicitly first (not yet executed), so the
-    # release trigger below has a known, bounded execution duration to
-    # work with (see this function's docstring for why that matters).
-    fling_joints = [base_yaw, *THROW_FLING_POSE]
-    speed = float(params.get('speed', 1.0)) or 1.0
-    fling_config = {
-        'velocity_scale': speed, 'acceleration_scale': speed,
-        'fallback_planning_time': ctx.grasp_config['fallback_planning_time'],
-    }
-    try:
-        plan, reason = ctx.motion.plan_joints(fling_joints, fling_config, label=f"throw fling of '{target_name}'")
-    except MotionUnavailable as error:
-        return False, f"Can't plan the throw fling for '{target_name}': {error}"
-    if plan is None:
-        return False, f"Can't plan the throw fling for '{target_name}': {reason}"
+    # 3-4. Fling and release, straight through any other object: every
+    # object but the held one is exempt from collision checking (and the
+    # held object may touch them too) from planning the fling until it has
+    # finished - never for the rotate or wind-up, which still avoid
+    # everything. The table and walls are always checked.
+    with ctx.passing_through(target_name, others, 'throw') as error:
+        if error:
+            return False, error
+        # 3. Fling - planned explicitly first (not yet executed), so the
+        # release trigger below has a known, bounded execution duration to
+        # work with (see this function's docstring for why that matters).
+        fling_joints = [base_yaw, *THROW_FLING_POSE]
+        speed = float(params.get('speed', 1.0)) or 1.0
+        fling_config = {
+            'velocity_scale': speed, 'acceleration_scale': speed,
+            'fallback_planning_time': ctx.grasp_config['fallback_planning_time'],
+        }
+        try:
+            plan, reason = ctx.motion.plan_joints(fling_joints, fling_config, label=f"throw fling of '{target_name}'")
+        except MotionUnavailable as unavailable:
+            return False, f"Can't plan the throw fling for '{target_name}': {unavailable}"
+        if plan is None:
+            return False, f"Can't plan the throw fling for '{target_name}': {reason}"
 
-    windup_joint5 = THROW_WINDUP_POSE[3]
-    if plan.time_at_joint_crossing('joint_5', THROW_RELEASE_JOINT5) is None:
-        return False, f"Planned fling for '{target_name}' never reaches the usual release point"
+        windup_joint5 = THROW_WINDUP_POSE[3]
+        if plan.time_at_joint_crossing('joint_5', THROW_RELEASE_JOINT5) is None:
+            return False, f"Planned fling for '{target_name}' never reaches the usual release point"
 
-    # Fired without waiting for any response at all (see
-    # Motion.execute_async's docstring for why)
-    fling_future = ctx.motion.execute_async(plan)
-    if fling_future is None:
-        return False, f"Failed to start throw fling for '{target_name}'"
+        # Fired without waiting for any response at all (see
+        # Motion.execute_async's docstring for why)
+        fling_future = ctx.motion.execute_async(plan)
+        if fling_future is None:
+            return False, f"Failed to start throw fling for '{target_name}'"
 
-    # 4. Release the instant joint_5 crosses the captured release
-    # point - a closed-loop trigger on the arm's real position, now
-    # bounded by this specific plan's own real duration rather than a
-    # flat guess (see this function's docstring).
-    crossed = ctx.wait_for_joint_crossing(
-        'joint_5', THROW_RELEASE_JOINT5, windup_joint5, timeout=plan.duration + RELEASE_TIMEOUT_MARGIN_SEC)
-    if not crossed:
-        return False, f"Timed out waiting for the release point during throw of '{target_name}'"
+        # 4. Release the instant joint_5 crosses the captured release
+        # point - a closed-loop trigger on the arm's real position, now
+        # bounded by this specific plan's own real duration rather than a
+        # flat guess (see this function's docstring).
+        crossed = ctx.wait_for_joint_crossing(
+            'joint_5', THROW_RELEASE_JOINT5, windup_joint5, timeout=plan.duration + RELEASE_TIMEOUT_MARGIN_SEC)
+        if not crossed:
+            return False, f"Timed out waiting for the release point during throw of '{target_name}'"
 
-    # Where the gripper actually is right now, for the flight animation
-    # below to start from - falls back to the pre-throw position if FK
-    # isn't available, rather than failing the throw over a cosmetic step.
-    release_point = None
-    try:
-        release_joints = [base_yaw, *(ctx.latest_joint_positions[f'joint_{i}'] for i in range(2, 7))]
-        release_point = ctx.compute_fk(release_joints)
-    except (KeyError, TypeError):
-        pass
-    if release_point is None:
-        release_point = (origin['x'], origin['y'], origin['z'])
+        # Where the gripper actually is right now, for the flight animation
+        # below to start from - falls back to the pre-throw position if FK
+        # isn't available, rather than failing the throw over a cosmetic step.
+        release_point = None
+        try:
+            release_joints = [base_yaw, *(ctx.latest_joint_positions[f'joint_{i}'] for i in range(2, 7))]
+            release_point = ctx.compute_fk(release_joints)
+        except (KeyError, TypeError):
+            pass
+        if release_point is None:
+            release_point = (origin['x'], origin['y'], origin['z'])
 
-    open_pos = float(params.get('open_position', 0.0))
-    rg = ctx.call_move_gripper_service(open_pos)
-    if not rg['success']:
-        return False, f"Failed to release gripper during throw: {rg['message']}"
+        open_pos = float(params.get('open_position', 0.0))
+        rg = ctx.call_move_gripper_service(open_pos)
+        if not rg['success']:
+            return False, f"Failed to release gripper during throw: {rg['message']}"
 
-    ctx.detach_object(target_name)
-    _animate_flight(ctx, target_name, release_point, (release_x, release_y, origin['z']), None)
-    # Detaching mid-swing put the real collision object back into the
-    # world scene at wherever the gripper was at that instant - nowhere
-    # near the landing spot above, and with no physics simulating where
-    # it actually settles, there's no pose we could set it to that's
-    # trustworthy as a solid obstacle. Removed rather than left behind as
-    # a floating collision object that could block later moves (e.g. the
-    # arm being unable to plan home afterward) - a /reset_environment_scene
-    # call is what brings it back.
-    ctx.remove_object(target_name)
-    ctx.held_object = None
-    ctx.held_grasp = None
+        ctx.detach_object(target_name)
+        _animate_flight(ctx, target_name, release_point, (release_x, release_y, origin['z']), None)
+        # Detaching mid-swing put the real collision object back into the
+        # world scene at wherever the gripper was at that instant - nowhere
+        # near the landing spot above, and with no physics simulating where
+        # it actually settles, there's no pose we could set it to that's
+        # trustworthy as a solid obstacle. Removed rather than left behind as
+        # a floating collision object that could block later moves (e.g. the
+        # arm being unable to plan home afterward) - a /reset_environment_scene
+        # call is what brings it back.
+        ctx.remove_object(target_name)
+        ctx.held_object = None
+        ctx.held_grasp = None
+
+        # Collision checking only comes back once the swing has finished:
+        # restoring it mid-fling could make MoveIt abort the rest of the swing.
+        if wait_for_future(fling_future, 'throw fling', ctx.get_logger(),
+                           timeout_sec=plan.duration + RELEASE_TIMEOUT_MARGIN_SEC) is None:
+            ctx.get_logger().warn(f"Throw fling of '{target_name}' didn't report finishing")
+
+        # 5. Retreat to the pose it rotated to before winding up (reached with
+        # normal collision checking, so clear), while still exempt, so the
+        # arm isn't left inside anything the swing went through once
+        # collision checking is restored.
+        r = ctx.call_joint_move_service(rotate_joints, motion_params=motion_params)
+        if not r['success']:
+            return False, f"Threw '{target_name}' but failed to retreat afterward: {r['message']}"
+
     where = f"toward '{destination_name}'" if destination_name else direction
     return True, f"Threw '{target_name}' {where}"

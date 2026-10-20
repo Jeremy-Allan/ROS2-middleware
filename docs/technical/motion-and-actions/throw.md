@@ -78,10 +78,50 @@ happening").
   computing a better delay, given the previous, simpler delay had
   already gone through one round of tuning and still failed.
 
+## Direction fix: the swing is mirrored
+
+As demonstrated, this swing throws *away* from the way `joint_1` faces:
+with `joint_1` at 0 (facing +X), the gripper winds up in front at
+x = +0.53 m and finishes behind the base at x = -0.55 m (MoveIt FK). Since
+`throw` sets `joint_1` to the target's bearing, every throw went roughly
+180 degrees away from its target. Turning `joint_1` round by 180 degrees
+instead isn't possible for targets in front of the arm (joint_1 is limited
+to about ±154 degrees), so the code uses the mirrored shape: `joint_2` and
+`joint_3` negated, `joint_4` - 180 degrees, `joint_5`/`joint_6` unchanged.
+
+| # | Label | joint_2 | joint_3 | joint_4 | joint_5 | joint_6 |
+|---|---|---|---|---|---|---|
+| 1 | Wind-up | 22.84 | -56.01 | -99.29 | 50.6 | 0.0 |
+| 4 | End pose | -32.63 | 34.26 | -99.29 | -63.25 | 0.0 |
+
+FK confirms it's an exact mirror: same heights, x negated, so the gripper
+winds up behind the base and finishes on the target's side, within about
+3 degrees of `joint_1`'s bearing. `joint_5` sweeps exactly as before, so
+the mirror alone didn't change the release trigger (`THROW_RELEASE_JOINT5`).
+Testing afterwards still found the release a little late, so it was moved
+from -35 to -25 degrees (from ~75% to ~66% of the way through `joint_5`'s
+sweep from wind-up to fling end).
+
+## Flinging through other objects
+
+Like `push` and `thrust`, the fling goes straight through any object in
+its way instead of planning around it or failing: every object except the
+held one (and the vision node's `table_fit`) is exempt from collision
+checking, and the held object may touch them too
+(`ArmActions.passing_through`; MoveIt checks an attached object as part
+of the robot). That covers planning the fling through to the end of the
+swing: the fling runs asynchronously, so throw waits for it to finish
+before restoring collision checking, rather than restoring it mid-swing
+and having MoveIt abort the rest. It then retreats to the pose it rotated
+to before winding up, still exempt, so the arm isn't left inside anything
+the swing went through. The rotate and wind-up still avoid
+everything, and the table and walls are always checked. Objects that get
+hit don't move in the planning scene, since there's no physics.
+
 ## Implementation
 
 - `THROW_WINDUP_POSE`/`THROW_FLING_POSE` - fixed `joint_2..6` shapes
-  captured directly from stages 1 and 4 above. Only `joint_1` varies per
+  from stages 1 and 4 above, mirrored (see the direction fix above). Only `joint_1` varies per
   throw (the facing direction), exactly like `push`/`thrust`'s single
   fixed shapes.
 - **Rotate** (new first step): joint_1 only, to `atan2(release_y, release_x)`

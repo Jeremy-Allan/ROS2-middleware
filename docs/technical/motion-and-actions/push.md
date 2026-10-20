@@ -119,16 +119,23 @@ search:
   motion happens.
 - **Collision handling**: `set_collision_allowed(object_id, allowed)` - a
   scoped update to the planning scene's allowed collision matrix (ACM),
-  permitting (then reverting) contact between just the pushed object and
-  everything else, for the duration of the push. Always reverted in a
-  `finally` block, even on failure.
+  permitting (then reverting) contact between an object and everything
+  else. Push applies it to the pushed object *and every other object* in
+  the scene (from `/get_robot_parameters`, minus the vision node's
+  `table_fit`) from the move in to contact until after the retreat (and
+  briefly while the contact/extend poses are checked), so it carries
+  straight on through anything in its way instead of planning around it
+  or failing. Lining up beforehand still avoids everything.
+  Obstacles (`table`, walls) aren't objects and stay collision-checked.
+  Always reverted in a `finally` block, even on failure. See
+  "Open gripper" below.
 
   This needed a second fix after the single-plane solve above still
   failed for real, mid-extend, with `INVALID_MOTION_PLAN`: interpolating
   the joint-space path from the (verified, collision-free) contact state
   to the (also verified) extend state, `/check_state_validity` showed
   the *start* of that path genuinely in contact with the pushed object
-  (correct - the gripper is closed on it) even with
+  (correct - the gripper was closed on it at the time) even with
   `set_collision_allowed(object_id, True)` already applied. The original
   implementation only set the ACM's `default_entry` fallback for the
   object; MoveIt auto-populates *explicit* disallow entries for a
@@ -168,17 +175,65 @@ naturally grip it (by its center rather than a computed near-face point)
 in exchange for keeping the single-plane motion exactly as simple as
 it already is.
 
+## Lining up before contact
+
+The contact pose puts the gripper at the object's centre, so moving there
+directly from wherever the arm happened to be could sweep the gripper
+into the object's side on the way (seen with `water_bottle`). Push now
+lines up first, the same way `pickup` uses a pre-grasp: a pre-contact
+pose in the push plane, on the base side of the object, back from its
+centre by its size along the push bearing (`grasping.half_extent_along`)
+plus `grasping.standoff` (0.08 m). That pose is solved and checked, and
+moved to, with normal collision checking, so MoveIt routes around the
+object. Only then are the collision exemptions switched on for the
+straight move in to contact, the extend and the retreat, which backs out
+to the line-up pose. Checked against every workspace object: each one's
+line-up pose is reachable and clear at the full standoff (the water
+bottle's is 0.23 m from the base).
+
+## Open gripper
+
+Push used to close the gripper to `close_position` (default 0.75) at the
+contact pose, to act as a flat pushing surface. It now stays open for the
+whole push: opened once before the approach and never closed. The pushed
+object is still attached at contact, but only in the planning scene, so
+it moves with the gripper in RViz; nothing physically grips it.
+`close_position` is no longer used.
+
+At the same time, push stopped avoiding other objects: every object in
+the scene is exempt from collision checking for the whole push (see
+Collision handling above), so the arm pushes straight through anything
+in its way. On the real arm those objects get knocked; in the planning
+scene they stay where they were, since there's no physics - only the
+target's pose is updated.
+
 ## Reused by `thrust`
 
 `thrust` reuses this exact mechanism (`solve_planar_reach` +
 `check_joint_state_validity`) for a held object rather than a resting
-one: raise straight up (facing wherever it was originally resting,
+one: raise it and pull it back toward the base along its own bearing,
+to `THRUST_PULLBACK_RADIUS` (0.30 m, stepping outward if that's blocked;
 wrist reset to `_PLANAR_REACH_WRIST` regardless of whatever orientation
 `pickup`'s `grasp_style: 'side'` search happened to land on), spin to
-face the thrust direction (`joint_1` only - shoulder/elbow held exactly
-where the raise left them, so an arbitrarily large turn doesn't disturb
-the object's orientation, only which way the arm points), then extend
-(shoulder/elbow only, seeded at the spin position). Since the object is
+face the thrust bearing (`joint_1` only - shoulder/elbow held exactly
+where the pull-back left them, so an arbitrarily large turn doesn't
+disturb the object's orientation, only which way the arm points), then
+extend (shoulder/elbow only, seeded at the spin position) as far as the
+arm can reach along that bearing. A `destination` only sets the bearing,
+so the stab doesn't stop at it; the pull-back guarantees a real stroke
+even when the destination is no further from the base than the object
+started. An explicit `distance` (with `direction`) is still honoured.
+Like push, the stab goes straight through other objects so it can
+actually hit what it's aimed at: every object except the held one (and
+`table_fit`) is exempt from collision checking for the reach search and
+the extend (`ArmActions.exempt_from_collisions`), and the held object is
+allowed to touch them too (`motion.allow_contact`: MoveIt checks an
+attached object as part of the robot, so exempting the others alone left
+the held object colliding with the target), all restored afterwards even
+on failure. After the stab it retreats back along the same line to the
+pose it struck from, while still exempt, so the arm isn't left inside
+whatever it stabbed once collision checking is restored. The pull-back and spin still avoid everything, and the
+table and walls are always checked. Since the object is
 attached by that point (from `pickup`), it's excluded from collision
 checking against the gripper automatically - unlike `push`, `thrust`
 needs no `set_collision_allowed` at all.
