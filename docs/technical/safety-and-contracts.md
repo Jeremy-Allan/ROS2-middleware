@@ -1,64 +1,67 @@
-[Docs Home](../README.md)
+# Safety and contracts
 
-# Safety and Contracts
+This page describes what the system checks before and during motion, what happens when a check fails, and what is not checked.
 
-This page describes the execution contract, safety layers, and failure model this middleware is designed against. It's a mix of what's genuinely enforced in code today and some forward-looking design intent, both are marked as such below.
-
-## Input contract
-
-- Input is strictly received via ROS 2 services, there is no direct natural language entry point into this repository.
-- Commands are expected to come from the LLM proxy via `/execute_recipe`. This is not enforced: `rosbridge_server` exposes every service, including `/kinova_hardware_client/joint_move` and `move_arm`, to any websocket client on port 9090.
+!!! warning
+    Run a new recipe in simulation before running it on the arm. The checks below prevent known classes of error. They do not make an arbitrary instruction safe.
 
 ## Execution contract
 
-- Every task is decomposed into discrete, ordered steps.
-- Each step must map to one of the ten known action types: `home`, `move_arm`, `relative_move`, `gripper`, `pickup`, `dropoff`, `pour`, `push`, `thrust`, `throw`. See [Configuration](../installation/configuration.md) for the exact contract.
-- Execution is strictly sequential: `json_parser_node` runs steps one at a time and stops at the first failure. There is no parallel step execution today.
+- A recipe is a JSON object with a non-empty `steps` list.
+- Each step names one of ten actions: `home`, `move_arm`, `relative_move`, `gripper`, `pickup`, `dropoff`, `pour`, `push`, `thrust`, `throw`. Any other name fails the step.
+- Steps run in order, one at a time. The first failed step stops the recipe. Later steps do not run.
+- When `pickup` or `dropoff` fails after the arm has started to move, the action tries to back away from the object and return the arm home. A failure before any motion, such as an unresolved name, only returns the message. The other actions leave the arm where it stopped.
+- `/execute_recipe` returns `success` and a `message`. On failure the message names the step, the action and the reason, for example `Recipe failed at step 2 (pickup): Could not resolve pickup target 'red_cube'`.
+- Only one recipe runs at a time.
 
-## What's actually implemented vs design intent
+## Validation layers
 
-The system's real, currently-implemented state model is simpler than some earlier project documentation described:
+A command passes through the layers below in order. A failure at any layer stops the command at that layer.
 
-- **Per-service response:** there's no status enum on the wire. A timeout or invalid request comes back as `success: false` with a message. `JointMove` and `ExecuteTrajectory` also return a MoveIt `error_code`.
-- **Per-node telemetry:** each node reports one of three states, `STATE_IDLE`, `STATE_BUSY`, `STATE_FAULT` (see [Architecture](architecture.md)). There isn't a richer `PENDING` / `RUNNING` / `COMPLETED` / `ABORTED` state machine implemented anywhere in code today, even though earlier design notes described one. If that richer model becomes real, this page should be updated to match.
+```mermaid
+flowchart LR
+    a["Schema<br/>validation"] --> b["Name<br/>resolution"] --> c["Action<br/>checks"] --> d["Planning"] --> e["Execution"] --> f["Monitoring"]
+```
 
-## Safety layers
+| Layer | Where | Behaviour on failure |
+|---|---|---|
+| Schema validation | Proxy backend, `json_schema.json` | The recipe is rejected and the error is shown in the terminal UI. Nothing is sent to the arm. |
+| Name resolution | Proxy backend | A name that is unknown or matches several objects produces an error document (`missing_object` or `invalid_command`). A missing-object refusal from the model is retried once when exactly one object matches. |
+| Action checks | `json_parser_node` and the action modules | The step fails with a message. An action that needs a held object fails when nothing is held or the named object is not held. `pickup` fails when its grasp style conflicts with a later `pour` or `thrust`. |
+| Planning | MoveIt 2 | The step fails with the planner's reason, such as `planning failed (path blocked by an obstacle or self-collision)` or `out of reach (no IK solution)`. |
+| Execution | Controllers and driver | A failed trajectory fails the step. The arm's own limits and protective stops belong to the Kortex driver and the arm controller. |
+| Monitoring | Middleware nodes | Moves that run past `hardware.action_timeout` or `hardware.gripper_timeout` fail. A fault is shown as `SYSTEM_FAULT`. |
 
-1. **Schema validation**: the proxy validates every recipe against its JSON schema before sending it. `json_parser_node` itself only rejects unparseable JSON or an empty `steps` list up front. A step with missing parameters fails when it runs, after earlier steps have moved the arm.
-2. **Action whitelist**: only the ten known action types are executable; anything else fails that step and aborts the recipe.
-3. **Motion planning**: all Cartesian and joint moves go through MoveIt 2, which handles collision avoidance and feasibility checking.
-4. **Execution guard**: `json_parser_node`'s `/execute_recipe` service runs on a `MutuallyExclusiveCallbackGroup`, so only one recipe executes at a time.
-5. **Hardware protection**: joint limits and safety stops are enforced by the underlying Kortex driver and controllers, not by this middleware directly.
+The planning scene contains the objects, the obstacles, the table and the object held by the gripper. The held object is checked in every plan.
 
-If a step fails, execution halts immediately rather than continuing partway through a plan, and the failure is visible both in the node's logs and in its telemetry status message.
+## Fault handling
 
-## Known gap relevant to safety
+`kinova_hardware_client` reports one of three states.
 
-There is currently no layer that evaluates whether a schema-valid, collision-free recipe is semantically dangerous. The bridge also does not restrict which services a websocket client can call (see Input contract). MoveIt's collision checking only prevents the arm physically hitting something; it says nothing about whether a command should have been issued in the first place. This matters more than usual given the project's research focus on how LLMs respond to malicious instructions.
+```mermaid
+stateDiagram-v2
+    [*] --> IDLE
+    IDLE --> BUSY: motion command received
+    BUSY --> IDLE: motion finished
+    IDLE --> FAULT: hardware fault reported
+    BUSY --> FAULT: hardware fault reported
+    FAULT --> IDLE: fault cleared
+```
 
-## Failure mode summary
+`telemetry_node` combines the node states into `/system/status`. The system is `SYSTEM_FAULT` when any node is faulted or has not sent a heartbeat for 1.5 s, `SYSTEM_BUSY` when any node is busy, and `SYSTEM_READY` otherwise. The system is also `SYSTEM_FAULT` until the first heartbeat arrives.
 
-| Failure Mode | Origin Layer | Cause | System Behaviour | Resolution |
-|---|---|---|---|---|
-| Invalid JSON recipe | JSON Parser Node | Malformed or incomplete structure | Execution rejected | Fix the JSON; validate before sending |
-| Unknown action type | JSON Parser Node | Action not in the whitelist | Step fails, recipe aborts | Use one of the ten valid actions |
-| Missing object mapping | Environment Mapping Node | Object key not in the object dictionary | Service returns failure | Add the object to `workspace_objects.yaml`'s `objects` |
-| ROS 2 service timeout | Any node-to-node call | Node overload, planning delay, or a hung dependency | Step fails with a timeout message | Retry, or restart the affected node |
-| Gripper command failure | Hardware Interface Client | Actuator limit or communication loss | Step fails | Check hardware connection, reinitialize if needed |
-| Collision detected | MoveIt planning layer | Unsafe trajectory | Movement aborted | Adjust target or obstacle definitions, replan |
-| Node desynchronisation | ROS 2 executor | Race condition or threading delay | Partial execution state | Restart the affected node(s) |
+To clear a hardware fault, call the reset service:
 
-## System readiness definition
+```bash
+ros2 service call /system/reset_fault std_srvs/srv/Trigger {}
+```
 
-The system is only considered operational if all of the following hold:
+On real hardware the Kortex driver can take several seconds to connect, and `fault_controller` can remain unconfigured. `telemetry_node` detects this and configures and activates the controller.
 
-- ROS 2 core is running and responsive.
-- All four middleware nodes are active and reporting heartbeats.
-- The MoveIt planning pipeline is operational.
-- The environment mapping service responds correctly.
-- `json_parser_node` can successfully execute a known-good test recipe.
-- `/system/status` reports `SYSTEM_READY`, not `SYSTEM_FAULT`.
+## What is not checked
 
-If any of these fail, treat the system as non-operational until resolved, see [Troubleshooting](../user-guide/troubleshooting.md).
-
-Next: [Video Demos](../user-guide/demos.md)
+- **Intent.** A recipe that passes every layer is executed, whatever the instruction meant. The schema allows the error type `safety_violation`, but only the language model can produce it. No component of the proxy or the middleware evaluates safety.
+- **Access to the bridge.** `rosbridge_server` has no authentication and does not restrict services. Any client that can reach its port can call any service, including `/execute_recipe` and `/kinova_hardware_client/joint_move`, and can publish topics. Restrict access with the host firewall.
+- **Recipes sent directly.** `json_parser_node` does not validate recipes against the schema. A step with a missing required parameter fails when it runs, after the earlier steps have moved the arm.
+- **Unmodelled objects.** Collision checking covers only what is in the planning scene. The arm does not confirm that an object is where the dictionary or the camera says it is.
+- **Speed.** `thrust` and the `throw` fling run at full speed by default. `push` turns off collision checking for the pushed object while the action runs.

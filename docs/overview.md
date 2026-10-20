@@ -1,58 +1,58 @@
-[Docs Home](README.md)
-
 # Overview
 
-This project lets you type a plain English instruction, like "pick up the blue cube and put it on the tray," and have a real (or simulated) Kinova Gen3 Lite robot arm actually do it.
+This system moves a Kinova Gen3 Lite robot arm from instructions typed in natural language. A language model converts each instruction into a recipe, an ordered list of named actions. The middleware runs the recipe through MoveIt 2 and the Kinova driver stack.
 
-It assumes zero prior ROS 2 experience. Anywhere a ROS 2 concept shows up for the first time, it's explained in plain English before it's used.
+![System context: an operator types into the terminal UI; the backend asks an LLM provider for a recipe and sends it over a websocket to the ROS 2 nodes, which plan with MoveIt 2 and drive the arm through the Kortex driver.](assets/diagrams/system-context.svg)
 
-## Two repositories, one pipeline
+The system has two parts that communicate over one websocket:
 
-This is split across two separate git repositories, built and run independently, but they only make sense together:
+- The **proxy** (`embodied-ai-proxy`) takes the instruction, asks a language model for a recipe, checks it, and sends it on. It does not use ROS 2.
+- The **middleware** (`ROS2-middleware`) is a set of ROS 2 packages. It resolves names to coordinates, plans each motion with MoveIt 2, and sends the motion to the arm.
 
-- `Jeremy-Allan/ROS2-middleware` (this repo): the ROS 2 side. Four nodes that turn a structured recipe into real robot motion using MoveIt 2.
-- `paul-isit/embodied-ai-proxy`: the LLM side. A set of Go services and a terminal UI that take a natural language command, send it to a configurable LLM, validate the LLM's JSON output, and forward it to this middleware over a websocket bridge.
+## Components
 
-## The path your command takes
+The proxy, `embodied-ai-proxy`:
 
-1. You type a command into the proxy's terminal interface.
-2. The proxy sends your command, plus a list of objects the robot actually knows about, to a large language model. That model can be a local model running through Ollama, or a cloud provider (OpenAI, Anthropic, Gemini).
-3. The LLM responds with a structured JSON "recipe": a named sequence of steps such as `move_arm`, `gripper`, `relative_move`, `home`.
-4. The proxy validates that JSON against a strict schema. If it's malformed, or asks for an object that doesn't exist, the proxy rejects it before anything is sent to the robot.
-5. A valid recipe gets sent over a websocket to a small ROS 2 bridge node, which turns it into a real ROS 2 service call.
-6. This middleware picks up that call, resolves any named object into real coordinates, and drives the arm through MoveIt 2, step by step, waiting for each step to finish before starting the next.
-7. Status flows back the other direction the whole time, so the proxy's interface can show whether the robot is READY, BUSY, or FAULT.
+| Component | Role |
+|---|---|
+| Terminal UI | Accepts instructions. Shows the recipe, the result and the system status. |
+| Backend | Builds the prompt, validates the model output, resolves object names and sends the recipe to the middleware. |
+| LLM proxy | Sends prompts to Ollama, Google Gemini, OpenAI or Anthropic. |
 
-## What the system does not do
+The middleware, `ROS2-middleware`:
 
-- Accept direct hardware commands from the proxy's user input. Every command typed into the proxy goes through the LLM and the schema validator first. Note that the websocket bridge itself does not filter services, so any websocket client can call any middleware service (see [Safety and Contracts](technical/safety-and-contracts.md)).
-- Do any of its own path-planning or collision math. That's entirely delegated to MoveIt 2.
-- Talk to the physical robot directly from the proxy side. Only this middleware talks to the standard Kinova ROS 2 driver (`ros2_kortex`), which in turn talks to the arm.
+| Package | Role |
+|---|---|
+| `kinova_interface` | The four nodes, the ten actions, the launch file and the configuration. |
+| `kinova_interfaces` | Custom ROS 2 services and messages. |
+| `computer_vision` | Optional Kinect v2 node that adds detected objects to the scene. Alpha release. |
 
-## The middleware's four nodes, in one sentence each
+Software from other projects:
 
-This repository is built from four ROS 2 programs called nodes, each doing one job and talking to the others over the network:
+| Component | Role |
+|---|---|
+| `ros2_kortex` | Kinova's robot description, `ros2_control` driver and MoveIt configuration for the Gen3 Lite. |
+| MoveIt 2 | Motion planning and collision checking. |
+| `rosbridge_server` | Websocket access to ROS 2 services and topics. |
 
-| Node | Nickname | Job |
-|---|---|---|
-| `hardware_interface_client.py` | The Muscle | The only node that actually talks to the arm and gripper. Sends motion commands, waits for them to finish, reports hardware faults. |
-| `environment_mapping_node.py` | The Database | Holds the "map" of named objects (for example, `blue_cube` maps to a pose and shape), named relative movements, and known obstacles. Answers lookup questions from other nodes. |
-| `json_parser_node.py` | The Brain / Supervisor | Reads a recipe, resolves names via the Database node, and tells the Muscle node what to do, step by step, in order. |
-| `telemetry_node.py` | The Monitor | Listens to heartbeats from all the other nodes, decides if the whole system is READY, BUSY, or FAULT, and can trigger a hardware fault reset. |
+## How an instruction is processed
 
-Object positions come from a hand-maintained dictionary (see [Configuration](installation/configuration.md)). An optional fifth node in the `computer_vision` package (`enable_CV:=true`) can add objects detected by a Kinect camera when `/vision/snapshot` is called.
+1. The operator types an instruction in the terminal UI.
+2. The backend reads the objects, named movements, named orientations, table bounds and held objects from the middleware, and builds a prompt from the system prompt, the recipe schema and the instruction.
+3. The LLM proxy sends the prompt to the configured provider and returns the text.
+4. The backend extracts the JSON, validates it against the recipe schema and resolves object names against the live object list.
+5. The backend sends the recipe to the `/execute_recipe` service through rosbridge.
+6. `json_parser_node` runs the steps in order. Each action looks up names in `environment_mapping_node`, plans with MoveIt 2 and runs the motion through `hardware_interface_client`.
+7. The result returns to the terminal UI. The UI also shows the system status published on `/system/status`.
 
-See [Architecture](technical/architecture.md) for the internals of each node.
+Execution stops at the first step that fails.
 
-## The proxy and the bridge
+## Where to continue
 
-The proxy and the middleware are deliberately kept separate, so a bug in the LLM logic can never directly touch the robot:
-
-| Side | What it is | Job |
-|---|---|---|
-| The proxy (embodied-ai-proxy) | No ROS 2 installed or launched | Talks to the LLM provider, builds the prompt, validates the JSON response against the schema, runs the terminal interface, and connects to the middleware's websocket as a client. |
-| The websocket bridge (this repo's launch) | `rosbridge_suite`'s websocket server, started by `robot.launch.py` | Listens on port 9090 and translates incoming JSON requests into ROS 2 service calls against this middleware. The proxy's only way in. |
-
-If you only remember one sentence about this whole project: **your words go to an LLM, the LLM's structured answer goes through a validator and a websocket bridge, and only then does the middleware's Brain drive the Muscle one step at a time while the Monitor watches everyone's pulse.**
-
-Next: [Installation](installation/middleware-and-proxy.md)
+| Goal | Page |
+|---|---|
+| Install the software | [Requirements](installation/requirements.md) |
+| Run the system | [Quickstart](user-guide/quickstart.md) |
+| Write a recipe | [Recipes](user-guide/recipes.md) |
+| Fix an error | [Troubleshooting](user-guide/troubleshooting.md) |
+| Understand the design | [Architecture](technical/architecture.md) |

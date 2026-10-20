@@ -25,6 +25,7 @@ nav:
   - Technical:
       - Architecture: technical/architecture.md
       - Middleware nodes: technical/middleware-nodes.md
+      - ROS interfaces: technical/ros-interfaces.md
       - Motion and actions:
           - Overview: technical/motion-and-actions/index.md
           - Pour: technical/motion-and-actions/pour.md
