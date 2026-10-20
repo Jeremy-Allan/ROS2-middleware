@@ -43,7 +43,17 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
        only, as far as the arm can reach (_find_max_planar_reach_distance)
        - it doesn't stop at the destination, so there's always a full
        stroke even when the destination is no further out than the
-       object started.
+       object started. The extend (and the reach search) goes straight
+       through any other object, so it can actually stab the destination:
+       every object but the held one is exempt from collision checking
+       for it (ArmActions.exempt_from_collisions), and the held object may
+       touch them too (motion.allow_contact), all restored afterwards even
+       on failure. The held object itself stays checked against the table.
+    4. Retreat back along the same line to the spin pose, still exempt,
+       so the arm isn't left inside whatever it stabbed; collision
+       checking is only restored once it's clear. The pull-back and spin still avoid everything;
+       the table and walls are always checked. Objects that get hit
+       don't move in the planning scene - there's no physics.
 
     The bearing comes from a named 'destination' object, or a
     'direction' ('forward'/'backward'/'left'/'right', relative to the
@@ -104,11 +114,22 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
         thrust_yaw = math.atan2(math.sin(turned), math.cos(turned))  # wrapped to +-pi for joint_1
         release = None
 
+    # The stab goes straight through other objects (so it can actually hit
+    # what it's aimed at): they're exempt from collision checking for the
+    # reach search and the extend, never for the pull-back or spin.
+    object_names = ctx.exemptible_objects()
+    if object_names is None:
+        return False, f"Couldn't list the scene's objects to thrust '{target_name}' through them"
+    exempt = [name for name in object_names if name != target_name]
+
     if release is None:
         # To the reach limit along the bearing, from the pull-back point
         start_x, start_y = pull_radius * math.cos(thrust_yaw), pull_radius * math.sin(thrust_yaw)
-        reach = ctx._find_max_planar_reach_distance(
-            {'x': start_x, 'y': start_y}, 'forward', raise_z, raise_shoulder, raise_elbow, fixed_yaw=thrust_yaw)
+        with ctx.passing_through(target_name, exempt, 'thrust') as error:
+            if error:
+                return False, error
+            reach = ctx._find_max_planar_reach_distance(
+                {'x': start_x, 'y': start_y}, 'forward', raise_z, raise_shoulder, raise_elbow, fixed_yaw=thrust_yaw)
         if reach is None:
             return False, f"No reachable thrust distance found for '{target_name}'"
         release = (start_x + reach * math.cos(thrust_yaw), start_y + reach * math.sin(thrust_yaw))
@@ -128,22 +149,32 @@ def run(ctx: 'ArmActions', params: dict) -> tuple[bool, str]:
     if not r['success']:
         return False, f"Failed to spin to face the thrust direction for '{target_name}': {r['message']}"
 
-    # 3. Extend toward the destination - same height, seeded at the
-    # spin position so it stays a small, local adjustment
-    extend_solved = ctx.solve_planar_reach(
-        thrust_yaw, release_x, release_y, raise_z,
-        seed_shoulder=raise_shoulder, seed_elbow=raise_elbow
-    )
-    if extend_solved is None or extend_solved[3] > ctx._PLANAR_REACH_MAX_ERROR:
-        return False, f"Could not solve a planar reach to thrust '{target_name}' to its destination"
-    extend_shoulder, extend_elbow, _, _ = extend_solved
-    extend_joints = [thrust_yaw, extend_shoulder, extend_elbow, *ctx._PLANAR_REACH_WRIST]
-    if not ctx.check_joint_state_validity(extend_joints):
-        return False, f"Thrust end pose for '{target_name}' is in collision"
+    # 3. Extend - same height, seeded at the spin position so it stays a
+    # small, local adjustment - straight through any other object
+    with ctx.passing_through(target_name, exempt, 'thrust') as error:
+        if error:
+            return False, error
+        extend_solved = ctx.solve_planar_reach(
+            thrust_yaw, release_x, release_y, raise_z,
+            seed_shoulder=raise_shoulder, seed_elbow=raise_elbow
+        )
+        if extend_solved is None or extend_solved[3] > ctx._PLANAR_REACH_MAX_ERROR:
+            return False, f"Could not solve a planar reach to thrust '{target_name}' to its destination"
+        extend_shoulder, extend_elbow, _, _ = extend_solved
+        extend_joints = [thrust_yaw, extend_shoulder, extend_elbow, *ctx._PLANAR_REACH_WRIST]
+        if not ctx.check_joint_state_validity(extend_joints):
+            return False, f"Thrust end pose for '{target_name}' is in collision"
 
-    r = ctx.call_joint_move_service(extend_joints, motion_params=motion_params)
-    if not r['success']:
-        return False, f"Failed to thrust '{target_name}' to its destination: {r['message']}"
+        r = ctx.call_joint_move_service(extend_joints, motion_params=motion_params)
+        if not r['success']:
+            return False, f"Failed to thrust '{target_name}' to its destination: {r['message']}"
+
+        # 4. Retreat back along the same line to the spin pose (checked clear
+        # before any exemptions), while still exempt, so the arm isn't left
+        # inside whatever it stabbed once collision checking is restored.
+        r = ctx.call_joint_move_service(spin_joints, motion_params=motion_params)
+        if not r['success']:
+            return False, f"Thrust '{target_name}' but failed to retreat afterward: {r['message']}"
 
     where = f"toward '{destination_name}'" if destination_name else direction
     return True, f"Thrust '{target_name}' {where}"
@@ -164,3 +195,4 @@ def _solve_pullback(ctx: 'ArmActions', face_yaw: float, object_radius: float, he
             break
         radius = min(radius + THRUST_PULLBACK_STEP, object_radius)
     return None
+
