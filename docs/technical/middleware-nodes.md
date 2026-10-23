@@ -45,7 +45,7 @@ Maintains objects, obstacles, named movements and orientation presets, synchroni
 | `/get_object_info` | `GetObjectInfo` | Pose and shape of an object. |
 | `/get_relative_movement` | `GetRelativeMovement` | Offset of a named movement. |
 | `/get_orientation_preset` | `GetOrientationPreset` | Roll, pitch and yaw of a named orientation. |
-| `/get_robot_parameters` | `GetRobotParameters` | Object, movement and orientation names, table bounds and held objects. The proxy reads this before every command. |
+| `/get_robot_parameters` | `GetRobotParameters` | Object, movement and orientation names, table bounds and held objects. The proxy reads this before every command. `json_parser_node` reads the object names for `push`, `thrust` and `throw`. |
 | `/get_scene_objects` | `GetSceneObjects` | All objects and the attached ones, as JSON. |
 | `/update_scene_objects` | `UpdateSceneObjects` | Adds, updates or removes objects in bulk. The vision node uses it. |
 | `/update_object_pose` | `UpdateObjectPose` | Changes the stored pose of an object. |
