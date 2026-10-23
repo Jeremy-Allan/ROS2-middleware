@@ -64,4 +64,5 @@ On real hardware the Kortex driver can take several seconds to connect, and `fau
 - **Access to the bridge.** `rosbridge_server` has no authentication and does not restrict services. Any client that can reach its port can call any service, including `/execute_recipe` and `/kinova_hardware_client/joint_move`, and can publish topics. Restrict access with the host firewall.
 - **Recipes sent directly.** `json_parser_node` does not validate recipes against the schema. A step with a missing required parameter fails when it runs, after the earlier steps have moved the arm.
 - **Unmodelled objects.** Collision checking covers only what is in the planning scene. The arm does not confirm that an object is where the dictionary or the camera says it is.
-- **Speed.** `thrust` and the `throw` fling run at full speed by default. `push` turns off collision checking for the pushed object while the action runs.
+- **Speed.** `thrust` and the `throw` fling run at full speed by default.
+- **Passing through objects.** `push`, `thrust` and `throw` turn off collision checking for the other objects of the scene while the arm moves through them. Obstacles, such as the table, and `table_fit` stay checked. A real object in the path is hit. See [Collisions](motion-and-actions/index.md#collisions).

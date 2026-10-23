@@ -45,7 +45,7 @@ Maintains objects, obstacles, named movements and orientation presets, synchroni
 | `/get_object_info` | `GetObjectInfo` | Pose and shape of an object. |
 | `/get_relative_movement` | `GetRelativeMovement` | Offset of a named movement. |
 | `/get_orientation_preset` | `GetOrientationPreset` | Roll, pitch and yaw of a named orientation. |
-| `/get_robot_parameters` | `GetRobotParameters` | Object, movement and orientation names, table bounds and held objects. The proxy reads this before every command. |
+| `/get_robot_parameters` | `GetRobotParameters` | Object, movement and orientation names, table bounds and held objects. The proxy reads this before every command. `json_parser_node` reads the object names for `push`, `thrust` and `throw`. |
 | `/get_scene_objects` | `GetSceneObjects` | All objects and the attached ones, as JSON. |
 | `/update_scene_objects` | `UpdateSceneObjects` | Adds, updates or removes objects in bulk. The vision node uses it. |
 | `/update_object_pose` | `UpdateObjectPose` | Changes the stored pose of an object. |
@@ -72,7 +72,7 @@ Maintains objects, obstacles, named movements and orientation presets, synchroni
 
 ## kinova_hardware_client
 
-The sole middleware node sending arm and gripper motion commands. Its services use the /kinova_hardware_client/ prefix.
+The sole middleware node sending arm and gripper motion commands. Its services use the `/kinova_hardware_client/` prefix.
 
 **Services**
 
@@ -123,6 +123,6 @@ Collects the node heartbeats into one system status.
 **Behaviour**
 
 - The system state is `SYSTEM_FAULT` if any node reports `STATE_FAULT`, otherwise `SYSTEM_BUSY` if any node reports `STATE_BUSY`, otherwise `SYSTEM_READY`.
-- Missing heartbeats for over 1.5 s trigger a fault with CRITICAL: Node heartbeat timed out. The system remains SYSTEM_FAULT until its first heartbeat.
+- Missing heartbeats for over 1.5 s trigger a fault with `CRITICAL: Node heartbeat timed out`. The system remains `SYSTEM_FAULT` until its first heartbeat.
 - When `kinova_hardware_client` reports an inactive `fault_controller`, the node configures and activates it through the controller manager.
 - `/system/reset_fault` waits 2 s for the driver service. If the service is missing it returns `Hardware driver service not ready.`

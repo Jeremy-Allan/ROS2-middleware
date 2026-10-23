@@ -64,7 +64,9 @@ The default scene is:
 | `water_bottle` | Object | `CYLINDER` | 0.22 high, 0.035 radius | -0.3255, -0.1235, 0.065 |
 | `tea_pot` | Object | `BOX` | 0.06 by 0.06 by 0.075 | 0.25, -0.30, -0.0125 |
 | `blue_cube` | Object | `BOX` | 0.107 by 0.043 by 0.073, turned 1.57 rad about y | 0.45, 0.2, 0.0035 |
+| `tea_cup` | Object | `CYLINDER` | 0.037 high, 0.0185 radius | 0.45, -0.20, -0.0125 |
 | `delivery_tray` | Object | `BOX` | 0.235 by 0.168 by 0.025 | -0.235, -0.425, -0.028 |
+| `coaster` | Object | `CYLINDER` | 0.005 high, 0.0375 radius | -0.235, -0.225, -0.0475 |
 | `table` | Obstacle | `BOX` | 1.4 by 1.4 by 0.05 | 0, 0, -0.075 |
 | `small_wall` | Obstacle | `BOX` | 0.03 by 0.3 by 0.2 | -100.1665, -0.0855, 0.052 |
 

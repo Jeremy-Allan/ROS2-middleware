@@ -42,6 +42,8 @@ The MoveIt errors, such as `planning failed (path blocked by an obstacle or self
 |---|---|---|
 | `No reachable grasp for '<target>': <summary>` | No grasp has a complete plan. The summary counts the grasps by style and reason. | Check that the object is in reach and that nothing blocks the approach. Try the other `grasp_style`. |
 | `No reachable place pose for '<target>': <n> tried (<reasons>)` | No placement has a complete plan. | Choose another `destination`, a smaller `distance` or a lower `place_offset`. Another object on the destination can block the placement. |
+| `Could not solve a pose to line up behind '<target>' for push` or `Push line-up pose behind '<target>' is in collision` | `push` starts from a pose behind the object, on the side of the base, and that pose is out of reach or blocked. | Check that the pose behind the object is in reach and clear of obstacles. |
+| `Could not solve a pulled-back raise for '<target>'` | `thrust` finds no level pose that is raised and pulled back toward the base. | Check that the held object can be pulled back in reach and clear of obstacles. |
 | `Failed to move ...: invalid motion plan` at the first step after a reset of the scene | A restored object overlaps the gripper, and the start state is in collision. | Run `home` before the reset. See [Reset the scene](recipes.md#reset-the-scene). |
 | `Failed to move to '<target>': ...` from `move_arm` | The gripper cannot surround the object at the target. | Open the gripper and give an `orientation` that lets the fingers straddle the object. |
 | `<action> timed out after <n>s`, for example `Arm movement to Home timed out after 30.0s` | A move exceeded its timeout. | Retry. If it repeats, check `hardware.action_timeout` and the reach of the target. |
