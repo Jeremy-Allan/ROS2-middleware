@@ -4,10 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    # Daily rebuild, so content pulled in from the proxy repo stays
-    # reasonably fresh even on days nobody pushes to this repo.
-    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
