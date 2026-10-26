@@ -11,8 +11,6 @@ The system was developed for the Swinburne University Cyber Lab to study how lan
 
 ![System context: an operator types into the terminal UI; the backend asks an LLM provider for a recipe and sends it over a websocket to the ROS 2 nodes, which plan with MoveIt 2 and drive the arm through the Kortex driver.](docs/assets/diagrams/system-context.svg)
 
-### Demo
-
 https://github.com/user-attachments/assets/9ad3d129-2060-4627-a5c3-de03633666fe
 
 ## Quick start
