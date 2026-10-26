@@ -11,7 +11,10 @@ The system was developed for the Swinburne University Cyber Lab to study how lan
 
 ![System context: an operator types into the terminal UI; the backend asks an LLM provider for a recipe and sends it over a websocket to the ROS 2 nodes, which plan with MoveIt 2 and drive the arm through the Kortex driver.](docs/assets/diagrams/system-context.svg)
 
-https://github.com/user-attachments/assets/9ad3d129-2060-4627-a5c3-de03633666fe
+<video controls autoplay loop muted playsinline preload="metadata" width="100%">
+  <source src="../assets/videos/recipe_pickup.mp4" type="video/mp4">
+  Your browser does not support HTML5 video.
+</video>
 
 ## Quick start
 
