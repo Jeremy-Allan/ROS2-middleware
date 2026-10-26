@@ -10,7 +10,7 @@ The `recipes` folder of `kinova_interface` has recipes that demonstrate the acti
 | `test_suite/recipe_push.json` | Slides `water_bottle` forward with the open gripper, without grasping it. | [Watch video](../assets/videos/recipe_push.mp4) |
 | `test_suite/recipe_thrust.json` | Picks up `water_bottle` with a side grasp, pulls it back and extends the arm forward to its reach limit. | [Watch video](../assets/videos/recipe_thrust.mp4) |
 | `test_suite/recipe_throw.json` | Picks up `water_bottle` and throws it forward. | [Watch video](../assets/videos/recipe_throw.mp4) |
-| `orientation_and_speed_demo.json` | Opens the gripper, moves to `blue_cube` pointing straight down at 30 % speed, lifts and returns home at 50 % speed. | — |
+| `orientation_and_speed_demo.json` | Opens the gripper, moves to `blue_cube` pointing straight down at 30 % speed, lifts and returns home at 50 % speed. | [Watch video](../assets/videos/recipe_orientate.mp4) |
 
 For example:
 
