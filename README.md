@@ -15,6 +15,8 @@ The system was developed for the Swinburne University Cyber Lab to study how lan
   <source src="https://github.com/user-attachments/assets/9ad3d129-2060-4627-a5c3-de03633666fe" type="video/mp4">
 </video>
 
+[Watch video directly](https://github.com/user-attachments/assets/9ad3d129-2060-4627-a5c3-de03633666fe)
+
 ## Quick start
 
 The middleware needs Ubuntu 22.04, ROS 2 Humble and the Kinova packages. See [Installation](docs/installation/requirements.md).
