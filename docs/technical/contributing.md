@@ -26,7 +26,7 @@ mkdocs serve
 
 MkDocs serves the site at `http://127.0.0.1:8000` and rebuilds it when a file changes. The pages under Proxy come from the proxy repository. They exist only in the build of the repository's workflow, so a local build warns that they are missing.
 
-The workflow in `.github/workflows/docs.yml` builds the site for every pull request, and deploys it to GitHub Pages when a change reaches `main`. It also runs every day, to refresh the pages from the proxy repository. It writes those pages to `docs/technical/proxy/`, which git ignores. Do not commit them.
+The workflow in `.github/workflows/docs.yml` builds the site for every pull request, and deploys it to GitHub Pages when a change reaches `main`. It also runs every day, to refresh the pages from the proxy repository. It copies the folder `docs` of the proxy repository to `docs/proxy/` and generates the Go API reference in `docs/proxy/api/`. Git ignores `docs/proxy/`. Do not commit those files.
 
 ## Docstrings
 

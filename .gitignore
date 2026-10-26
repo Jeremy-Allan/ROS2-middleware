@@ -14,5 +14,5 @@ site/
 _site/
 
 # Proxy docs pulled in during the docs build
-docs/technical/proxy/
+docs/proxy/
 .proxy-src/
