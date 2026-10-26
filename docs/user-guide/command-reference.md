@@ -27,7 +27,7 @@ A command refers to objects, movements and orientations by name. A name that is 
 
 | Names | Source | Default values |
 |---|---|---|
-| Objects | `workspace_objects.yaml` | `water_bottle`, `tea_pot`, `blue_cube`, `delivery_tray` |
+| Objects | `workspace_objects.yaml` | `water_bottle`, `tea_pot`, `blue_cube`, `tea_cup`, `delivery_tray`, `coaster` |
 | Movements | `movements_and_orientations.yaml` | `move_upwards`, `move_downwards`, `move_left`, `move_right`, `thrust_forward`, `retreat` |
 | Orientations | `movements_and_orientations.yaml` | `top_down`, `top_down_90`, `side_level` |
 
@@ -132,7 +132,7 @@ Without `destination` and `direction`, the object tilts where it is. Success mes
 
 ## push
 
-Slides an object across the table with the closed gripper, without grasping or lifting it. See [Push and thrust](../technical/motion-and-actions/push.md).
+Slides an object across the table with the open gripper, without grasping or lifting it. The arm lines up behind the object first and goes straight through other objects. See [Push and thrust](../technical/motion-and-actions/push.md).
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
@@ -140,21 +140,20 @@ Slides an object across the table with the closed gripper, without grasping or l
 | `destination` | string | None | Where to push it. |
 | `direction` | string | None | A direction instead of `destination`. One of the two is required. |
 | `distance` | float | Furthest reachable | The distance along `direction`, in metres. |
-| `close_position` | float | 0.75 | How far the gripper closes. |
 | `speed` | float | Not set | See above. |
 
 Success message: `Pushed '<target>' to '<destination>'` or `Pushed '<target>' <direction>`.
 
 ## thrust
 
-Raises the held object, turns to face the target and extends the arm. See [Push and thrust](../technical/motion-and-actions/push.md).
+Raises the held object, pulls it back toward the base, turns to face the target and extends the arm to its reach limit. The arm goes straight through other objects. See [Push and thrust](../technical/motion-and-actions/push.md).
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
 | `target` | string | The held object | The object. It must be the held object. |
-| `destination` | string | None | Where to thrust. |
+| `destination` | string | None | Sets the direction of the thrust. The arm does not stop at the destination. |
 | `direction` | string | None | A direction instead of `destination`. One of the two is required. |
-| `distance` | float | Furthest reachable | The distance along `direction`, in metres. |
+| `distance` | float | Reach limit | With `direction`, the end point of the thrust, in metres from the original position of the object. |
 | `lift_height` | float | 0.14 | Height of the lift, in metres. |
 | `speed` | float | 1.0 | See above. |
 
@@ -162,7 +161,7 @@ Success message: `Thrust '<target>' toward '<destination>'` or `Thrust '<target>
 
 ## throw
 
-Swings the held object and releases it during the swing. The swing has a fixed shape. `destination` or `direction` only sets the direction that the arm faces. See [Throw](../technical/motion-and-actions/throw.md).
+Swings the held object and releases it during the swing. The swing has a fixed shape and goes straight through other objects. `destination` or `direction` only sets the direction that the arm faces. See [Throw](../technical/motion-and-actions/throw.md).
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|

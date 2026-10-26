@@ -75,4 +75,4 @@ A new file in `kinova_interface/recipes/` reaches the installed `recipes` folder
 ros2 service call /reset_environment std_srvs/srv/Trigger {}
 ```
 
-The result is `success=True, message='Environment reset: 4 object(s), 2 obstacle(s) restored to configured defaults'`. A restored object can overlap the gripper when the arm is next to the object. The next move then fails. Run `home` before the reset in that case. The `/reset-env` command of the terminal UI calls the same service.
+The result is `success=True, message='Environment reset: 6 object(s), 2 obstacle(s) restored to configured defaults'`. A restored object can overlap the gripper when the arm is next to the object. The next move then fails. Run `home` before the reset in that case. The `/reset-env` command of the terminal UI calls the same service.

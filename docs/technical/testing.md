@@ -21,7 +21,7 @@ python3 -m pytest test -q
 
 To run one file, give its path, for example `python3 -m pytest test/test_motion.py -v`.
 
-Tests depend on generated kinova_interfaces code. Rebuild after modifying .srv or .msg files to avoid stale-interface errors such as `GetRobotParameters_Response` object has no attribute `held_objects`.
+Tests depend on generated `kinova_interfaces` code. Rebuild after modifying `.srv` or `.msg` files to avoid stale-interface errors such as `'GetRobotParameters_Response' object has no attribute 'held_objects'`.
 
 The fixture `ros_context` in `conftest.py` starts `rclpy` with the parameters of `motion_settings.yaml`, as the launch file does.
 
@@ -88,9 +88,9 @@ A successful recipe logs `--- All Tasks Completed ---`. `run_recipe.py` prints `
 
 ## Orientation check
 
-`check_orientations.py` validates orientation presets and reachability. Run it after changing movements_and_orientations.yaml, the gripper convention, or the robot/table position. The fingers point along tool_frame +Z and close along its X axis.
+`check_orientations.py` validates orientation presets and reachability. Run it after changing `movements_and_orientations.yaml`, the gripper convention, or the robot/table position. The fingers point along `tool_frame` +Z and close along its X axis.
 
-Requires running middleware (move_arm service). Tests 9 grid points in base_link (x: 0.25, 0.35, 0.45 m; y: -0.2, 0.0, 0.2 m; z: 0.10 m) against 7 orientations: top_down, top_down_90 and side_level at headings -90°, -45°, 0°, 45° and 90°. Each move is checked against tool_frame TF. The arm returns home before each orientation and after the final test. Edit GRID_X, GRID_Y and GRID_Z to change the grid.
+Requires running middleware (`move_arm` service). Tests 9 grid points in `base_link` (x: 0.25, 0.35, 0.45 m; y: -0.2, 0.0, 0.2 m; z: 0.10 m) against 7 orientations: `top_down`, `top_down_90` and `side_level` at headings -90°, -45°, 0°, 45° and 90°. Each move is checked against `tool_frame` TF. The arm returns home before each orientation and after the final test. Edit `GRID_X`, `GRID_Y` and `GRID_Z` to change the grid.
 
 ```bash
 SETTINGS=$(ros2 pkg prefix kinova_interface)/share/kinova_interface/data/configs/motion_settings.yaml

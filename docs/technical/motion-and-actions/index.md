@@ -71,10 +71,14 @@ A recipe step can set `speed`, a value from 0.0 to 1.0. It sets the velocity and
 
 The planning scene contains the objects, the obstacles and the table from `workspace_objects.yaml`, and any objects added by vision. While the gripper holds an object, the object is attached to `tool_frame` and is part of every collision check.
 
-Two actions turn off a collision check for the time they need it:
+Some actions turn off a collision check for the time they need it:
 
 - `pickup` and `push` allow contact between the held object and whatever it rests on, such as the table, while the object is lifted or extended. The check is restored when the move ends.
-- `push` also allows contact between the pushed object and the rest of the scene for the whole action.
+- `push`, `thrust` and `throw` go straight through the other objects of the scene. For the part of the motion that goes through them, collision checking between the arm and every object is turned off, except for `table_fit`. `thrust` and `throw` also let the held object touch them. The check is restored afterwards, also when the action fails.
+
+The line-up of `push`, the pull-back and the turn of `thrust`, and the rotation and the wind-up of `throw` avoid all objects. The table and the walls are obstacles, not objects, so they stay checked.
+
+The planning scene has no physics. The objects that the arm goes through stay where they are. Only the pushed object changes its position, and the thrown object is removed. A real object in the path is hit.
 
 ## Failures
 

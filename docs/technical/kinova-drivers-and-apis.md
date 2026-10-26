@@ -1,6 +1,6 @@
 # Kinova drivers and APIs
 
-The middleware uses Kinova ROS 2 packages, ros2_control and MoveIt 2 for arm control. This page documents their roles, launch configuration and motion error messages.
+The middleware uses Kinova ROS 2 packages, `ros2_control` and MoveIt 2 for arm control. This page documents their roles, launch configuration and motion error messages.
 
 ## Control path
 
