@@ -36,6 +36,7 @@ The manual is published at [jeremy-allan.github.io/ROS2-middleware](https://jere
 | User guide | [Quickstart](docs/user-guide/quickstart.md), [Command reference](docs/user-guide/command-reference.md), [Recipes](docs/user-guide/recipes.md), [Troubleshooting](docs/user-guide/troubleshooting.md), [Demos](docs/user-guide/demos.md) |
 | Installation | [Requirements](docs/installation/requirements.md), [Kinova drivers](docs/installation/kinova-drivers.md), [Middleware and proxy](docs/installation/middleware-and-proxy.md), [Configuration](docs/installation/configuration.md) |
 | Technical | [Architecture](docs/technical/architecture.md), [ROS interfaces](docs/technical/ros-interfaces.md), [Safety and contracts](docs/technical/safety-and-contracts.md), [Testing](docs/technical/testing.md), [API reference](docs/technical/api/nodes.md) |
+| Proxy | The [documentation of the proxy](https://github.com/paul-isit/embodied-ai-proxy/tree/main/docs) is published in the Proxy section of the manual. |
 
 ## Repository layout
 

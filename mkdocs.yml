@@ -35,7 +35,6 @@ nav:
           - Pour: technical/motion-and-actions/pour.md
           - Push and thrust: technical/motion-and-actions/push.md
           - Throw: technical/motion-and-actions/throw.md
-      - Proxy (from the proxy repo): technical/proxy/readme.md
       - Computer vision: technical/computer-vision.md
       - Safety and contracts: technical/safety-and-contracts.md
       - Kinova drivers and APIs: technical/kinova-drivers-and-apis.md
@@ -45,10 +44,23 @@ nav:
           - Middleware nodes: technical/api/nodes.md
           - Middleware actions: technical/api/actions.md
           - Middleware utils: technical/api/utils.md
-          - Proxy backend: technical/proxy/api/backend.md
-          - Proxy LLM proxy: technical/proxy/api/llm-proxy.md
-          - Proxy TUI: technical/proxy/api/tui.md
-          - Proxy shared: technical/proxy/api/shared.md
+  - Proxy:
+      - Overview: proxy/README.md
+      - Installation: proxy/installation/installation.md
+      - Configuration: proxy/installation/configuration.md
+      - Run the proxy: proxy/user-guide/running.md
+      - Terminal UI: proxy/user-guide/terminal-ui.md
+      - Evaluate a language model: proxy/user-guide/evaluation.md
+      - Troubleshooting: proxy/user-guide/troubleshooting.md
+      - Architecture: proxy/technical/architecture.md
+      - Command pipeline: proxy/technical/command-pipeline.md
+      - Prompt and schema: proxy/technical/prompt-and-schema.md
+      - Interfaces: proxy/technical/interfaces.md
+      - API reference:
+          - Backend: proxy/api/backend.md
+          - LLM proxy: proxy/api/llm-proxy.md
+          - TUI: proxy/api/tui.md
+          - Shared: proxy/api/shared.md
 
 theme:
   name: material

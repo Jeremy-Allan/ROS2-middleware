@@ -85,25 +85,11 @@ The directories are:
         └── ros2_kortex
 ```
 
+The requirements of the proxy and the check of the build are in [Installation](../proxy/installation/installation.md) of the proxy.
+
 ## Set up a language model
 
-The proxy reads the provider from `data/config/config.json` in its repository. The default is the Ollama model `gemma3:1b` at `http://localhost:11434`. To use it:
-
-1. Install [Ollama](https://ollama.com) and download the model:
-
-    ```bash
-    ollama pull gemma3:1b
-    ```
-
-2. Check that the server answers:
-
-    ```bash
-    curl http://localhost:11434
-    ```
-
-    The answer is `Ollama is running`.
-
-To use Google Gemini, OpenAI or Anthropic, set the provider, the model and the API key in `config.json`. See the [proxy README](https://github.com/paul-isit/embodied-ai-proxy#configuring-the-llm).
+The proxy sends each instruction to one language model. The default is the Ollama model `gemma3:1b`. See [Set up a language model](../proxy/installation/installation.md#set-up-a-language-model) for Ollama, and [Providers](../proxy/installation/configuration.md#providers) for Google Gemini, OpenAI and Anthropic.
 
 ## Optional: computer vision
 

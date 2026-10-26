@@ -144,4 +144,4 @@ The fingers point along +z of `tool_frame` and close along its x axis. The unit 
 
 ## Proxy
 
-The proxy has its own configuration: the language model provider, the system prompt and the recipe schema. See the [proxy README](https://github.com/paul-isit/embodied-ai-proxy#configuring-the-llm). If `bridge_port` is changed, set the same port in the `rosbridge_url` of the proxy.
+The proxy has its own configuration: the language model provider, the system prompt and the recipe schema. See [Configuration](../proxy/installation/configuration.md) of the proxy. If `bridge_port` is changed, set the same port in `server.rosbridge_url` of the proxy.

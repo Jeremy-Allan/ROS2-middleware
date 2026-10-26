@@ -4,10 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    # Daily rebuild, so content pulled in from the proxy repo stays
-    # reasonably fresh even on days nobody pushes to this repo.
-    - cron: "17 3 * * *"
   workflow_dispatch:
 
 permissions:
@@ -48,32 +44,16 @@ jobs:
       - name: Pull in the proxy repo's docs and generate its API reference
         run: |
           set -e
-          mkdir -p docs/technical/proxy/api
-          # The proxy's README is its manual page. Relative links (e.g.
-          # run.sh) would be dead on the site, so point them at the repo.
-          python3 - <<'PY'
-          import re
-          src = open(".proxy-src/README.md").read()
-          base = "paul-isit/embodied-ai-proxy/main/"
-          # Images need the raw file, a /blob/ URL returns GitHub's HTML page.
-          src = re.sub(
-              r"(!\[[^\]]*\])\((?!https?://|#|mailto:)(?:\./)?([^)\s]+)\)",
-              lambda m: f"{m.group(1)}(https://raw.githubusercontent.com/{base}{m.group(2)})",
-              src,
-          )
-          src = re.sub(
-              r"\]\((?!https?://|#|mailto:)(?:\./)?([^)\s]+)\)",
-              lambda m: f"](https://github.com/{base.replace('/main/', '/blob/main/')}{m.group(1)})",
-              src,
-          )
-          open("docs/technical/proxy/readme.md", "w").write(src)
-          PY
+          # The docs folder of the proxy repo is the Proxy section of the
+          # site. Its pages link to each other with relative paths.
+          cp -r .proxy-src/docs docs/proxy
+          mkdir -p docs/proxy/api
 
           # One combined reference page per Go module. Run from inside
           # each module so its own go.mod (linked via the proxy repo's
           # go.work) resolves correctly.
           for module in backend llm-proxy tui shared; do
-            out="$GITHUB_WORKSPACE/docs/technical/proxy/api/${module}.md"
+            out="$GITHUB_WORKSPACE/docs/proxy/api/${module}.md"
             ( cd ".proxy-src/${module}" && gomarkdoc --output "$out" ./... )
           done
 

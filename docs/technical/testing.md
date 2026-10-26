@@ -1,6 +1,6 @@
 # Testing
 
-The middleware has unit tests, test recipes and a script that checks the gripper orientations. None of them needs the proxy. The proxy has its own tests, described in its [README](https://github.com/paul-isit/embodied-ai-proxy#evaluating-an-llm-with-test-suites).
+The middleware has unit tests, test recipes and a script that checks the gripper orientations. None of them needs the proxy. The proxy has its own unit tests and an evaluation of language models. See [Architecture](../proxy/technical/architecture.md#build-and-test) and [Evaluate a language model](../proxy/user-guide/evaluation.md) of the proxy.
 
 !!! warning
     The test recipes and the orientation check move the arm. Run them in simulation first. On a real arm, clear the workspace before each run.
