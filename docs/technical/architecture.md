@@ -73,7 +73,7 @@ Each node is described in [Middleware nodes](middleware-nodes.md).
 - Actions look names up through services on `environment_mapping_node`. They plan through MoveIt services and run motions through services on `kinova_hardware_client`.
 - `kinova_hardware_client` talks to MoveIt and the gripper controller through ROS 2 actions.
 - `json_parser_node`, `environment_mapping_node` and `kinova_hardware_client` each publish a heartbeat on `/status/node_report` every 0.5 s. `telemetry_node` publishes the aggregate on `/system/status`.
-- The proxy never calls a ROS 2 service directly. It connects to `rosbridge_server`, which translates websocket messages into service calls and topic messages.
+- The proxy never calls a ROS 2 service directly. It connects to `rosbridge_server`, which translates websocket messages into service calls and topic messages. See [Architecture](../proxy/technical/architecture.md) of the proxy.
 
 ## Execution model
 

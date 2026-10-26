@@ -71,10 +71,4 @@ The MoveIt errors, such as `planning failed (path blocked by an obstacle or self
 
 ## Proxy
 
-| Symptom | Cause | Resolution |
-|---|---|---|
-| `bridge: disconnected` in the status line | The proxy cannot reach `rosbridge_server`. | Check that the middleware launch runs. Check that the `rosbridge_url` of the proxy uses the `bridge_port` of the launch. |
-| `cannot execute commands: no ROS 2 bridge connected` | Same. | Same. |
-| `disconnected - reconnecting...` | The terminal UI lost the backend. | Restart `./run.sh`. Read `data/logs/server.log` in the proxy folder. |
-| `robot recipe execution failed: ...` | The middleware rejected the recipe, or a step failed. | Read the message. It names the step. Check the terminal of the middleware. |
-| No answer, or an error with `upstream provider` | The language model is not reachable, or the key is wrong. | Check `data/config/config.json`. For Ollama, check `curl http://localhost:11434`. Read `data/logs/proxy.log`. |
+The messages of the proxy, for example `bridge: disconnected` and `cannot execute commands: no ROS 2 bridge connected`, are listed in [Troubleshooting](../proxy/user-guide/troubleshooting.md) of the proxy.

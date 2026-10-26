@@ -8,3 +8,4 @@ This manual describes a system in which a language model controls a Kinova Gen3 
 | [User guide](user-guide/quickstart.md) | Start the system, the ten actions, recipes, demonstration recipes and troubleshooting. |
 | [Installation](installation/requirements.md) | Requirements, the Kinova drivers, the middleware and the proxy, the camera, simulation and real arm, configuration. |
 | [Technical](technical/architecture.md) | Architecture, nodes, ROS interfaces, motion planning, safety, the Kinova drivers, computer vision, testing, contributing and the API reference. |
+| [Proxy](proxy/README.md) | Installation, configuration, running, the terminal UI, evaluation of a language model, architecture, interfaces and the API reference of the proxy. |

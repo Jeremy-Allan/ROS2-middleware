@@ -79,9 +79,9 @@ A failed recipe prints `success=False` and a message that names the step. See [R
     Pick up the blue cube and put it on the delivery tray.
     ```
 
-    The UI shows the recipe and the result. Type `/help` for the commands of the UI.
+    The UI shows the recipe and the result. Type `/help` for the commands of the UI. See [Terminal UI](../proxy/user-guide/terminal-ui.md).
 
-The proxy reads the objects from the middleware, builds a prompt, asks the language model for a recipe, checks it and sends it to the middleware. See [Architecture](../technical/architecture.md#request-flow).
+The proxy reads the objects from the middleware, builds a prompt, asks the language model for a recipe, checks it and sends it to the middleware. See [Architecture](../technical/architecture.md#request-flow) and [Command pipeline](../proxy/technical/command-pipeline.md).
 
 ## Use the real arm
 

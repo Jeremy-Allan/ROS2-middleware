@@ -56,3 +56,4 @@ Execution stops at the first step that fails.
 | Write a recipe | [Recipes](user-guide/recipes.md) |
 | Fix an error | [Troubleshooting](user-guide/troubleshooting.md) |
 | Understand the design | [Architecture](technical/architecture.md) |
+| Configure, run or evaluate the proxy | [Proxy documentation](proxy/README.md) |

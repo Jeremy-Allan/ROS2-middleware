@@ -32,6 +32,8 @@ flowchart LR
 | Execution | Controllers and driver | A failed trajectory fails the step. The arm's own limits and protective stops belong to the Kortex driver and the arm controller. |
 | Monitoring | Middleware nodes | Moves that run past `hardware.action_timeout` or `hardware.gripper_timeout` fail. A fault is shown as `SYSTEM_FAULT`. |
 
+The first two layers belong to the proxy. See [Command pipeline](../proxy/technical/command-pipeline.md).
+
 The planning scene contains the objects, the obstacles, the table and the object held by the gripper. The held object is checked in every plan.
 
 ## Fault handling
