@@ -24,7 +24,7 @@ This page installs the middleware in the ROS 2 workspace of the [Kinova drivers]
     | `kinova_interfaces` | The custom services and messages. |
     | `computer_vision` | The optional vision node. |
 
-2. Install the dependencies. This includes `rosbridge_server`. `rosdep` prints an error for `ament_python`. `-r` lets it continue, and the error has no effect.
+2. Install the dependencies. This includes `rosbridge_server`.
 
     ```bash
     cd ~/workspace/ros2_kortex_ws

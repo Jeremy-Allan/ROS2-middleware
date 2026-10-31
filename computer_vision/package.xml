@@ -7,8 +7,6 @@
   <maintainer email="enoch@todo.todo">enoch</maintainer>
   <license>Apache-2.0</license>
 
-  <buildtool_depend>ament_python</buildtool_depend>
-
   <!-- ROS deps used by vision_node.py -->
   <depend>rclpy</depend>
   <depend>sensor_msgs</depend>

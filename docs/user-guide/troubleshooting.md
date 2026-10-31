@@ -11,7 +11,6 @@ Each table lists a symptom, its cause and the resolution. The messages are those
 | `Caught exception in launch ... package 'rosbridge_server' not found` after `json_parser_node` starts. All processes stop. | `rosbridge_server` is not installed. | Run `rosdep install --from-paths src --ignore-src -r -y` in the workspace, or `sudo apt install ros-humble-rosbridge-server`. |
 | `ERROR: 'use_fake_hardware' is set to false ... 'robot_ip' was not provided.` | `use_fake_hardware:=false` without `robot_ip`. | Add `robot_ip:=<address of the arm>`. |
 | `AttributeError: ... object has no attribute 'held_objects'`, or another error about a field of `kinova_interfaces` | The build of `kinova_interfaces` is older than the source. | Run `colcon build --symlink-install` in the workspace and load it again. |
-| `rosdep` prints `Cannot locate rosdep definition for [ament_python]`. | `ament_python` has no rosdep key. | None. `-r` makes `rosdep` continue. |
 | A change to a configuration file has no effect. | The file is read at start, or the build copied it. | Restart the launch. Build with `--symlink-install`, or build again. See [Configuration](../installation/configuration.md#files). |
 | RViz does not open. | The environment has no display. | Check `echo $DISPLAY`. See [Non-native Ubuntu](../installation/non-native-ubuntu.md). |
 
