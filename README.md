@@ -15,7 +15,13 @@ The system was developed for the Swinburne University Cyber Lab to study how lan
 
 ## Quick start
 
-The middleware needs Ubuntu 22.04, ROS 2 Humble and the Kinova packages. See [Installation](docs/installation/requirements.md).
+The middleware needs Ubuntu 22.04, ROS 2 Humble and the Kinova packages. The [setup script](docs/installation/setup-script.md) installs them, the middleware and the proxy:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/paul-isit/embodied-ai-proxy/main/setup/install.sh | bash
+```
+
+For the manual steps, see [Installation](docs/installation/requirements.md). Then:
 
 ```bash
 cd ~/workspace/ros2_kortex_ws
@@ -34,7 +40,7 @@ The manual is published at [jeremy-allan.github.io/ROS2-middleware](https://jere
 |---|---|
 | [Overview](docs/overview.md) | The parts of the system and the path of an instruction. |
 | User guide | [Quickstart](docs/user-guide/quickstart.md), [Command reference](docs/user-guide/command-reference.md), [Recipes](docs/user-guide/recipes.md), [Troubleshooting](docs/user-guide/troubleshooting.md), [Demos](docs/user-guide/demos.md) |
-| Installation | [Requirements](docs/installation/requirements.md), [Kinova drivers](docs/installation/kinova-drivers.md), [Middleware and proxy](docs/installation/middleware-and-proxy.md), [Configuration](docs/installation/configuration.md) |
+| Installation | [Requirements](docs/installation/requirements.md), [Setup script](docs/installation/setup-script.md), [Kinova drivers](docs/installation/kinova-drivers.md), [Middleware and proxy](docs/installation/middleware-and-proxy.md), [Configuration](docs/installation/configuration.md) |
 | Technical | [Architecture](docs/technical/architecture.md), [ROS interfaces](docs/technical/ros-interfaces.md), [Safety and contracts](docs/technical/safety-and-contracts.md), [Testing](docs/technical/testing.md), [API reference](docs/technical/api/nodes.md) |
 | Proxy | The [documentation of the proxy](https://github.com/paul-isit/embodied-ai-proxy/tree/main/docs) is published in the Proxy section of the manual. |
 

@@ -1,6 +1,6 @@
 # Non-native Ubuntu
 
-The software needs Ubuntu 22.04 and ROS 2 Humble. On Ubuntu 22.04, start with [Kinova drivers](kinova-drivers.md). On another system, use one of the environments below.
+The software needs Ubuntu 22.04 and ROS 2 Humble. On Ubuntu 22.04, start with the [setup script](setup-script.md) or [Kinova drivers](kinova-drivers.md). On another system, use one of the environments below.
 
 | Host | Environment |
 |---|---|
@@ -77,4 +77,4 @@ lsusb
 | Internet | `ping -c 3 ubuntu.com` | Replies. |
 | Display for RViz | `echo $DISPLAY` | Not empty. |
 
-Next: [Kinova drivers](kinova-drivers.md).
+Next: [Setup script](setup-script.md), or [Kinova drivers](kinova-drivers.md) for the manual steps.

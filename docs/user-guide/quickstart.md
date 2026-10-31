@@ -1,6 +1,6 @@
 # Quickstart
 
-This page starts the middleware in simulation, runs a recipe and sends a command through the proxy. Install the software first. See [Middleware and proxy](../installation/middleware-and-proxy.md).
+This page starts the middleware in simulation, runs a recipe and sends a command through the proxy. Install the software first. See [Setup script](../installation/setup-script.md) or [Middleware and proxy](../installation/middleware-and-proxy.md).
 
 ## Start the middleware
 

@@ -20,6 +20,7 @@ nav:
   - Installation:
       - Requirements: installation/requirements.md
       - Non-native Ubuntu: installation/non-native-ubuntu.md
+      - Setup script: installation/setup-script.md
       - Kinova drivers: installation/kinova-drivers.md
       - Middleware and proxy: installation/middleware-and-proxy.md
       - Camera and calibration: installation/camera-and-calibration.md

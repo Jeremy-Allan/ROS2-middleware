@@ -2,6 +2,8 @@
 
 The middleware moves the arm through the Kinova ROS 2 packages, `ros2_kortex`. This page installs them and checks them with simulated hardware. See [Kinova drivers and APIs](../technical/kinova-drivers-and-apis.md) for what the packages provide.
 
+The [setup script](setup-script.md) does the steps of this page and of [Middleware and proxy](middleware-and-proxy.md) in one command. It pins `ros2_kortex` to a tested commit instead of the tip of `humble`.
+
 ## Prerequisites
 
 - Ubuntu 22.04 with ROS 2 Humble. See the [ROS 2 installation guide](https://docs.ros.org/en/humble/Installation/Ubuntu-Install-Debs.html).

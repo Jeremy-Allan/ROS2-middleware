@@ -1,6 +1,6 @@
 # Middleware and proxy
 
-This page installs the middleware in the ROS 2 workspace of the [Kinova drivers](kinova-drivers.md), and builds the proxy.
+This page installs the middleware in the ROS 2 workspace of the [Kinova drivers](kinova-drivers.md), and builds the proxy. The [setup script](setup-script.md) does the same in one command.
 
 ## Prerequisites
 
