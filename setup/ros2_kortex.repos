@@ -1,0 +1,7 @@
+# Third-party source pinned by exact commit. Change only by pull request.
+# Everything else ros2_kortex needs comes from apt through rosdep.
+repositories:
+  ros2_kortex:
+    type: git
+    url: https://github.com/Kinovarobotics/ros2_kortex.git
+    version: 116d87ae595c791ba7ae32201b88693a3ba02324
